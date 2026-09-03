@@ -25,14 +25,21 @@ add_executable(t0m_int8_probe
   t0m_int8_probe.cpp
 )
 
+add_executable(t0m_recurrence_probe
+  t0m_recurrence_probe.cpp
+)
+
 if(MSVC)
   target_compile_options(t0m_int8_probe PRIVATE /arch:AVX2)
+  target_compile_options(t0m_recurrence_probe PRIVATE /arch:AVX2)
+  target_link_options(t0m_recurrence_probe PRIVATE /MAP)
 endif()
 
 target_compile_features(cpu_native_q4_probe PRIVATE cxx_std_20)
 target_compile_features(stream_bandwidth PRIVATE cxx_std_20)
 target_compile_features(int8_probe PRIVATE cxx_std_20)
 target_compile_features(t0m_int8_probe PRIVATE cxx_std_20)
+target_compile_features(t0m_recurrence_probe PRIVATE cxx_std_20)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -48,4 +55,6 @@ if(BUILD_TESTING)
            COMMAND $<TARGET_FILE:int8_probe> --kernel avx2 --m 8 --K 64 --depth 2 --iterations 1 --repetitions 1 --warmup 0)
   add_test(NAME t0m_int8_correction
            COMMAND $<TARGET_FILE:t0m_int8_probe> --self-test)
+  add_test(NAME t0m_recurrence_correction
+           COMMAND $<TARGET_FILE:t0m_recurrence_probe> --self-test)
 endif()

@@ -25,13 +25,12 @@
 
 namespace {
 
-constexpr std::uint32_t kOutputRowTile = 4;
 constexpr std::uint32_t kWeightTile = 16;
 constexpr std::uint32_t kCorrectionShardCount = 4;
 constexpr std::size_t kEvictionBytes = 64ULL * 1024ULL * 1024ULL;
 
-enum class Mode { fused, repeat };
-enum class Variant { a, b, c };
+enum class Mode { fused, repeat, legacy, compare };
+enum class Variant { a, b, breal, bclone, c };
 
 struct Options {
   std::uint32_t dimension = 64;
@@ -42,11 +41,13 @@ struct Options {
   std::uint32_t warmup = 1;
   std::uint32_t slot_tile = 4;
   std::uint32_t workers = 1;
+  std::uint32_t compare_order = 0;
   Mode mode = Mode::fused;
   Variant variant = Variant::a;
   std::vector<std::uint32_t> cpus;
   std::vector<std::uint32_t> rows_per_worker{128};
   bool self_test = false;
+  bool compare_order_set = false;
 };
 
 struct CpuTarget {
@@ -142,14 +143,18 @@ class AffinityGuard {
 [[nodiscard]] Mode parse_mode(std::string_view text) {
   if (text == "fused") return Mode::fused;
   if (text == "repeat") return Mode::repeat;
-  throw std::runtime_error("invalid --mode; expected fused or repeat");
+  if (text == "legacy") return Mode::legacy;
+  if (text == "compare") return Mode::compare;
+  throw std::runtime_error("invalid --mode; expected fused, repeat, legacy, or compare");
 }
 
 [[nodiscard]] Variant parse_variant(std::string_view text) {
   if (text == "A") return Variant::a;
   if (text == "B") return Variant::b;
+  if (text == "B_real" || text == "Breal" || text == "breal") return Variant::breal;
+  if (text == "Bclone" || text == "BC") return Variant::bclone;
   if (text == "C") return Variant::c;
-  throw std::runtime_error("invalid --variant; expected A, B, or C");
+  throw std::runtime_error("invalid --variant; expected A, B, B_real, Bclone, BC, or C");
 }
 
 [[nodiscard]] Options parse_options(int argc, char** argv) {
@@ -174,6 +179,9 @@ class AffinityGuard {
       options.warmup = parse_u32(require_value(argument), argument, true);
     } else if (argument == "--mode") {
       options.mode = parse_mode(require_value(argument));
+    } else if (argument == "--compare-order") {
+      options.compare_order = parse_u32(require_value(argument), argument, true);
+      options.compare_order_set = true;
     } else if (argument == "--variant") {
       options.variant = parse_variant(require_value(argument));
     } else if (argument == "--S-tile") {
@@ -188,7 +196,8 @@ class AffinityGuard {
       options.self_test = true;
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: t0m_int8_probe [--D N] [--S 1|2|4|8|16] [--R N] "
-                   "[--mode fused|repeat] [--variant A|B|C] [--S-tile 2|4|8] "
+                   "[--mode fused|repeat|legacy|compare] [--compare-order 0|1|2] "
+                   "[--variant A|B|B_real|Bclone|BC|C] [--S-tile 2|4|8] "
                    "[--workers N] [--cpus LIST] [--rows-per-worker LIST] "
                    "[--iterations N] [--timed-repetitions N] [--warmup N]\n";
       std::exit(0);
@@ -202,6 +211,12 @@ class AffinityGuard {
   }
   if (options.slot_tile != 2 && options.slot_tile != 4 && options.slot_tile != 8) {
     throw std::runtime_error("--S-tile must be one of 2, 4, or 8");
+  }
+  if (options.compare_order > 2) {
+    throw std::runtime_error("--compare-order must be one of 0, 1, or 2");
+  }
+  if (options.compare_order_set && options.mode != Mode::compare) {
+    throw std::runtime_error("--compare-order requires --mode compare");
   }
   if (!options.cpus.empty() && options.cpus.size() != options.workers) {
     throw std::runtime_error("--cpus count must equal --workers");
@@ -265,7 +280,8 @@ struct Workload {
     for (std::int8_t& value : shard.activations) {
       value = static_cast<std::int8_t>(static_cast<int>(next_random(activation_state) % 31U) - 15);
     }
-    const std::uint32_t block_count = variant == Variant::b ? recurrent_depth : 1;
+    const std::uint32_t block_count =
+        variant == Variant::a || variant == Variant::c ? 1 : recurrent_depth;
     shard.blocks.reserve(block_count);
     for (std::uint32_t depth_index = 0; depth_index < block_count; ++depth_index) {
       WeightBlock block;
@@ -277,6 +293,11 @@ struct Workload {
         value = static_cast<std::int8_t>(static_cast<int>(next_random(weight_state) % 31U) - 15);
       }
       shard.blocks.push_back(std::move(block));
+    }
+    if (variant == Variant::bclone) {
+      for (std::uint32_t depth_index = 1; depth_index < block_count; ++depth_index) {
+        shard.blocks[depth_index].values = shard.blocks[0].values;
+      }
     }
     workload.shards.push_back(std::move(shard));
   }
@@ -328,10 +349,10 @@ struct Workload {
   return _mm_cvtsi128_si32(sum);
 }
 
-[[nodiscard]] T0M_FORCEINLINE std::int64_t dot_int8_avx2(
+T0M_FORCEINLINE void accumulate_dot_int8_avx2(
+    __m256i& accumulator, std::int64_t& scalar_tail,
     const std::int8_t* weights, const std::int8_t* activations,
     std::uint32_t count) {
-  __m256i accumulator = _mm256_setzero_si256();
   std::uint32_t dimension_offset = 0;
   for (; dimension_offset + 16 <= count; dimension_offset += 16) {
     const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
@@ -341,12 +362,258 @@ struct Workload {
     accumulator = _mm256_add_epi32(
         accumulator, _mm256_madd_epi16(weight16, activation16));
   }
-  std::int64_t sum = horizontal_sum_i32(accumulator);
   for (; dimension_offset < count; ++dimension_offset) {
-    sum += static_cast<std::int64_t>(weights[dimension_offset]) *
-           static_cast<std::int64_t>(activations[dimension_offset]);
+    scalar_tail += static_cast<std::int64_t>(weights[dimension_offset]) *
+                   static_cast<std::int64_t>(activations[dimension_offset]);
   }
-  return sum;
+}
+
+template <int S_TILE>
+T0M_NOINLINE void run_fused_impl(const ShardData& shard,
+                                 std::uint32_t dimension,
+                                 const WeightBlock& block,
+                                 std::uint32_t slot_base,
+                                 std::vector<std::int64_t>& output) {
+  static_assert(S_TILE == 1 || S_TILE == 2 || S_TILE == 4 || S_TILE == 8);
+  for (std::uint32_t row = 0; row < shard.rows; ++row) {
+    const std::size_t row_start = static_cast<std::size_t>(row) * dimension;
+    if constexpr (S_TILE == 1) {
+        __m256i acc0 = _mm256_setzero_si256();
+        std::int64_t scalar_tail0 = 0;
+        for (std::uint32_t dimension_base = 0; dimension_base < dimension;
+             dimension_base += kWeightTile) {
+          if (dimension - dimension_base >= kWeightTile) {
+            const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(block.values.data() + row_start + dimension_base)));
+            const std::size_t activation_start =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const __m256i activation16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start)));
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(weight16, activation16));
+          } else {
+            const std::size_t activation_start =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            for (std::uint32_t dimension_offset = dimension_base; dimension_offset < dimension;
+                 ++dimension_offset) {
+              scalar_tail0 += static_cast<std::int64_t>(block.values[row_start + dimension_offset]) *
+                              static_cast<std::int64_t>(shard.activations[activation_start + dimension_offset - dimension_base]);
+            }
+          }
+        }
+        output[static_cast<std::size_t>(slot_base) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc0)) + scalar_tail0;
+      } else if constexpr (S_TILE == 2) {
+        __m256i acc0 = _mm256_setzero_si256();
+        __m256i acc1 = _mm256_setzero_si256();
+        std::int64_t scalar_tail0 = 0;
+        std::int64_t scalar_tail1 = 0;
+        for (std::uint32_t dimension_base = 0; dimension_base < dimension;
+             dimension_base += kWeightTile) {
+          if (dimension - dimension_base >= kWeightTile) {
+            const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(block.values.data() + row_start + dimension_base)));
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const __m256i activation16_0 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start0)));
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(weight16, activation16_0));
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            const __m256i activation16_1 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start1)));
+            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(weight16, activation16_1));
+          } else {
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            for (std::uint32_t dimension_offset = dimension_base; dimension_offset < dimension;
+                 ++dimension_offset) {
+              const std::uint32_t tail_offset = dimension_offset - dimension_base;
+              const auto weight = static_cast<std::int64_t>(block.values[row_start + dimension_offset]);
+              scalar_tail0 += weight * static_cast<std::int64_t>(shard.activations[activation_start0 + tail_offset]);
+              scalar_tail1 += weight * static_cast<std::int64_t>(shard.activations[activation_start1 + tail_offset]);
+            }
+          }
+        }
+        output[static_cast<std::size_t>(slot_base) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc0)) + scalar_tail0;
+        output[static_cast<std::size_t>(slot_base + 1) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc1)) + scalar_tail1;
+      } else if constexpr (S_TILE == 4) {
+        __m256i acc0 = _mm256_setzero_si256();
+        __m256i acc1 = _mm256_setzero_si256();
+        __m256i acc2 = _mm256_setzero_si256();
+        __m256i acc3 = _mm256_setzero_si256();
+        std::int64_t scalar_tail0 = 0;
+        std::int64_t scalar_tail1 = 0;
+        std::int64_t scalar_tail2 = 0;
+        std::int64_t scalar_tail3 = 0;
+        for (std::uint32_t dimension_base = 0; dimension_base < dimension;
+             dimension_base += kWeightTile) {
+          if (dimension - dimension_base >= kWeightTile) {
+            const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(block.values.data() + row_start + dimension_base)));
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const __m256i activation16_0 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start0)));
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(weight16, activation16_0));
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            const __m256i activation16_1 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start1)));
+            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(weight16, activation16_1));
+            const std::size_t activation_start2 =
+                static_cast<std::size_t>(slot_base + 2) * dimension + dimension_base;
+            const __m256i activation16_2 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start2)));
+            acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(weight16, activation16_2));
+            const std::size_t activation_start3 =
+                static_cast<std::size_t>(slot_base + 3) * dimension + dimension_base;
+            const __m256i activation16_3 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start3)));
+            acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(weight16, activation16_3));
+          } else {
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            const std::size_t activation_start2 =
+                static_cast<std::size_t>(slot_base + 2) * dimension + dimension_base;
+            const std::size_t activation_start3 =
+                static_cast<std::size_t>(slot_base + 3) * dimension + dimension_base;
+            for (std::uint32_t dimension_offset = dimension_base; dimension_offset < dimension;
+                 ++dimension_offset) {
+              const std::uint32_t tail_offset = dimension_offset - dimension_base;
+              const auto weight = static_cast<std::int64_t>(block.values[row_start + dimension_offset]);
+              scalar_tail0 += weight * static_cast<std::int64_t>(shard.activations[activation_start0 + tail_offset]);
+              scalar_tail1 += weight * static_cast<std::int64_t>(shard.activations[activation_start1 + tail_offset]);
+              scalar_tail2 += weight * static_cast<std::int64_t>(shard.activations[activation_start2 + tail_offset]);
+              scalar_tail3 += weight * static_cast<std::int64_t>(shard.activations[activation_start3 + tail_offset]);
+            }
+          }
+        }
+        output[static_cast<std::size_t>(slot_base) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc0)) + scalar_tail0;
+        output[static_cast<std::size_t>(slot_base + 1) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc1)) + scalar_tail1;
+        output[static_cast<std::size_t>(slot_base + 2) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc2)) + scalar_tail2;
+        output[static_cast<std::size_t>(slot_base + 3) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc3)) + scalar_tail3;
+      } else if constexpr (S_TILE == 8) {
+        __m256i acc0 = _mm256_setzero_si256();
+        __m256i acc1 = _mm256_setzero_si256();
+        __m256i acc2 = _mm256_setzero_si256();
+        __m256i acc3 = _mm256_setzero_si256();
+        __m256i acc4 = _mm256_setzero_si256();
+        __m256i acc5 = _mm256_setzero_si256();
+        __m256i acc6 = _mm256_setzero_si256();
+        __m256i acc7 = _mm256_setzero_si256();
+        std::int64_t scalar_tail0 = 0;
+        std::int64_t scalar_tail1 = 0;
+        std::int64_t scalar_tail2 = 0;
+        std::int64_t scalar_tail3 = 0;
+        std::int64_t scalar_tail4 = 0;
+        std::int64_t scalar_tail5 = 0;
+        std::int64_t scalar_tail6 = 0;
+        std::int64_t scalar_tail7 = 0;
+        for (std::uint32_t dimension_base = 0; dimension_base < dimension;
+             dimension_base += kWeightTile) {
+          if (dimension - dimension_base >= kWeightTile) {
+            const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(block.values.data() + row_start + dimension_base)));
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const __m256i activation16_0 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start0)));
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(weight16, activation16_0));
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            const __m256i activation16_1 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start1)));
+            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(weight16, activation16_1));
+            const std::size_t activation_start2 =
+                static_cast<std::size_t>(slot_base + 2) * dimension + dimension_base;
+            const __m256i activation16_2 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start2)));
+            acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(weight16, activation16_2));
+            const std::size_t activation_start3 =
+                static_cast<std::size_t>(slot_base + 3) * dimension + dimension_base;
+            const __m256i activation16_3 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start3)));
+            acc3 = _mm256_add_epi32(acc3, _mm256_madd_epi16(weight16, activation16_3));
+            const std::size_t activation_start4 =
+                static_cast<std::size_t>(slot_base + 4) * dimension + dimension_base;
+            const __m256i activation16_4 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start4)));
+            acc4 = _mm256_add_epi32(acc4, _mm256_madd_epi16(weight16, activation16_4));
+            const std::size_t activation_start5 =
+                static_cast<std::size_t>(slot_base + 5) * dimension + dimension_base;
+            const __m256i activation16_5 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start5)));
+            acc5 = _mm256_add_epi32(acc5, _mm256_madd_epi16(weight16, activation16_5));
+            const std::size_t activation_start6 =
+                static_cast<std::size_t>(slot_base + 6) * dimension + dimension_base;
+            const __m256i activation16_6 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start6)));
+            acc6 = _mm256_add_epi32(acc6, _mm256_madd_epi16(weight16, activation16_6));
+            const std::size_t activation_start7 =
+                static_cast<std::size_t>(slot_base + 7) * dimension + dimension_base;
+            const __m256i activation16_7 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start7)));
+            acc7 = _mm256_add_epi32(acc7, _mm256_madd_epi16(weight16, activation16_7));
+          } else {
+            const std::size_t activation_start0 =
+                static_cast<std::size_t>(slot_base) * dimension + dimension_base;
+            const std::size_t activation_start1 =
+                static_cast<std::size_t>(slot_base + 1) * dimension + dimension_base;
+            const std::size_t activation_start2 =
+                static_cast<std::size_t>(slot_base + 2) * dimension + dimension_base;
+            const std::size_t activation_start3 =
+                static_cast<std::size_t>(slot_base + 3) * dimension + dimension_base;
+            const std::size_t activation_start4 =
+                static_cast<std::size_t>(slot_base + 4) * dimension + dimension_base;
+            const std::size_t activation_start5 =
+                static_cast<std::size_t>(slot_base + 5) * dimension + dimension_base;
+            const std::size_t activation_start6 =
+                static_cast<std::size_t>(slot_base + 6) * dimension + dimension_base;
+            const std::size_t activation_start7 =
+                static_cast<std::size_t>(slot_base + 7) * dimension + dimension_base;
+            for (std::uint32_t dimension_offset = dimension_base; dimension_offset < dimension;
+                 ++dimension_offset) {
+              const std::uint32_t tail_offset = dimension_offset - dimension_base;
+              const auto weight = static_cast<std::int64_t>(block.values[row_start + dimension_offset]);
+              scalar_tail0 += weight * static_cast<std::int64_t>(shard.activations[activation_start0 + tail_offset]);
+              scalar_tail1 += weight * static_cast<std::int64_t>(shard.activations[activation_start1 + tail_offset]);
+              scalar_tail2 += weight * static_cast<std::int64_t>(shard.activations[activation_start2 + tail_offset]);
+              scalar_tail3 += weight * static_cast<std::int64_t>(shard.activations[activation_start3 + tail_offset]);
+              scalar_tail4 += weight * static_cast<std::int64_t>(shard.activations[activation_start4 + tail_offset]);
+              scalar_tail5 += weight * static_cast<std::int64_t>(shard.activations[activation_start5 + tail_offset]);
+              scalar_tail6 += weight * static_cast<std::int64_t>(shard.activations[activation_start6 + tail_offset]);
+              scalar_tail7 += weight * static_cast<std::int64_t>(shard.activations[activation_start7 + tail_offset]);
+            }
+          }
+        }
+        output[static_cast<std::size_t>(slot_base) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc0)) + scalar_tail0;
+        output[static_cast<std::size_t>(slot_base + 1) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc1)) + scalar_tail1;
+        output[static_cast<std::size_t>(slot_base + 2) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc2)) + scalar_tail2;
+        output[static_cast<std::size_t>(slot_base + 3) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc3)) + scalar_tail3;
+        output[static_cast<std::size_t>(slot_base + 4) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc4)) + scalar_tail4;
+        output[static_cast<std::size_t>(slot_base + 5) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc5)) + scalar_tail5;
+        output[static_cast<std::size_t>(slot_base + 6) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc6)) + scalar_tail6;
+        output[static_cast<std::size_t>(slot_base + 7) * shard.rows + row] =
+            static_cast<std::int64_t>(horizontal_sum_i32(acc7)) + scalar_tail7;
+    }
+  }
 }
 
 T0M_NOINLINE void run_fused(const ShardData& shard,
@@ -355,41 +622,38 @@ T0M_NOINLINE void run_fused(const ShardData& shard,
                             const WeightBlock& block,
                             std::uint32_t slot_tile,
                             std::vector<std::int64_t>& output) {
-  for (std::uint32_t row_base = 0; row_base < shard.rows; row_base += kOutputRowTile) {
-    const std::uint32_t row_count = std::min(kOutputRowTile, shard.rows - row_base);
-    for (std::uint32_t slot_base = 0; slot_base < slots; slot_base += slot_tile) {
-      const std::uint32_t slot_count = std::min(slot_tile, slots - slot_base);
-      std::array<std::array<std::int64_t, 8>, kOutputRowTile> accum{};
-      for (std::uint32_t dimension_base = 0; dimension_base < dimension;
-           dimension_base += kWeightTile) {
-        const std::uint32_t dimension_count =
-            std::min(kWeightTile, dimension - dimension_base);
-        std::array<std::array<std::int8_t, kWeightTile>, kOutputRowTile> weight_tile{};
-        for (std::uint32_t row_offset = 0; row_offset < row_count; ++row_offset) {
-          const std::size_t row_start = static_cast<std::size_t>(row_base + row_offset) * dimension;
-          for (std::uint32_t dimension_offset = 0; dimension_offset < dimension_count;
-               ++dimension_offset) {
-            weight_tile[row_offset][dimension_offset] =
-                block.values[row_start + dimension_base + dimension_offset];
-          }
-        }
-        for (std::uint32_t slot_offset = 0; slot_offset < slot_count; ++slot_offset) {
-          const std::size_t activation_start =
-              static_cast<std::size_t>(slot_base + slot_offset) * dimension + dimension_base;
-          for (std::uint32_t row_offset = 0; row_offset < row_count; ++row_offset) {
-            accum[row_offset][slot_offset] += dot_int8_avx2(
-                weight_tile[row_offset].data(),
-                shard.activations.data() + activation_start, dimension_count);
-          }
-        }
-      }
-      for (std::uint32_t row_offset = 0; row_offset < row_count; ++row_offset) {
-        for (std::uint32_t slot_offset = 0; slot_offset < slot_count; ++slot_offset) {
-          output[static_cast<std::size_t>(slot_base + slot_offset) * shard.rows + row_base + row_offset] =
-              accum[row_offset][slot_offset];
-        }
+  if (slot_tile == 2) {
+    if (slots == 1) {
+      run_fused_impl<1>(shard, dimension, block, 0, output);
+    } else {
+      for (std::uint32_t slot_base = 0; slot_base < slots; slot_base += 2) {
+        run_fused_impl<2>(shard, dimension, block, slot_base, output);
       }
     }
+  } else if (slot_tile == 4) {
+    if (slots == 1) {
+      run_fused_impl<1>(shard, dimension, block, 0, output);
+    } else if (slots == 2) {
+      run_fused_impl<2>(shard, dimension, block, 0, output);
+    } else {
+      for (std::uint32_t slot_base = 0; slot_base < slots; slot_base += 4) {
+        run_fused_impl<4>(shard, dimension, block, slot_base, output);
+      }
+    }
+  } else if (slot_tile == 8) {
+    if (slots == 1) {
+      run_fused_impl<1>(shard, dimension, block, 0, output);
+    } else if (slots == 2) {
+      run_fused_impl<2>(shard, dimension, block, 0, output);
+    } else if (slots == 4) {
+      run_fused_impl<4>(shard, dimension, block, 0, output);
+    } else {
+      for (std::uint32_t slot_base = 0; slot_base < slots; slot_base += 8) {
+        run_fused_impl<8>(shard, dimension, block, slot_base, output);
+      }
+    }
+  } else {
+    throw std::runtime_error("unsupported fused slot tile");
   }
 }
 
@@ -400,17 +664,48 @@ T0M_NOINLINE void run_repeat_gemv(const ShardData& shard,
                                    std::vector<std::int64_t>& output) {
   for (std::uint32_t slot = 0; slot < slots; ++slot) {
     for (std::uint32_t row = 0; row < shard.rows; ++row) {
-      std::int64_t sum = 0;
+      __m256i accumulator = _mm256_setzero_si256();
+      std::int64_t scalar_tail = 0;
       const std::size_t row_start = static_cast<std::size_t>(row) * dimension;
       const std::size_t activation_start = static_cast<std::size_t>(slot) * dimension;
       for (std::uint32_t dimension_base = 0; dimension_base < dimension;
            dimension_base += kWeightTile) {
         const std::uint32_t dimension_count =
             std::min(kWeightTile, dimension - dimension_base);
-        sum += dot_int8_avx2(
+        accumulate_dot_int8_avx2(
+            accumulator, scalar_tail,
             block.values.data() + row_start + dimension_base,
             shard.activations.data() + activation_start + dimension_base,
             dimension_count);
+      }
+      output[static_cast<std::size_t>(slot) * shard.rows + row] =
+          static_cast<std::int64_t>(horizontal_sum_i32(accumulator)) + scalar_tail;
+    }
+  }
+}
+
+T0M_NOINLINE void run_legacy_gemv(const ShardData& shard,
+                                  std::uint32_t dimension,
+                                  std::uint32_t slots,
+                                  const WeightBlock& block,
+                                  std::vector<std::int64_t>& output) {
+  for (std::uint32_t row = 0; row < shard.rows; ++row) {
+    const std::size_t start = static_cast<std::size_t>(row) * dimension;
+    for (std::uint32_t slot = 0; slot < slots; ++slot) {
+      __m256i accumulator = _mm256_setzero_si256();
+      const std::size_t activation_start = static_cast<std::size_t>(slot) * dimension;
+      std::uint32_t column = 0;
+      for (; column + 16 <= dimension; column += 16) {
+        const auto* weights = reinterpret_cast<const __m128i*>(block.values.data() + start + column);
+        const auto* input = reinterpret_cast<const __m128i*>(shard.activations.data() + activation_start + column);
+        const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(weights));
+        const __m256i input16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(input));
+        accumulator = _mm256_add_epi32(accumulator, _mm256_madd_epi16(weight16, input16));
+      }
+      std::int32_t sum = horizontal_sum_i32(accumulator);
+      for (; column < dimension; ++column) {
+        sum += static_cast<std::int32_t>(block.values[start + column]) *
+               static_cast<std::int32_t>(shard.activations[activation_start + column]);
       }
       output[static_cast<std::size_t>(slot) * shard.rows + row] = sum;
     }
@@ -444,7 +739,11 @@ void run_reference(const ShardData& shard,
                    Variant variant,
                    std::vector<std::int64_t>& output) {
   for (std::uint32_t depth_index = 0; depth_index < recurrent_depth; ++depth_index) {
-    const WeightBlock& block = shard.blocks[variant == Variant::b ? depth_index : 0];
+    const WeightBlock& block =
+         shard.blocks[variant == Variant::b || variant == Variant::breal ||
+                              variant == Variant::bclone
+                          ? depth_index
+                          : 0];
     run_reference_gemv(shard, dimension, slots, block, output);
   }
 }
@@ -457,11 +756,19 @@ void run_shard_depth(const ShardData& shard,
                      std::uint32_t slot_tile,
                      std::uint32_t depth_index,
                      std::vector<std::int64_t>& output) {
-  const WeightBlock& block = shard.blocks[variant == Variant::b ? depth_index : 0];
+  const WeightBlock& block =
+      shard.blocks[variant == Variant::b || variant == Variant::breal ||
+                           variant == Variant::bclone
+                       ? depth_index
+                       : 0];
   if (mode == Mode::fused) {
     run_fused(shard, dimension, slots, block, slot_tile, output);
-  } else {
+  } else if (mode == Mode::repeat) {
     run_repeat_gemv(shard, dimension, slots, block, output);
+  } else if (mode == Mode::legacy) {
+    run_legacy_gemv(shard, dimension, slots, block, output);
+  } else {
+    throw std::runtime_error("compare mode requires comparison orchestration");
   }
 }
 
@@ -543,24 +850,30 @@ struct TimedResult {
                                              std::uint32_t recurrent_depth,
                                              Variant variant) {
   return static_cast<std::uint64_t>(rows) * dimension *
-         (variant == Variant::b ? recurrent_depth : 1U);
+         (variant == Variant::b || variant == Variant::breal || variant == Variant::bclone
+              ? recurrent_depth
+              : 1U);
 }
 
 [[nodiscard]] TimedResult run_timed(const Workload& workload,
                                     const std::vector<CpuTarget>& targets,
-                                    const std::vector<std::uint32_t>& rows,
-                                    std::uint32_t worker_count,
-                                    Mode mode,
-                                    std::uint32_t slot_tile,
-                                    std::uint32_t iterations,
-                                    std::uint32_t timed_repetitions,
-                                    std::uint32_t warmup,
-                                    const QpcClock& clock) {
+                                     const std::vector<std::uint32_t>& rows,
+                                     std::uint32_t worker_count,
+                                     Mode mode,
+                                     std::uint32_t slot_tile,
+                                     std::uint32_t iterations,
+                                     std::uint32_t timed_repetitions,
+                                     std::uint32_t warmup,
+                                     const QpcClock& clock,
+                                     std::vector<std::vector<std::int64_t>>* reusable_outputs = nullptr) {
   if (worker_count != 1 && worker_count != workload.shards.size()) {
     throw std::runtime_error("worker count must be one or one worker per shard");
   }
   if (targets.size() != worker_count) throw std::runtime_error("CPU/worker count mismatch");
-  std::vector<std::vector<std::int64_t>> outputs(workload.shards.size());
+  std::vector<std::vector<std::int64_t>> allocated_outputs;
+  std::vector<std::vector<std::int64_t>>& outputs =
+      reusable_outputs != nullptr ? *reusable_outputs : allocated_outputs;
+  outputs.resize(workload.shards.size());
   for (std::size_t shard_index = 0; shard_index < workload.shards.size(); ++shard_index) {
     outputs[shard_index].assign(static_cast<std::size_t>(workload.slots) * workload.shards[shard_index].rows, 0);
   }
@@ -684,17 +997,17 @@ struct TimedResult {
     for (auto& worker : workers) worker.join();
   }
 
-  TimedResult result;
-  result.worker_count = worker_count;
-  result.outputs = std::move(outputs);
-  result.elapsed_seconds = elapsed_seconds;
+   TimedResult result;
+   result.worker_count = worker_count;
+   result.elapsed_seconds = elapsed_seconds;
   result.mac_total = calculate_mac_total(rows, workload.dimension, workload.slots,
                                          workload.recurrent_depth, iterations,
                                          timed_repetitions);
   result.mac_per_second = result.elapsed_seconds > 0.0
                               ? static_cast<double>(result.mac_total) / result.elapsed_seconds
                               : 0.0;
-  result.checksum = checksum_outputs(result.outputs, rows, workload.slots);
+   result.checksum = checksum_outputs(outputs, rows, workload.slots);
+   if (reusable_outputs == nullptr) result.outputs = std::move(allocated_outputs);
   result.eviction_checksum = std::accumulate(eviction_checksums.begin(), eviction_checksums.end(), std::uint64_t{0});
   result.eviction_bytes = workload.variant == Variant::c ? kEvictionBytes : 0;
   result.all_affinity_succeeded = true;
@@ -726,9 +1039,18 @@ struct TimedResult {
   return result;
 }
 
-[[nodiscard]] std::string mode_name(Mode mode) { return mode == Mode::fused ? "fused" : "repeat"; }
-[[nodiscard]] char variant_name(Variant variant) {
-  return variant == Variant::a ? 'A' : (variant == Variant::b ? 'B' : 'C');
+[[nodiscard]] std::string mode_name(Mode mode) {
+  if (mode == Mode::fused) return "fused";
+  if (mode == Mode::repeat) return "repeat";
+  if (mode == Mode::legacy) return "legacy";
+  return "compare";
+}
+[[nodiscard]] std::string variant_name(Variant variant) {
+  if (variant == Variant::a) return "A";
+  if (variant == Variant::b) return "B";
+  if (variant == Variant::breal) return "B_real";
+  if (variant == Variant::bclone) return "Bclone";
+  return "C";
 }
 
 void require(bool condition, const std::string& message) {
@@ -764,7 +1086,8 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
   const std::vector<std::uint32_t> rows{3, 5, 7, 9};
   const std::uint64_t expected_mac_total = calculate_mac_total(
       rows, dimension, slots, recurrent_depth, iterations, timed_repetitions);
-  for (const Variant variant : {Variant::a, Variant::b, Variant::c}) {
+  for (const Variant variant : {Variant::a, Variant::b, Variant::breal, Variant::bclone,
+                                Variant::c}) {
     const Workload workload = make_workload(dimension, slots, recurrent_depth, variant, rows);
     bool has_positive = false;
     bool has_negative = false;
@@ -785,10 +1108,12 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
       std::vector<std::vector<std::int64_t>> reference(workload.shards.size());
       std::vector<std::vector<std::int64_t>> fused(workload.shards.size());
       std::vector<std::vector<std::int64_t>> repeat(workload.shards.size());
+      std::vector<std::vector<std::int64_t>> legacy(workload.shards.size());
       for (std::size_t shard_index = 0; shard_index < workload.shards.size(); ++shard_index) {
         reference[shard_index].assign(static_cast<std::size_t>(slots) * rows[shard_index], 0);
         fused[shard_index].assign(reference[shard_index].size(), 0);
         repeat[shard_index].assign(reference[shard_index].size(), 0);
+        legacy[shard_index].assign(reference[shard_index].size(), 0);
         run_reference(workload.shards[shard_index], dimension, slots, recurrent_depth,
                       variant, reference[shard_index]);
         for (std::uint32_t iteration = 0; iteration < iterations; ++iteration) {
@@ -796,6 +1121,8 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
                     variant, Mode::fused, slot_tile, fused[shard_index]);
           run_shard(workload.shards[shard_index], dimension, slots, recurrent_depth,
                     variant, Mode::repeat, slot_tile, repeat[shard_index]);
+          run_shard(workload.shards[shard_index], dimension, slots, recurrent_depth,
+                    variant, Mode::legacy, slot_tile, legacy[shard_index]);
         }
       }
       const std::uint64_t reference_checksum = checksum_outputs(reference, rows, slots);
@@ -804,11 +1131,15 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
       for (std::size_t shard_index = 0; shard_index < workload.shards.size(); ++shard_index) {
         require(reference[shard_index] == fused[shard_index], "fused output differs from reference");
         require(reference[shard_index] == repeat[shard_index], "repeat output differs from reference");
+        require(reference[shard_index] == legacy[shard_index], "legacy output differs from reference");
         require(fused[shard_index] == repeat[shard_index], "fused output differs from repeat");
+        require(fused[shard_index] == legacy[shard_index], "fused output differs from legacy");
       }
       const std::uint64_t fused_checksum = checksum_outputs(fused, rows, slots);
       const std::uint64_t repeat_checksum = checksum_outputs(repeat, rows, slots);
-      require(fused_checksum == repeat_checksum && fused_checksum == reference_checksum,
+      const std::uint64_t legacy_checksum = checksum_outputs(legacy, rows, slots);
+      require(fused_checksum == repeat_checksum && fused_checksum == legacy_checksum &&
+                  fused_checksum == reference_checksum,
               "checksums differ");
 
       std::vector<CpuTarget> four_targets;
@@ -816,7 +1147,7 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
       for (const std::uint32_t cpu_index : kPhysicalCpuIndices) {
         four_targets.push_back(available_targets[cpu_index]);
       }
-      for (const Mode mode : {Mode::fused, Mode::repeat}) {
+      for (const Mode mode : {Mode::fused, Mode::repeat, Mode::legacy}) {
         const TimedResult one_worker = run_timed(workload, {available_targets[0]}, rows, 1,
                                                  mode, slot_tile, iterations,
                                                  timed_repetitions, 0, clock);
@@ -833,20 +1164,99 @@ void run_correction_self_test(const std::vector<CpuTarget>& available_targets,
       }
     }
   }
-  std::cerr << "T0-M correction passed: every Y[S x O_i] cell, fused/repeat/reference, "
-               "A/B/C, S_tile=2/4/8, four shards, and one/four-worker accounting gate\n";
+  const std::vector<std::uint32_t> bclone_rows{1, 1, 1, 1};
+  const Workload a_workload = make_workload(1472, 1, 16, Variant::a, bclone_rows);
+  const Workload breal_workload = make_workload(1472, 1, 16, Variant::breal, bclone_rows);
+  const Workload bclone_workload = make_workload(1472, 1, 16, Variant::bclone, bclone_rows);
+  std::vector<std::vector<std::int64_t>> a_outputs(4);
+  std::vector<std::vector<std::int64_t>> breal_outputs(4);
+  std::vector<std::vector<std::int64_t>> bclone_outputs(4);
+  bool breal_distinct_seen = false;
+  for (std::size_t shard_index = 0; shard_index < bclone_workload.shards.size(); ++shard_index) {
+    const auto& a_blocks = a_workload.shards[shard_index].blocks;
+    const auto& breal_blocks = breal_workload.shards[shard_index].blocks;
+    const auto& bclone_blocks = bclone_workload.shards[shard_index].blocks;
+    require(a_blocks.size() == 1 && breal_blocks.size() == 16 && bclone_blocks.size() == 16,
+            "B_real and Bclone must allocate exactly 16 blocks at D=1472,R=16");
+    bool breal_content_differs = false;
+    for (std::size_t depth_index = 0; depth_index < bclone_blocks.size(); ++depth_index) {
+      require(breal_blocks[depth_index].values.data() != a_blocks[0].values.data(),
+              "B_real block aliases A allocation");
+      if (depth_index != 0) {
+        require(breal_blocks[depth_index].values.data() !=
+                    breal_blocks[depth_index - 1].values.data(),
+                "B_real blocks do not have distinct addresses");
+        require(breal_blocks[depth_index].values != breal_blocks[depth_index - 1].values,
+                "B_real round content unexpectedly identical");
+      }
+      require(bclone_blocks[depth_index].values.data() != a_blocks[0].values.data(),
+              "Bclone block aliases A allocation");
+      if (depth_index != 0) {
+        require(bclone_blocks[depth_index].values.data() !=
+                    bclone_blocks[depth_index - 1].values.data(),
+                "Bclone blocks do not have distinct addresses");
+      }
+      require(bclone_blocks[depth_index].values == a_blocks[0].values,
+              "Bclone block bytes differ from A");
+      breal_content_differs = breal_content_differs ||
+                              breal_blocks[depth_index].values != a_blocks[0].values;
+    }
+    require(breal_content_differs, "B_real blocks unexpectedly match A bytes for every round");
+    a_outputs[shard_index].assign(1, 0);
+    breal_outputs[shard_index].assign(1, 0);
+    bclone_outputs[shard_index].assign(1, 0);
+  }
+  for (std::uint32_t depth_index = 0; depth_index < 16; ++depth_index) {
+    for (std::size_t shard_index = 0; shard_index < bclone_workload.shards.size(); ++shard_index) {
+      run_shard_depth(a_workload.shards[shard_index], 1472, 1, Variant::a, Mode::fused, 8,
+                      depth_index, a_outputs[shard_index]);
+      run_shard_depth(breal_workload.shards[shard_index], 1472, 1, Variant::breal, Mode::fused,
+                      8, depth_index, breal_outputs[shard_index]);
+      run_shard_depth(bclone_workload.shards[shard_index], 1472, 1, Variant::bclone, Mode::fused,
+                      8, depth_index, bclone_outputs[shard_index]);
+    }
+    const std::uint64_t a_checksum = checksum_outputs(a_outputs, bclone_rows, 1);
+    const std::uint64_t breal_checksum = checksum_outputs(breal_outputs, bclone_rows, 1);
+    const std::uint64_t bclone_checksum = checksum_outputs(bclone_outputs, bclone_rows, 1);
+    require(a_checksum != 0 && a_checksum == bclone_checksum,
+            "Bclone output checksum differs from A");
+    require(breal_checksum != 0, "B_real output checksum unexpectedly zero");
+    if (depth_index == 0) {
+      require(breal_checksum == a_checksum,
+              "B_real round-zero checksum differs from original B seed semantics");
+    } else {
+      require(breal_checksum != a_checksum,
+              "B_real round-dependent checksum is not distinct from A/Bclone");
+      breal_distinct_seen = true;
+    }
+    std::cerr << "self_test_bclone_depth,D=1472,S=1,R=16,depth=" << (depth_index + 1)
+              << ",A_checksum=" << a_checksum << ",Bclone_checksum=" << bclone_checksum
+              << ",B_real_checksum=" << breal_checksum
+              << ",Bclone_equal=true,B_real_distinct=" << (depth_index != 0 ? "true" : "false")
+              << "\n";
+  }
+  require(breal_distinct_seen, "B_real has no round with content/output distinct from A");
+  std::cerr << "self_test_bclone,D=1472,S=1,R=16,distinct_allocations=16,byte_identical=true,"
+                "outputs_equal=true,checksums_equal=true\n";
+  std::cerr << "self_test_b_real,D=1472,S=1,R=16,distinct_allocations=16,"
+                "round_dependent=true,content_distinct=true,output_checksum_distinct=true\n";
+  std::cerr << "T0-M correction passed: every Y[S x O_i] cell, fused/repeat/legacy/reference, "
+               "A/B/Bclone/C, S_tile=2/4/8, four shards, and one/four-worker accounting gate\n";
 }
 
-void print_csv(const Options& options, const TimedResult& result) {
-  std::cout << "D,S,R,O_i,B_i,rows_per_worker,bytes_per_worker,mode,variant,S_tile,iterations,"
-                "timed_repetitions,warmup,worker_count,worker_list,affinity,affinity_error,"
-                "affinity_succeeded,timed_repetitions_exact,avx2_supported,kernel_used,"
-                "eviction_bytes,eviction_checksum,elapsed_seconds,mac_total,"
-                "mac_per_second,checksum\n"
-             << options.dimension << ',' << options.slots << ',' << options.recurrent_depth << ",\""
+void print_csv(const Options& options, const TimedResult& result, Mode mode,
+               bool print_header) {
+  if (print_header) {
+    std::cout << "D,S,R,O_i,B_i,rows_per_worker,bytes_per_worker,mode,variant,S_tile,iterations,"
+                  "timed_repetitions,warmup,worker_count,worker_list,affinity,affinity_error,"
+                  "affinity_succeeded,timed_repetitions_exact,avx2_supported,kernel_used,"
+                  "eviction_bytes,eviction_checksum,elapsed_seconds,mac_total,"
+                  "mac_per_second,checksum\n";
+  }
+  std::cout << options.dimension << ',' << options.slots << ',' << options.recurrent_depth << ",\""
              << result.rows_per_worker << "\",\"" << result.bytes_per_worker << "\",\""
              << result.rows_per_worker << "\",\"" << result.bytes_per_worker << "\"," 
-             << mode_name(options.mode) << ',' << variant_name(options.variant) << ','
+             << mode_name(mode) << ',' << variant_name(options.variant) << ','
             << options.slot_tile << ',' << options.iterations << ',' << options.timed_repetitions << ','
             << options.warmup << ',' << result.worker_count << ",\"" << result.worker_list
             << "\",\"" << result.affinity << "\",\"" << result.affinity_error << "\","
@@ -867,8 +1277,10 @@ int main(int argc, char** argv) {
     if (!runtime_avx2_supported()) {
       throw std::runtime_error("AVX2 unavailable; t0m_int8_probe requires AVX2");
     }
-    run_correction_self_test(targets, clock);
-    if (options.self_test) return 0;
+    if (options.self_test) {
+      run_correction_self_test(targets, clock);
+      return 0;
+    }
     if (options.cpus.empty()) {
       if (options.workers > targets.size()) throw std::runtime_error("--workers exceed active CPUs");
     }
@@ -884,14 +1296,38 @@ int main(int argc, char** argv) {
     const Workload workload = make_workload(options.dimension, options.slots,
                                             options.recurrent_depth, options.variant,
                                             options.rows_per_worker);
-    const TimedResult result = run_timed(workload, selected_targets, options.rows_per_worker,
-                                         options.workers, options.mode, options.slot_tile,
-                                         options.iterations, options.timed_repetitions,
-                                         options.warmup, clock);
-    if (!result.all_timed_repetitions_exact || !result.all_affinity_succeeded) {
-      throw std::runtime_error("accounting or affinity gate failed; speed result rejected");
+    if (options.mode == Mode::compare) {
+      const std::array<std::array<Mode, 3>, 3> compare_orders{{
+          {Mode::legacy, Mode::repeat, Mode::fused},
+          {Mode::fused, Mode::repeat, Mode::legacy},
+          {Mode::repeat, Mode::legacy, Mode::fused},
+      }};
+      const auto& compare_modes = compare_orders[options.compare_order];
+      std::vector<std::vector<std::int64_t>> comparison_outputs;
+      bool print_header = true;
+      for (std::size_t offset = 0; offset < compare_modes.size(); ++offset) {
+        const Mode mode = compare_modes[offset];
+        const TimedResult result = run_timed(workload, selected_targets,
+                                             options.rows_per_worker, options.workers, mode,
+                                             options.slot_tile, options.iterations,
+                                             options.timed_repetitions, options.warmup, clock,
+                                             &comparison_outputs);
+        if (!result.all_timed_repetitions_exact || !result.all_affinity_succeeded) {
+          throw std::runtime_error("accounting or affinity gate failed; speed result rejected");
+        }
+        print_csv(options, result, mode, print_header);
+        print_header = false;
+      }
+    } else {
+      const TimedResult result = run_timed(workload, selected_targets, options.rows_per_worker,
+                                           options.workers, options.mode, options.slot_tile,
+                                           options.iterations, options.timed_repetitions,
+                                           options.warmup, clock);
+      if (!result.all_timed_repetitions_exact || !result.all_affinity_succeeded) {
+        throw std::runtime_error("accounting or affinity gate failed; speed result rejected");
+      }
+      print_csv(options, result, options.mode, true);
     }
-    print_csv(options, result);
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << '\n';

@@ -141,15 +141,16 @@ For four physical cores without SMT siblings, pass the topology-confirmed mask e
 
 `t0m_int8_probe` is isolated from `int8_probe.cpp` and uses unambiguous names: `D` is internal state dimension, `S` is slot count, `R` is recurrent depth, `O_i` is rows assigned to physical worker `i`, and `B_i` is weight bytes assigned to physical worker `i`. Variant A shares one weight block across `R`; variant B uses distinct blocks by recurrent depth.
 
-The `fused` kernel tiles output rows and slots, loads each weight tile once, feeds that tile to every slot in the slot tile, then stores outputs. `repeat` is the S-independent-GEMV control. Supported `S` values are `1,2,4,8,16`; runtime `S_tile` candidates are `2,4,8`.
+The `fused` kernel processes one output row at a time, tiles slots, loads each 16-byte weight chunk once, feeds that chunk to every slot in the slot tile, then stores outputs. `repeat` is the S-independent-GEMV control. Supported `S` values are `1,2,4,8,16`; runtime `S_tile` candidates are `2,4,8`.
 
-Every invocation runs correction first. Correction covers all four shards, positive/negative int8 data, non-multiple dimensions and tile sizes, exact reference/fused/repeat equality, checksum coverage for every `Y[S x O_i]` cell, and one-worker versus four-worker accounting. Speed CSV is emitted only when this gate passes.
+`--self-test` runs correction explicitly. Correction covers all four shards, positive/negative int8 data, non-multiple dimensions and tile sizes, exact reference/fused/repeat equality, checksum coverage for every `Y[S x O_i]` cell, and one-worker versus four-worker accounting. Normal measurement invocations emit speed CSV without running this full correction suite; run the explicit self-test before a speed campaign when this gate is required.
 
 Focused verification only:
 
 ```powershell
 cmake --build build --target t0m_int8_probe
 ctest --test-dir build -R t0m_int8_correction --output-on-failure
+.\build\t0m_int8_probe.exe --self-test
 .\build\t0m_int8_probe.exe --D 64 --S 4 --R 2 --mode fused --variant A --S-tile 4 --workers 1 --rows-per-worker 128 --timed-repetitions 2
 ```
 
@@ -163,4 +164,46 @@ The one-shot runner first measures `S_tile={2,4,8}` on `D=512,S=8,R=16` for A/B 
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\run_t0m_phase3.ps1
 ```
 
-Outputs are written under `sweep-output\t0m-phase3\`: `t0m_phase3.machine.csv`, exact `t0m_phase3.commands.log`, `t0m_phase3.stderr.log`, and `t0m_phase3.summary.txt`. Every speed invocation must pass correction, AVX2, four-worker affinity, exact repetition, and row-shape validation. The runner does not start Phase 4 and refuses to repeat a completed campaign.
+Outputs are written under `sweep-output\t0m-phase3\`: `t0m_phase3.machine.csv`, exact `t0m_phase3.commands.log`, `t0m_phase3.stderr.log`, and `t0m_phase3.summary.txt`. Run the explicit correction self-test before the campaign when this gate is required; each speed invocation validates AVX2, four-worker affinity, exact repetition, and row shape. The runner does not start Phase 4 and refuses to repeat a completed campaign.
+
+## T0-M Recurrence Component Breakdown
+
+The recurrence probe accepts `--component full|gemv-only|transition-only` in addition to existing `--mode`. `full` is actual worker/barrier GEMV followed by `apply_transition`; `gemv-only` measures the same GEMV/barrier stage with state frozen and no transition; `transition-only` measures the main-thread transition/barrier protocol with deterministic synthetic output and no GEMV. `checksum_kind=output` makes GEMV-only validation meaningful; transition-only retains state checksums and documents its synthetic-output invariant in CSV.
+
+Run the fixed D=512, R=1, S={1,4,8,16}, 10-process component breakdown once:
+
+```powershell
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\run_t0m_recurrence_component_breakdown.ps1
+```
+
+The runner performs CTest correction, one explicit self-test, and `dumpbin` evidence before 120 speed processes. It refuses rerun after `summary.txt` exists. Output is under `sweep-output\t0m-recurrence-component-breakdown\`.
+
+## T0-M Recurrence Plumbing Subgate
+
+`t0m_recurrence_probe` is an isolated plumbing/performance probe. It does not modify or invoke `t0m_int8_probe`, the Phase 3 runner, MRDL, Q4, external memory, LM-head, or training code. It implements only Variant A: one fixed `O_i x D` int8 weight block per worker, reused for every recurrent round. Global state `X` and output `Y` have shape `S x D`; worker `i` owns disjoint output rows `O_i`, and measurement requires `sum(O_i) == D`.
+
+At every depth round, workers wait on a start barrier, compute GEMV against the same current `X`, and wait on a completion barrier. Main thread then applies this transition before next start barrier:
+
+```text
+z = Y + X                         (checked int64)
+rms = sqrt(sum(z_j*z_j)/D + 1e-6) (checked int64 square/sum)
+u = z / rms
+q = round_half_away_from_zero(32*u)
+X_next = clamp(q, -127, 127)
+```
+
+No learned gamma or bias exists. Constants are fixed: RMS epsilon `1e-6`, requantization scale `32`, and int8 clamp `[-127,127]`. The probe counts clipped cells and clipping rate, records state checksum after every round, and marks `all_rounds_valid=false` for any nonfinite or checked-overflow round. CSV reports final checksum, semicolon-separated per-round checksums, recurrence timing including transition cost, MAC total, mode/kernel metadata, affinity, and repetition fields.
+
+`fused` uses AVX2 direct int8 loads, row-sharded weights, slot reuse, and compile-time slot dispatch for `S={1,2,4,8,16}`. `repeat` is the vector GEMV control with the same transition. Normal runs do not execute correction. `--self-test` is explicit and compares independent scalar reference, fused, and repeat state at every round and cell for randomized signed-int8 data at `S={1,4}`, `D={37,53,512}`, `R=16`; boundary data forces quantization/clipping, while all-cell saturation is rejected.
+
+Focused verification:
+
+```powershell
+cmake --build build --target t0m_recurrence_probe
+ctest --test-dir build -R t0m_recurrence_correction --output-on-failure
+.\build\t0m_recurrence_probe.exe --self-test
+.\build\t0m_recurrence_probe.exe --mode fused --D 512 --S 4 --R 2 --workers 4 --cpus 0,2,4,6 --rows-per-worker 128,128,128,128 --timed-repetitions 1 --warmup 0
+.\build\t0m_recurrence_probe.exe --mode repeat --D 512 --S 4 --R 2 --workers 4 --cpus 0,2,4,6 --rows-per-worker 128,128,128,128 --timed-repetitions 1 --warmup 0
+```
+
+This subgate is plumbing/performance only. It makes no training, model-quality, or convergence claim.

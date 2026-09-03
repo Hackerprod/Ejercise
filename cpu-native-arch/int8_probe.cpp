@@ -37,10 +37,11 @@ struct Options {
   std::uint32_t parallel_workers = 0;
   std::vector<std::uint32_t> parallel_cpus;
   std::vector<std::uint32_t> parallel_rows;
-  enum class Variant : char { a = 'A', b = 'B', c = 'C' };
+  enum class Variant : char { a = 'A', b = 'B', bclone, c = 'C' };
   enum class Kernel : char { scalar, avx2, automatic };
   Variant variant = Variant::a;
   Kernel kernel = Kernel::scalar;
+  bool self_test = false;
 };
 
 using Variant = Options::Variant;
@@ -146,8 +147,9 @@ class AffinityGuard {
 [[nodiscard]] Variant parse_variant(std::string_view text) {
   if (text == "A") return Variant::a;
   if (text == "B") return Variant::b;
+  if (text == "Bclone") return Variant::bclone;
   if (text == "C") return Variant::c;
-  throw std::runtime_error("invalid --variant; expected A, B, or C");
+  throw std::runtime_error("invalid --variant; expected A, B, Bclone, or C");
 }
 
 [[nodiscard]] Kernel parse_kernel(std::string_view text) {
@@ -182,6 +184,8 @@ class AffinityGuard {
       options.repetitions = parse_u32(require_value(argument), argument, false);
     } else if (argument == "--warmup") {
       options.warmup = parse_u32(require_value(argument), argument, true);
+    } else if (argument == "--self-test") {
+      options.self_test = true;
     } else if (argument == "--variant") {
       options.variant = parse_variant(require_value(argument));
     } else if (argument == "--kernel") {
@@ -197,7 +201,7 @@ class AffinityGuard {
       options.parallel_rows = parse_list(require_value(argument), argument, false);
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: int8_probe [--m N|--target-kib N] [--K N] [--depth N] "
-                   "[--variant A|B|C] [--kernel scalar|avx2|auto] [--cpu N] "
+                   "[--variant A|B|Bclone|C] [--kernel scalar|avx2|auto] [--cpu N] "
                    "[--parallel-workers N|--parallel-cpus LIST --parallel-rows LIST]\n";
       std::exit(0);
     } else {
@@ -271,9 +275,15 @@ struct Int8Data {
 [[nodiscard]] Int8Data make_data(std::uint32_t m, std::uint32_t k,
                                  std::uint32_t depth, Variant variant) {
   Int8Data data{m, k, {}, std::vector<std::int8_t>(k)};
-  const std::uint32_t block_count = variant == Variant::b ? depth : 1;
+  const std::uint32_t block_count =
+      variant == Variant::b || variant == Variant::bclone ? depth : 1;
   data.blocks.reserve(block_count);
   for (std::uint32_t block_index = 0; block_index < block_count; ++block_index) {
+    if (variant == Variant::bclone && block_index != 0) {
+      WeightBlock block{data.blocks.front().weights};
+      data.blocks.push_back(std::move(block));
+      continue;
+    }
     std::uint32_t state = 0xC001CAFEU ^ (0x9E3779B9U * (block_index + 1U));
     WeightBlock block{std::vector<std::int8_t>(static_cast<std::size_t>(m) * k)};
     for (std::int8_t& value : block.weights) {
@@ -363,6 +373,36 @@ void run_kernel_correction_test() {
   }
   std::cerr << "int8 AVX2 correction test passed; scalar_checksum=" << scalar
             << ", avx2_checksum=" << avx2 << ", difference=0\n";
+}
+
+void run_bclone_self_test() {
+  const Int8Data a = make_data(8, 64, 16, Variant::a);
+  const Int8Data bclone = make_data(8, 64, 16, Variant::bclone);
+  if (bclone.blocks.size() != 16) {
+    throw std::runtime_error("Bclone self-test allocation count failed");
+  }
+  for (std::size_t index = 0; index < bclone.blocks.size(); ++index) {
+    if (index != 0 && bclone.blocks[index].weights.data() ==
+                          bclone.blocks[0].weights.data()) {
+      throw std::runtime_error("Bclone self-test found aliased allocation");
+    }
+    if (bclone.blocks[index].weights != a.blocks[0].weights) {
+      throw std::runtime_error("Bclone self-test found non-identical bytes");
+    }
+  }
+  std::vector<std::int32_t> a_output(a.m, 0);
+  std::vector<std::int32_t> bclone_output(bclone.m, 0);
+  for (std::uint32_t pass = 0; pass < 16; ++pass) {
+    const std::int64_t a_checksum =
+        run_pass_int8_scalar(a, pass, Variant::a, a_output);
+    const std::int64_t bclone_checksum =
+        run_pass_int8_scalar(bclone, pass, Variant::bclone, bclone_output);
+    if (a_output != bclone_output || a_checksum != bclone_checksum) {
+      throw std::runtime_error("Bclone self-test output/checksum mismatch");
+    }
+  }
+  std::cerr << "int8 Bclone self-test passed; distinct_allocations=16,"
+               "byte_identical=true,outputs_equal=true,checksums_equal=true\n";
 }
 
 void touch_eviction(const std::vector<std::uint8_t>& buffer,
@@ -555,7 +595,12 @@ struct ParallelResult {
   return "auto";
 }
 
-[[nodiscard]] char variant_name(Variant variant) { return static_cast<char>(variant); }
+[[nodiscard]] const char* variant_name(Variant variant) {
+  if (variant == Variant::a) return "A";
+  if (variant == Variant::b) return "B";
+  if (variant == Variant::bclone) return "Bclone";
+  return "C";
+}
 
 }  // namespace
 
@@ -563,6 +608,11 @@ int main(int argc, char** argv) {
   try {
     Options options = parse_options(argc, argv);
     const CpuFeatures features = detect_cpu_features();
+    if (options.self_test) {
+      run_bclone_self_test();
+      if (features.avx2) run_kernel_correction_test();
+      return 0;
+    }
     PassFunction pass_function = run_pass_int8_scalar;
     const char* kernel_used = "scalar";
     if (options.kernel != Kernel::scalar) {

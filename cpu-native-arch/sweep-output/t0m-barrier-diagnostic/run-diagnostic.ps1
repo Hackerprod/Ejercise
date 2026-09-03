@@ -134,7 +134,7 @@ function Invoke-Logged([string]$Label, [int]$Size, [int]$Depth, [string]$Variant
   Assert-Field $row "eviction_checksum" "0" $Label
   $expectedMacTotal = ([int64]($Rows.Split(',') | ForEach-Object { [int64]$_ } | Measure-Object -Sum).Sum) * 512 * $Depth * 8
   Assert-Field $row "mac_total" "$expectedMacTotal" $Label
-  if ([int64]$row.checksum -eq 0) { throw "Checksum unexpectedly zero: $Label" }
+  if ([uint64]$row.checksum -eq 0) { throw "Checksum unexpectedly zero: $Label" }
   if ([double]$row.elapsed_seconds -le 0 -or [double]$row.mac_per_second -le 0) {
     throw "Timing/output rate invalid: $Label"
   }

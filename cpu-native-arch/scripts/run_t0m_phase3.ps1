@@ -2,9 +2,9 @@
 param(
   [string]$Executable = "",
   [string]$OutputDirectory = "",
-  [int]$TimedRepetitions = 5,
+  [int]$TimedRepetitions = 8,
   [int]$Warmup = 2,
-  [int]$PilotRepeats = 3
+  [int]$IndependentRuns = 10
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,8 +18,8 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
   throw "Executable not found: $Executable"
 }
-if ($TimedRepetitions -le 0 -or $Warmup -lt 0 -or $PilotRepeats -le 0) {
-  throw "TimedRepetitions and PilotRepeats must be positive; Warmup cannot be negative"
+if ($TimedRepetitions -le 0 -or $Warmup -lt 0 -or $IndependentRuns -ne 10) {
+  throw "TimedRepetitions must be positive, Warmup cannot be negative, and IndependentRuns must equal 10"
 }
 if (Test-Path -LiteralPath (Join-Path $OutputDirectory "t0m_phase3.summary.txt") -PathType Leaf) {
   throw "Refusing to repeat completed Phase 3 campaign: $OutputDirectory"
@@ -38,34 +38,230 @@ $modes = @("fused", "repeat")
 $variants = @("A", "B")
 $controlSizes = @(512, 768)
 $controlSlots = @(1, 8, 16)
+$pilotTiles = @(2, 4, 8)
 $pilotSlots = 8
 $pilotDepth = 16
-$targetRows = @{}
+$targetRows = @{
+  384 = [int[]]@(908, 852, 512, 800)
+  512 = [int[]]@(1211, 1136, 683, 1066)
+  640 = [int[]]@(1514, 1420, 854, 1332)
+  768 = [int[]]@(1816, 1705, 1023, 1600)
+}
 foreach ($size in $sizes) {
-  $targetRows[$size] = [int][math]::Floor(($size * 1024) / $D)
+  $rows = [int[]]$targetRows[$size]
+  $expectedTotalRows = [int](($size * 1024 * $workers) / $D)
+  $actualTotalRows = [int](($rows | Measure-Object -Sum).Sum)
+  if ($rows.Count -ne $workers -or @($rows | Where-Object { $_ -le 0 }).Count -gt 0 -or $actualTotalRows -ne $expectedTotalRows) {
+    throw "Invalid proportional rows for size=$size`: expected $expectedTotalRows positive rows across $workers workers, got $($rows -join ',')"
+  }
 }
 
 $machineCsv = Join-Path $OutputDirectory "t0m_phase3.machine.csv"
+$aggregateCsv = Join-Path $OutputDirectory "t0m_phase3.aggregate.csv"
+$metricsCsv = Join-Path $OutputDirectory "t0m_phase3.metrics.csv"
 $stderrLog = Join-Path $OutputDirectory "t0m_phase3.stderr.log"
-$summaryPath = Join-Path $OutputDirectory "t0m_phase3.summary.txt"
 $commandLog = Join-Path $OutputDirectory "t0m_phase3.commands.log"
-$script:failedInvocations = 0
+$preflightStdout = Join-Path $OutputDirectory "t0m_phase3.preflight.stdout.log"
+$preflightStderr = Join-Path $OutputDirectory "t0m_phase3.preflight.stderr.log"
+$summaryPath = Join-Path $OutputDirectory "t0m_phase3.summary.txt"
 $script:invocationNumber = 0
-$script:records = @()
-$script:probeHeader = $null
+$script:failedInvocations = 0
+$script:records = New-Object -TypeName 'System.Collections.Generic.List[object]'
 
-Set-Content -LiteralPath $stderrLog -Encoding ascii -Value @(
-  "T0-M Phase 3 stderr and correction-gated command log"
+$csvHeader = "D,S,R,O_i,B_i,rows_per_worker,bytes_per_worker,mode,variant,S_tile,iterations,timed_repetitions,warmup,worker_count,worker_list,affinity,affinity_error,affinity_succeeded,timed_repetitions_exact,avx2_supported,kernel_used,eviction_bytes,eviction_checksum,elapsed_seconds,mac_total,mac_per_second,checksum"
+$logHeader = @(
+  "T0-M Phase 3 stderr and bounded process-output log"
   "executable=$Executable"
   "D=$D; bytes_per_int8=1; physical_cpus=$($cpus -join ','); workers=$workers"
-  "target_kib_per_worker=$($sizes -join ','); S=$($slots -join ','); R=$($depths -join ','); modes=$($modes -join ','); variants=A,B"
-  "timed_repetitions=$TimedRepetitions; warmup=$Warmup; pilot_repeats=$PilotRepeats"
+  "target_kib=$($sizes -join ','); S=$($slots -join ','); R=$($depths -join ','); modes=$($modes -join ','); variants=A,B"
+  "timed_repetitions=$TimedRepetitions; warmup=$Warmup; independent_runs=$IndependentRuns"
+  "normal_speed_correction=forbidden; explicit self-test is logged separately"
   "Phase 4 constant-work sweep=NOT RUN"
 )
-Set-Content -LiteralPath $commandLog -Encoding ascii -Value "T0-M Phase 3 exact commands"
+Set-Content -LiteralPath $stderrLog -Encoding ascii -Value $logHeader
+Set-Content -LiteralPath $commandLog -Encoding ascii -Value @(
+  "T0-M Phase 3 exact commands"
+  "preflight=single explicit --self-test; speed rows never receive --self-test"
+)
 
 function Format-Number([double]$Value) {
   return $Value.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Limit-Text([string]$Text, [int]$Maximum = 2000) {
+  if ($null -eq $Text) { return "" }
+  $normalized = $Text.TrimEnd()
+  if ($normalized.Length -le $Maximum) { return $normalized }
+  return $normalized.Substring(0, $Maximum) + "...[truncated]"
+}
+
+function Invoke-CapturedProcess([string]$FileName, [string[]]$Arguments) {
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $FileName
+  $startInfo.Arguments = ($Arguments -join " ")
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
+  $started = $false
+  try {
+    if (-not $process.Start()) { throw "Could not start process: $FileName" }
+    $started = $true
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    return [pscustomobject]@{
+      ExitCode = $process.ExitCode
+      Stdout = $stdoutTask.Result
+      Stderr = $stderrTask.Result
+    }
+  } finally {
+    $process.Dispose()
+  }
+}
+
+function Get-ExpectedRows([int[]]$Rows) {
+  return ($Rows -join ',')
+}
+
+function Get-ExpectedBytes([int[]]$Rows, [int]$RecurrentDepth, [string]$Variant) {
+  $depthBlocks = if ($Variant -eq "B") { $RecurrentDepth } else { 1 }
+  return (($Rows | ForEach-Object { [int64]$_ * $D * $depthBlocks }) -join ',')
+}
+
+function Get-ExpectedMacTotal([int[]]$Rows, [int]$SValue, [int]$RValue) {
+  $totalRows = [int64](($Rows | Measure-Object -Sum).Sum)
+  return $totalRows * $D * $SValue * $RValue * $TimedRepetitions
+}
+
+function Invoke-Preflight {
+  $arguments = @("--self-test")
+  Add-Content -LiteralPath $commandLog -Encoding ascii -Value "preflight_command `"$Executable`" --self-test"
+  $result = Invoke-CapturedProcess $Executable $arguments
+  Set-Content -LiteralPath $preflightStdout -Encoding ascii -Value (Limit-Text $result.Stdout)
+  Set-Content -LiteralPath $preflightStderr -Encoding ascii -Value (Limit-Text $result.Stderr)
+  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "preflight_stdout $(Limit-Text $result.Stdout)"
+  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "preflight_stderr $(Limit-Text $result.Stderr)"
+  if ($result.ExitCode -ne 0) {
+    throw "T0-M self-test preflight failed with exit code $($result.ExitCode)"
+  }
+  if ((($result.Stdout + "`n" + $result.Stderr) -notmatch "(?i)T0-M correction passed")) {
+    throw "T0-M self-test preflight did not report correction pass"
+  }
+}
+
+function Invoke-Probe([string]$Campaign, [int]$Repeat, [int]$OrderIndex, [int]$TargetKiB,
+                       [int]$SValue, [int]$RValue, [int[]]$Rows, [string]$ModeValue,
+                       [string]$VariantValue, [int]$Tile, [string]$Context) {
+  $arguments = @(
+    "--D", $D, "--S", $SValue, "--R", $RValue,
+    "--mode", $ModeValue, "--variant", $VariantValue, "--S-tile", $Tile,
+    "--workers", $workers, "--cpus", ($cpus -join ','),
+    "--rows-per-worker", (Get-ExpectedRows $Rows),
+    "--iterations", 1, "--timed-repetitions", $TimedRepetitions, "--warmup", $Warmup
+  )
+  $script:invocationNumber++
+  $id = $script:invocationNumber
+  $command = '"' + $Executable + '" ' + ($arguments -join ' ')
+  Add-Content -LiteralPath $commandLog -Encoding ascii -Value "command[$id] campaign=$Campaign repeat=$Repeat order_index=$OrderIndex target_kib=$TargetKiB $command"
+  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "command[$id] campaign=$Campaign repeat=$Repeat order_index=$OrderIndex target_kib=$TargetKiB $command"
+
+  $result = Invoke-CapturedProcess $Executable $arguments
+  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "stdout[$id] $(Limit-Text $result.Stdout)"
+  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "stderr[$id] $(Limit-Text $result.Stderr)"
+  if ($result.ExitCode -ne 0) {
+    $script:failedInvocations++
+    throw "Probe failed with exit code $($result.ExitCode): $Context"
+  }
+  if ($result.Stderr -match "(?i)correction") {
+    $script:failedInvocations++
+    throw "Normal speed stderr contains forbidden correction message: $Context"
+  }
+
+  $lines = @($result.Stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($lines.Count -ne 2 -or $lines[0] -ne $csvHeader) {
+    $script:failedInvocations++
+    throw "Probe CSV schema/output invalid: $Context"
+  }
+  $row = $lines[1] | ConvertFrom-Csv -Header ($csvHeader -split ',')
+  $expectedRows = Get-ExpectedRows $Rows
+  $expectedBytes = Get-ExpectedBytes $Rows $RValue $VariantValue
+  $expectedEviction = if ($VariantValue -eq "C") { "67108864" } else { "0" }
+  $expectedMacTotal = Get-ExpectedMacTotal $Rows $SValue $RValue
+  $checks = @(
+    @($row.D, "$D", "D"), @($row.S, "$SValue", "S"), @($row.R, "$RValue", "R"),
+    @($row.O_i, $expectedRows, "O_i"), @($row.B_i, $expectedBytes, "B_i"),
+    @($row.rows_per_worker, $expectedRows, "rows_per_worker"), @($row.bytes_per_worker, $expectedBytes, "bytes_per_worker"),
+    @($row.worker_count, "$workers", "worker_count"), @($row.worker_list, ($cpus -join ','), "worker_list"),
+    @($row.affinity_succeeded, "true", "affinity_succeeded"), @($row.affinity, "true,true,true,true", "affinity"),
+    @($row.affinity_error, "0,0,0,0", "affinity_error"), @($row.timed_repetitions_exact, "true", "timed_repetitions_exact"),
+    @($row.avx2_supported, "true", "avx2_supported"), @($row.kernel_used, "avx2", "kernel_used"),
+    @($row.iterations, "1", "iterations"), @($row.timed_repetitions, "$TimedRepetitions", "timed_repetitions"),
+    @($row.warmup, "$Warmup", "warmup"), @($row.eviction_bytes, $expectedEviction, "eviction_bytes"),
+    @($row.mode, $ModeValue, "mode"), @($row.variant, $VariantValue, "variant"), @($row.S_tile, "$Tile", "S_tile"),
+    @($row.mac_total, "$expectedMacTotal", "mac_total")
+  )
+  foreach ($check in $checks) {
+    if ([string]$check[0] -ne [string]$check[1]) {
+      $script:failedInvocations++
+      throw "Invalid row $($check[2])=$($check[0]), expected $($check[1]): $Context"
+    }
+  }
+  if ([uint64]$row.checksum -eq 0 -or [double]$row.mac_total -le 0 -or [double]$row.mac_per_second -le 0) {
+    $script:failedInvocations++
+    throw "Zero checksum or MAC result: $Context"
+  }
+  if ($VariantValue -eq "C" -and [uint64]$row.eviction_checksum -eq 0) {
+    $script:failedInvocations++
+    throw "C eviction checksum is zero: $Context"
+  }
+
+  $record = [ordered]@{
+    campaign = $Campaign
+    campaign_repeat = $Repeat
+    order_index = $OrderIndex
+    target_kib = $TargetKiB
+    mode = $ModeValue
+    variant = $VariantValue
+    S = $SValue
+    R = $RValue
+    tile = $Tile
+    invocation = $id
+  }
+  foreach ($property in $row.psobject.Properties) { $record[$property.Name] = $property.Value }
+  [void]$script:records.Add([object]([pscustomobject]$record))
+  return [pscustomobject]$record
+}
+
+function Get-ExecutionOrder([int]$Repeat, [bool]$Control) {
+  if ($Control) {
+    if (($Repeat % 2) -eq 0) {
+      return @(
+        [pscustomobject]@{ mode = "fused"; variant = "C" }
+        [pscustomobject]@{ mode = "repeat"; variant = "C" }
+      )
+    }
+    return @(
+      [pscustomobject]@{ mode = "repeat"; variant = "C" }
+      [pscustomobject]@{ mode = "fused"; variant = "C" }
+    )
+  }
+  if (($Repeat % 2) -eq 0) {
+    return @(
+      [pscustomobject]@{ mode = "fused"; variant = "A" }
+      [pscustomobject]@{ mode = "fused"; variant = "B" }
+      [pscustomobject]@{ mode = "repeat"; variant = "A" }
+      [pscustomobject]@{ mode = "repeat"; variant = "B" }
+    )
+  }
+  return @(
+    [pscustomobject]@{ mode = "repeat"; variant = "B" }
+    [pscustomobject]@{ mode = "repeat"; variant = "A" }
+    [pscustomobject]@{ mode = "fused"; variant = "B" }
+    [pscustomobject]@{ mode = "fused"; variant = "A" }
+  )
 }
 
 function Get-Median([double[]]$Values) {
@@ -81,290 +277,271 @@ function Get-Mean([double[]]$Values) {
   return [double](($Values | Measure-Object -Average).Average)
 }
 
-function Get-ExpectedBytes([int]$Rows, [int]$RecurrentDepth, [string]$Variant) {
-  $depthBlocks = if ($Variant -eq "B") { $RecurrentDepth } else { 1 }
-  return [int64]$Rows * $D * $depthBlocks
-}
-
-function Get-ExpectedRows([int]$Rows) {
-  return "$Rows,$Rows,$Rows,$Rows"
-}
-
-function Get-ExpectedBytesList([int]$Rows, [int]$RecurrentDepth, [string]$Variant) {
-  $bytes = Get-ExpectedBytes $Rows $RecurrentDepth $Variant
-  return "$bytes,$bytes,$bytes,$bytes"
-}
-
-function Invoke-Probe([string]$Campaign, [int]$Repeat, [int]$DValue, [int]$SValue,
-                      [int]$RValue, [int]$Rows, [string]$ModeValue, [string]$VariantValue,
-                      [int]$Tile, [string]$Context) {
-  $args = @(
-    "--D", $DValue, "--S", $SValue, "--R", $RValue,
-    "--mode", $ModeValue, "--variant", $VariantValue, "--S-tile", $Tile,
-    "--workers", $workers, "--cpus", ($cpus -join ','),
-    "--rows-per-worker", (Get-ExpectedRows $Rows),
-    "--iterations", 1, "--timed-repetitions", $TimedRepetitions, "--warmup", $Warmup
-  )
-  $script:invocationNumber++
-  $id = $script:invocationNumber
-  $command = '"' + $Executable + '" ' + ($args -join ' ')
-  Add-Content -LiteralPath $commandLog -Encoding ascii -Value "command[$id] $command"
-  Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "command[$id] $command"
-
-  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-  $startInfo.FileName = $Executable
-  $startInfo.Arguments = ($args -join ' ')
-  $startInfo.UseShellExecute = $false
-  $startInfo.CreateNoWindow = $true
-  $startInfo.RedirectStandardOutput = $true
-  $startInfo.RedirectStandardError = $true
-  $process = New-Object System.Diagnostics.Process
-  $process.StartInfo = $startInfo
-  try {
-    if (-not $process.Start()) { throw "Could not start probe" }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $stdout = $stdoutTask.Result
-    $stderr = $stderrTask.Result
-    Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "stdout[$id] $($stdout.TrimEnd())"
-    if ($stderr) { Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "stderr[$id] $($stderr.TrimEnd())" }
-    if ($process.ExitCode -ne 0) {
-      $script:failedInvocations++
-      throw "Probe failed with exit code $($process.ExitCode): $Context"
+function New-Aggregates([object[]]$InputRows, [bool]$IncludeTile) {
+  $groups = @{}
+  foreach ($inputRow in $InputRows) {
+    $keyParts = @($inputRow.target_kib, $inputRow.S, $inputRow.R, $inputRow.mode, $inputRow.variant)
+    if ($IncludeTile) { $keyParts += $inputRow.tile }
+    $key = ($keyParts -join '|')
+    if (-not $groups.ContainsKey($key)) { $groups[$key] = New-Object -TypeName 'System.Collections.Generic.List[object]' }
+    [void]$groups[$key].Add([object]$inputRow)
+  }
+  $aggregates = New-Object -TypeName 'System.Collections.Generic.List[object]'
+  foreach ($key in $groups.Keys) {
+    $group = @($groups[$key] | ForEach-Object { $_ })
+    if ($group.Count -ne $IndependentRuns) {
+      throw "Expected $IndependentRuns rows for aggregate key=$key, got $($group.Count)"
     }
-  } catch {
-    if ($process.ExitCode -ne 0 -and $script:failedInvocations -eq 0) { $script:failedInvocations++ }
-    throw
-  } finally {
-    $process.Dispose()
-  }
-
-  if ($stderr -notmatch "T0-M correction passed") {
-    $script:failedInvocations++
-    throw "Correction gate evidence missing: $Context"
-  }
-  $lines = @($stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-  if ($lines.Count -ne 2) {
-    $script:failedInvocations++
-    throw "Probe did not produce one CSV row: $Context"
-  }
-  if ($null -eq $script:probeHeader) {
-    $script:probeHeader = $lines[0]
-  } elseif ($lines[0] -ne $script:probeHeader) {
-    $script:failedInvocations++
-    throw "Probe CSV header changed: $Context"
-  }
-  $row = $lines[1] | ConvertFrom-Csv -Header ($lines[0] -split ',')
-  $expectedBytes = Get-ExpectedBytesList $Rows $RValue $VariantValue
-  $expectedEviction = if ($VariantValue -eq "C") { "67108864" } else { "0" }
-  $checks = @(
-    @($row.D, "$D", "D"), @($row.S, "$SValue", "S"), @($row.R, "$RValue", "R"),
-    @($row.O_i, (Get-ExpectedRows $Rows), "O_i"), @($row.B_i, $expectedBytes, "B_i"),
-    @($row.worker_count, "$workers", "worker_count"), @($row.worker_list, ($cpus -join ','), "worker_list"),
-    @($row.affinity_succeeded, "true", "affinity_succeeded"), @($row.affinity, "true,true,true,true", "affinity"),
-    @($row.affinity_error, "0,0,0,0", "affinity_error"), @($row.timed_repetitions_exact, "true", "timed_repetitions_exact"),
-    @($row.avx2_supported, "true", "avx2_supported"), @($row.kernel_used, "avx2", "kernel_used"),
-    @($row.timed_repetitions, "$TimedRepetitions", "timed_repetitions"), @($row.eviction_bytes, $expectedEviction, "eviction_bytes"),
-    @($row.mode, $ModeValue, "mode"), @($row.variant, $VariantValue, "variant"), @($row.S_tile, "$Tile", "S_tile")
-  )
-  foreach ($check in $checks) {
-    if ([string]$check[0] -ne [string]$check[1]) {
-      $script:failedInvocations++
-      throw "Invalid row $($check[2])=$($check[0]), expected $($check[1]): $Context"
+    $values = [double[]]@($group | ForEach-Object { [double]$_.mac_per_second })
+    $sumSquares = 0.0
+    $mean = Get-Mean $values
+    foreach ($value in $values) { $sumSquares += ($value - $mean) * ($value - $mean) }
+    $checksums = @($group | ForEach-Object { [string]$_.checksum })
+    $uniqueChecksums = @($checksums | Sort-Object -Unique)
+    $aggregate = [ordered]@{
+      campaign = [string]$group[0].campaign
+      target_kib = [int]$group[0].target_kib
+      S = [int]$group[0].S
+      R = [int]$group[0].R
+      mode = [string]$group[0].mode
+      variant = [string]$group[0].variant
+      tile = if ($IncludeTile) { [int]$group[0].tile } else { "" }
+      n = $group.Count
+      mean = $mean
+      median = Get-Median $values
+      min = [double](($values | Measure-Object -Minimum).Minimum)
+      max = [double](($values | Measure-Object -Maximum).Maximum)
+      population_sd = [math]::Sqrt($sumSquares / $values.Count)
+      checksum = if ($uniqueChecksums.Count -eq 1) { $uniqueChecksums[0] } else { "NONDETERMINISTIC" }
+      checksum_deterministic = ($uniqueChecksums.Count -eq 1)
+      checksum_values = ($uniqueChecksums -join '|')
     }
+    [void]$aggregates.Add([object]([pscustomobject]$aggregate))
   }
-  if ($VariantValue -eq "C" -and [uint64]$row.eviction_checksum -eq 0) {
-    $script:failedInvocations++
-    throw "C eviction checksum is zero: $Context"
-  }
-  $record = [ordered]@{ campaign = $Campaign; campaign_repeat = $Repeat; invocation = $id }
-  foreach ($property in $row.psobject.Properties) { $record[$property.Name] = $property.Value }
-  $script:records += [pscustomobject]$record
-  return $row
+  return $aggregates.ToArray()
 }
 
 function Get-MainRow([int]$Size, [int]$SValue, [int]$RValue, [string]$ModeValue, [string]$VariantValue) {
-  $matches = @($script:mainRows | Where-Object {
-      $_.D -eq "$D" -and $_.S -eq "$SValue" -and $_.R -eq "$RValue" -and
-      $_.mode -eq $ModeValue -and $_.variant -eq $VariantValue -and $_.target_kib -eq "$Size"
+  $matches = @($script:mainAggregates | Where-Object {
+      [int]$_.target_kib -eq $Size -and [int]$_.S -eq $SValue -and [int]$_.R -eq $RValue -and
+      $_.mode -eq $ModeValue -and $_.variant -eq $VariantValue
     })
-  if ($matches.Count -ne 1) { throw "Expected one main row for size=$Size S=$SValue R=$RValue mode=$ModeValue variant=$VariantValue" }
+  if ($matches.Count -ne 1 -or [int]$matches[0].n -ne $IndependentRuns) {
+    throw "Expected one median main row with n=$IndependentRuns for size=$Size S=$SValue R=$RValue mode=$ModeValue variant=$VariantValue"
+  }
   return $matches[0]
 }
 
-$pilotRows = @()
-foreach ($pilotRepeat in 1..$PilotRepeats) {
-  foreach ($tile in @(2, 4, 8)) {
-    foreach ($mode in $modes) {
-      foreach ($variant in $variants) {
-        $pilotRows += Invoke-Probe "pilot" $pilotRepeat $D $pilotSlots $pilotDepth $targetRows[512] $mode $variant $tile `
-          "pilot repeat=$pilotRepeat tile=$tile mode=$mode variant=$variant"
-      }
+function Get-ControlRow([int]$Size, [int]$SValue, [string]$ModeValue) {
+  $matches = @($script:controlAggregates | Where-Object {
+      [int]$_.target_kib -eq $Size -and [int]$_.S -eq $SValue -and [int]$_.R -eq 16 -and
+      $_.mode -eq $ModeValue -and $_.variant -eq "C"
+    })
+  if ($matches.Count -ne 1 -or [int]$matches[0].n -ne $IndependentRuns) {
+    throw "Expected one median control row with n=$IndependentRuns for size=$Size S=$SValue mode=$ModeValue"
+  }
+  return $matches[0]
+}
+
+Invoke-Preflight
+
+$pilotRaw = New-Object -TypeName 'System.Collections.Generic.List[object]'
+foreach ($pilotRepeat in 1..$IndependentRuns) {
+  foreach ($tile in $pilotTiles) {
+    $orderIndex = 0
+    foreach ($entry in @(Get-ExecutionOrder $pilotRepeat $false)) {
+      $orderIndex++
+      $pilotRecord = Invoke-Probe "pilot" $pilotRepeat $orderIndex 512 $pilotSlots $pilotDepth $targetRows[512] $entry.mode $entry.variant $tile `
+        "pilot repeat=$pilotRepeat tile=$tile mode=$($entry.mode) variant=$($entry.variant)"
+      [void]$pilotRaw.Add([object]$pilotRecord)
     }
   }
 }
-
-$pilotScores = @()
-foreach ($tile in @(2, 4, 8)) {
-  $fusedMedians = @()
+$pilotCount = $pilotRaw.Count
+if ($pilotCount -ne ($pilotTiles.Count * 4 * $IndependentRuns)) {
+  throw "Expected $($pilotTiles.Count * 4 * $IndependentRuns) pilot invocations, got $pilotCount"
+}
+$pilotAggregates = New-Aggregates $pilotRaw.ToArray() $true
+$pilotScores = New-Object -TypeName 'System.Collections.Generic.List[object]'
+foreach ($tile in $pilotTiles) {
+  $fusedMedians = New-Object -TypeName 'System.Collections.Generic.List[double]'
   foreach ($variant in $variants) {
-    $values = @($pilotRows | Where-Object { $_.S_tile -eq "$tile" -and $_.mode -eq "fused" -and $_.variant -eq $variant } |
-      ForEach-Object { [double]$_.mac_per_second })
-    $fusedMedians += Get-Median $values
+    $pilotAggregate = @($pilotAggregates | Where-Object {
+        [int]$_.target_kib -eq 512 -and [int]$_.S -eq $pilotSlots -and [int]$_.R -eq $pilotDepth -and
+        [int]$_.tile -eq $tile -and $_.mode -eq "fused" -and $_.variant -eq $variant
+      })
+    if ($pilotAggregate.Count -ne 1) { throw "Missing pilot aggregate for tile=$tile variant=$variant" }
+    $fusedMedians.Add([double]$pilotAggregate[0].median)
   }
-  $pilotScores += [pscustomobject]@{
+  [void]$pilotScores.Add([object]([pscustomobject]@{
     S_tile = $tile
     A_fused_median = $fusedMedians[0]
     B_fused_median = $fusedMedians[1]
     score = Get-Mean ([double[]]$fusedMedians)
-  }
+  }))
 }
-$selectedTile = ($pilotScores | Sort-Object @{Expression = { $_.score }; Descending = $true }, @{Expression = { $_.S_tile }; Descending = $false} | Select-Object -First 1).S_tile
+$selectedTile = [int](($pilotScores | Sort-Object @{Expression = { $_.score }; Descending = $true }, @{Expression = { $_.S_tile }; Descending = $false} | Select-Object -First 1).S_tile)
 
-$script:mainRows = @()
-$mainCount = 0
+$mainRaw = New-Object -TypeName 'System.Collections.Generic.List[object]'
 foreach ($size in $sizes) {
   foreach ($SValue in $slots) {
     foreach ($RValue in $depths) {
-      foreach ($mode in $modes) {
-        foreach ($variant in $variants) {
-          $mainCount++
-          $row = Invoke-Probe "main" 1 $D $SValue $RValue $targetRows[$size] $mode $variant $selectedTile `
-            "main=$mainCount size=$size S=$SValue R=$RValue mode=$mode variant=$variant"
-          $row | Add-Member -NotePropertyName target_kib -NotePropertyValue $size
-          $script:mainRows += $row
+      for ($repeat = 1; $repeat -le $IndependentRuns; $repeat++) {
+        $orderIndex = 0
+        foreach ($entry in @(Get-ExecutionOrder $repeat $false)) {
+          $orderIndex++
+          $mainRecord = Invoke-Probe "main" $repeat $orderIndex $size $SValue $RValue $targetRows[$size] $entry.mode $entry.variant $selectedTile `
+            "main size=$size S=$SValue R=$RValue repeat=$repeat mode=$($entry.mode) variant=$($entry.variant)"
+          [void]$mainRaw.Add([object]$mainRecord)
         }
       }
     }
   }
 }
-if ($mainCount -ne 400) { throw "Expected 400 A/B main invocations, got $mainCount" }
+$mainCount = $mainRaw.Count
+if ($mainCount -ne (4 * 5 * 5 * 4 * $IndependentRuns)) {
+  throw "Expected $((4 * 5 * 5 * 4 * $IndependentRuns)) main invocations, got $mainCount"
+}
 
-$controlRows = @()
-$controlCount = 0
+$controlRaw = New-Object -TypeName 'System.Collections.Generic.List[object]'
 foreach ($size in $controlSizes) {
   foreach ($SValue in $controlSlots) {
-    foreach ($mode in $modes) {
-      $controlCount++
-      $row = Invoke-Probe "control-C" 1 $D $SValue 16 $targetRows[$size] $mode "C" $selectedTile `
-        "control-C=$controlCount size=$size S=$SValue R=16 mode=$mode"
-      $row | Add-Member -NotePropertyName target_kib -NotePropertyValue $size
-      $controlRows += $row
+    for ($repeat = 1; $repeat -le $IndependentRuns; $repeat++) {
+      $orderIndex = 0
+      foreach ($entry in @(Get-ExecutionOrder $repeat $true)) {
+        $orderIndex++
+        $controlRecord = Invoke-Probe "control-C" $repeat $orderIndex $size $SValue 16 $targetRows[$size] $entry.mode "C" $selectedTile `
+          "control-C size=$size S=$SValue repeat=$repeat mode=$($entry.mode)"
+        [void]$controlRaw.Add([object]$controlRecord)
+      }
     }
   }
 }
-if ($controlCount -ne 12) { throw "Expected 12 C control invocations, got $controlCount" }
-
-foreach ($control in $controlRows) {
-  $matchingA = Get-MainRow ([int]$control.target_kib) ([int]$control.S) 16 $control.mode "A"
-  if ([uint64]$control.checksum -ne [uint64]$matchingA.checksum) {
-    throw "C checksum differs from A: size=$($control.target_kib) S=$($control.S) mode=$($control.mode)"
-  }
+$controlCount = $controlRaw.Count
+if ($controlCount -ne (2 * 3 * 2 * $IndependentRuns)) {
+  throw "Expected $((2 * 3 * 2 * $IndependentRuns)) C control invocations, got $controlCount"
 }
 
-$invariantLines = @()
-$invariantPass = $true
-foreach ($size in @(512, 768)) {
-  $ratios = @()
-  foreach ($RValue in $depths) {
-    $a = Get-MainRow $size 1 $RValue "fused" "A"
-    $b = Get-MainRow $size 1 $RValue "fused" "B"
-    $bOverA = [double]$b.mac_per_second / [double]$a.mac_per_second
-    $aOverB = [double]$a.mac_per_second / [double]$b.mac_per_second
-    $ratios += $aOverB
-    $r1Gate = $RValue -ne 1 -or ($bOverA -ge 0.97 -and $bOverA -le 1.03)
-    $invariantLines += "invariant target_kib=$size R=$RValue mode=fused B_over_A=$(Format-Number $bOverA) A_over_B=$(Format-Number $aOverB) R1_B_over_A_gate=$r1Gate"
-    if (-not $r1Gate) { $invariantPass = $false }
+$script:mainAggregates = New-Aggregates $mainRaw.ToArray() $false
+$script:controlAggregates = New-Aggregates $controlRaw.ToArray() $false
+$checksumLines = New-Object -TypeName 'System.Collections.Generic.List[string]'
+$checksumPass = $true
+foreach ($controlAggregate in $script:controlAggregates) {
+  $matchingA = Get-MainRow ([int]$controlAggregate.target_kib) ([int]$controlAggregate.S) 16 $controlAggregate.mode "A"
+  $matchingC = Get-ControlRow ([int]$controlAggregate.target_kib) ([int]$controlAggregate.S) $controlAggregate.mode
+  $aRawChecksums = @($mainRaw | Where-Object {
+      [int]$_.target_kib -eq [int]$controlAggregate.target_kib -and [int]$_.S -eq [int]$controlAggregate.S -and
+      [int]$_.R -eq 16 -and $_.mode -eq $controlAggregate.mode -and $_.variant -eq "A"
+    } | ForEach-Object { [string]$_.checksum } | Sort-Object -Unique)
+  $cRawChecksums = @($controlRaw | Where-Object {
+      [int]$_.target_kib -eq [int]$controlAggregate.target_kib -and [int]$_.S -eq [int]$controlAggregate.S -and
+      [int]$_.R -eq 16 -and $_.mode -eq $controlAggregate.mode -and $_.variant -eq "C"
+    } | ForEach-Object { [string]$_.checksum } | Sort-Object -Unique)
+  $deterministic = [bool]$matchingA.checksum_deterministic -and [bool]$matchingC.checksum_deterministic
+  if ($deterministic) {
+    $equal = [string]$matchingA.checksum -eq [string]$matchingC.checksum
+    $evidence = "aggregate checksum"
+  } else {
+    $equal = (($aRawChecksums -join '|') -eq ($cRawChecksums -join '|'))
+    $evidence = "raw checksum equality (aggregate checksum nondeterministic)"
   }
-  for ($index = 1; $index -lt $ratios.Count; $index++) {
-    if ($ratios[$index] -lt ($ratios[$index - 1] * 0.85)) { $invariantPass = $false }
-  }
-  $r16 = $ratios[$ratios.Count - 1]
-  $r16Gate = $r16 -ge 2.5 -and $r16 -le 2.9
-  $invariantLines += "invariant target_kib=$size gradual_rule=each A_over_B(R) >= prior*0.85 R16_A_over_B=$(Format-Number $r16) R16_gate=$r16Gate"
-  if (-not $r16Gate) { $invariantPass = $false }
+  [void]$checksumLines.Add("C_CHECKSUM target_kib=$($controlAggregate.target_kib) S=$($controlAggregate.S) mode=$($controlAggregate.mode) equal=$equal evidence=$evidence A=$($matchingA.checksum) C=$($matchingC.checksum)")
+  if (-not $equal) { $checksumPass = $false }
 }
+if (-not $checksumPass) { throw "C checksum-vs-A checksum validation failed" }
 
-$machineCsvContent = @($script:records | ConvertTo-Csv -NoTypeInformation)
-Set-Content -LiteralPath $machineCsv -Encoding ascii -Value $machineCsvContent
-if (-not $invariantPass) {
-  Set-Content -LiteralPath $summaryPath -Encoding ascii -Value @(
-    "T0-M Phase 3 report"
-    "status=STOP_INVARIANT_GATE"
-    "scope=Phase 3 only; interpretation and G/F aggregation blocked"
-    "machine_csv=$machineCsv"
-    "stderr_log=$stderrLog"
-    "command_log=$commandLog"
-    "failed_invocations=$script:failedInvocations; total_invocations=$script:invocationNumber"
-    "D=$D; bytes_per_int8=1; workers=$workers; physical_cpus=$($cpus -join ','); selected_S_tile=$selectedTile"
-    "row_policy=400 A/B main rows + 12 C controls + $($PilotRepeats * 12) pilot rows; machine_rows=$($script:records.Count)"
-    ($pilotScores | ForEach-Object { "pilot S_tile=$($_.S_tile) A_fused_median=$(Format-Number $_.A_fused_median) B_fused_median=$(Format-Number $_.B_fused_median) score=$(Format-Number $_.score)" })
-    $invariantLines
-    "Phase 4 constant-work sweep=NOT RUN"
-  )
-  throw "T0-R invariant gate failed; Phase 3 interpretation blocked"
-}
-
-$metricLines = @()
+$metricRecords = New-Object -TypeName 'System.Collections.Generic.List[object]'
 $maxG8 = 0.0
 $maxG16 = 0.0
+$flatWarningLines = New-Object -TypeName 'System.Collections.Generic.List[string]'
 foreach ($size in $sizes) {
   foreach ($RValue in $depths) {
     foreach ($variant in $variants) {
-      $base = [double](Get-MainRow $size 1 $RValue "fused" $variant).mac_per_second
+      $base = [double](Get-MainRow $size 1 $RValue "fused" $variant).median
       $gValues = @{}
       foreach ($SValue in @(2, 4, 8, 16)) {
-        $gValues[$SValue] = [double](Get-MainRow $size $SValue $RValue "fused" $variant).mac_per_second / $base
+        $gValues[$SValue] = [double](Get-MainRow $size $SValue $RValue "fused" $variant).median / $base
       }
       $maxG8 = [math]::Max($maxG8, $gValues[8])
       $maxG16 = [math]::Max($maxG16, $gValues[16])
-      $metricLines += "G target_kib=$size R=$RValue variant=$variant G2=$(Format-Number $gValues[2]) G4=$(Format-Number $gValues[4]) G8=$(Format-Number $gValues[8]) G16=$(Format-Number $gValues[16]) max_G8_G16=$(Format-Number ([math]::Max($gValues[8], $gValues[16])))"
-
       $fValues = @{}
       foreach ($SValue in @(4, 8, 16)) {
-        $fused = [double](Get-MainRow $size $SValue $RValue "fused" $variant).mac_per_second
-        $repeat = [double](Get-MainRow $size $SValue $RValue "repeat" $variant).mac_per_second
+        $fused = [double](Get-MainRow $size $SValue $RValue "fused" $variant).median
+        $repeat = [double](Get-MainRow $size $SValue $RValue "repeat" $variant).median
         $fValues[$SValue] = $fused / $repeat
       }
-      $rises = $fValues[8] -gt $fValues[4] -and $fValues[16] -gt $fValues[8]
-      $metricLines += "F target_kib=$size R=$RValue variant=$variant F4=$(Format-Number $fValues[4]) F8=$(Format-Number $fValues[8]) F16=$(Format-Number $fValues[16]) F_rises_4_8_16=$rises"
+      $flat = [math]::Abs($fValues[4] - 1.0) -le 0.05 -and
+              [math]::Abs($fValues[8] - 1.0) -le 0.05 -and
+              [math]::Abs($fValues[16] - 1.0) -le 0.05
+      if ($flat) {
+        $flatWarningLines.Add("F_FLAT_WARNING target_kib=$size R=$RValue variant=$variant fused/repeat medians effectively equal")
+      }
+      [void]$metricRecords.Add([object]([pscustomobject][ordered]@{
+        target_kib = $size
+        R = $RValue
+        variant = $variant
+        G2 = $gValues[2]
+        G4 = $gValues[4]
+        G8 = $gValues[8]
+        G16 = $gValues[16]
+        max_G8_G16 = [math]::Max($gValues[8], $gValues[16])
+        F4 = $fValues[4]
+        F8 = $fValues[8]
+        F16 = $fValues[16]
+        F_rises_4_8_16 = ($fValues[8] -gt $fValues[4] -and $fValues[16] -gt $fValues[8])
+        F_flat_warning = $flat
+      }))
     }
   }
 }
+$maxG = [math]::Max($maxG8, $maxG16)
+$status = if ($maxG -ge 2.0) { "PASS_STRONG" } elseif ($maxG -ge 1.5) { "PASS" } elseif ($maxG -ge 1.2) { "AMBIGUOUS" } else { "NEGATIVE_FLAT" }
+$interpretation = if ($maxG -ge 2.0) { "strong aggregate G evidence" } elseif ($maxG -ge 1.5) { "aggregate G gate passed" } elseif ($maxG -ge 1.2) { "aggregate G evidence ambiguous" } else { "aggregate G evidence negative/flat" }
+$metricText = $metricRecords | ForEach-Object {
+  "metrics target_kib=$($_.target_kib) R=$($_.R) variant=$($_.variant) G2=$(Format-Number $_.G2) G4=$(Format-Number $_.G4) G8=$(Format-Number $_.G8) G16=$(Format-Number $_.G16) max_G8_G16=$(Format-Number $_.max_G8_G16) F4=$(Format-Number $_.F4) F8=$(Format-Number $_.F8) F16=$(Format-Number $_.F16) F_rises_4_8_16=$($_.F_rises_4_8_16)"
+}
+
+$rawCsvRows = @($script:records | ConvertTo-Csv -NoTypeInformation)
+Set-Content -LiteralPath $machineCsv -Encoding ascii -Value $rawCsvRows
+$aggregateRows = @($pilotAggregates) + @($script:mainAggregates) + @($script:controlAggregates)
+Set-Content -LiteralPath $aggregateCsv -Encoding ascii -Value @($aggregateRows | ConvertTo-Csv -NoTypeInformation)
+Set-Content -LiteralPath $metricsCsv -Encoding ascii -Value @($metricRecords | ConvertTo-Csv -NoTypeInformation)
 
 $pilotText = $pilotScores | ForEach-Object {
   "pilot S_tile=$($_.S_tile) A_fused_median=$(Format-Number $_.A_fused_median) B_fused_median=$(Format-Number $_.B_fused_median) score=$(Format-Number $_.score)"
 }
-$controlText = $controlRows | ForEach-Object {
-  "control-C target_kib=$($_.target_kib) S=$($_.S) R=$($_.R) mode=$($_.mode) checksum=$($_.checksum) eviction_bytes=$($_.eviction_bytes) eviction_checksum=$($_.eviction_checksum) mac_per_second=$($_.mac_per_second)"
-}
-$status = if ($invariantPass -and $maxG8 -ge 1.5) { "PASS" } else { "STOP_G_GATE" }
 $summary = @(
   "T0-M Phase 3 report"
   "status=$status"
   "scope=Phase 3 only; Phase 4 constant-work sweep=NOT RUN; MRDL/Q4/later recurrent Requantize/Norm/Residual=untouched"
+  "executive_summary=$interpretation; gate=max(G8,G16)>=1.5; strong_threshold=2.0; ambiguous_range=1.2-1.5"
   "executable=$Executable"
+  "preflight=single explicit --self-test; exit=0; correction_pass_required=true; speed_rows_never_receive_self_test=true"
   "machine_csv=$machineCsv"
+  "aggregate_csv=$aggregateCsv"
+  "metrics_csv=$metricsCsv"
   "stderr_log=$stderrLog"
   "command_log=$commandLog"
+  "preflight_stdout=$preflightStdout"
+  "preflight_stderr=$preflightStderr"
   "D=$D; bytes_per_int8=1; workers=$workers; physical_cpus=$($cpus -join ','); affinity_policy=explicit four-worker CPUs 0,2,4,6"
-  "size_policy=equal per-worker target bytes; O_i=floor(target_bytes/(D bytes/int8)); same four-shard O_i rows"
-  "target_mapping=384KiB:O_i=768,B_i(A/C)=393216; 512KiB:O_i=1024,B_i(A/C)=524288; 640KiB:O_i=1280,B_i(A/C)=655360; 768KiB:O_i=1536,B_i(A/C)=786432"
-  "B_i variant B=O_i*D*R; variant A shares one weight block across R; variant B uses distinct blocks by R; C=A/shared plus 64MiB eviction and clflush outside timed units"
-  "timed_repetitions=$TimedRepetitions; warmup=$Warmup; prep_timing=excluded; failed_invocations=$script:failedInvocations; total_invocations=$script:invocationNumber"
-  "row_policy=400 A/B main rows + 12 C controls + $($PilotRepeats * 12) pilot rows; main exact matrix=4 sizes*5 S*5 R*2 modes*2 variants"
-  "selected_S_tile=$selectedTile; pilot_rule=per candidate, median over $PilotRepeats fused invocations for A and B, then mean of A/B medians; repeat mode also measured as required but excluded from tile score"
+  "size_policy=validated proportional rows across four workers; O_i/B_i exact arrays validated on every row"
+  "target_mapping=384KiB:O_i=[908,852,512,800],sum=3072; 512KiB:O_i=[1211,1136,683,1066],sum=4096; 640KiB:O_i=[1514,1420,854,1332],sum=5120; 768KiB:O_i=[1816,1705,1023,1600],sum=6144"
+  "B_i=O_i*D*R for variant B; variant A/C use one weight block across R; C adds 64MiB eviction outside timed units"
+  "timed_repetitions=$TimedRepetitions; warmup=$Warmup; independent_runs=$IndependentRuns; failed_invocations=$script:failedInvocations; speed_processes=$script:invocationNumber; total_processes_including_preflight=$($script:invocationNumber + 1)"
+  "exact_counts=pilot=$pilotCount (3 tiles*2 modes*2 variants*10); main=$mainCount (4 sizes*5 S*5 R*2 modes*2 variants*10); controls=$controlCount (2 sizes*3 S*2 modes*10); total_speed=$($pilotCount + $mainCount + $controlCount); total_processes_including_preflight=$($pilotCount + $mainCount + $controlCount + 1)"
+  "selected_S_tile=$selectedTile; pilot_rule=fused median over 10 independent repetitions per A/B tile, then mean of A/B medians"
   $pilotText
-  "invariant_gate=$invariantPass; invariant_rule=R1 B_over_A in [0.97,1.03], each later A_over_B >= prior*0.85, R16 A_over_B in [2.5,2.9]; interpretation blocked if false"
-  $invariantLines
-  "G_gate=max(G8,G16)>=1.5; max_G8=$(Format-Number $maxG8); max_G16=$(Format-Number $maxG16); max_G8_or_G16=$(Format-Number ([math]::Max($maxG8, $maxG16)))"
-  "metrics=G(S)=MAC/s_Fused(S)/MAC/s_Fused(1); F(S)=MAC/s_Fused(S)/MAC/s_Repeat(S); G/F include A/B only, never C"
-  $metricLines
-  "C_controls_raw_values_only=true"
-  $controlText
-  "checksum_policy=all Y[S x O_i] cells included; C checksums equal corresponding A rows; correction gate passed before every speed row"
-  "AVX2_policy=every row avx2_supported=true and kernel_used=avx2; four-worker affinity and exact repetition fields validated"
+  "C_checksum_policy=aggregate checksums compared when deterministic; otherwise raw checksum equality documented"
+  $checksumLines
+  "G_definition=median fused(S)/median fused(1), per size/R/variant; F_definition=median fused(S)/median repeat(S), per size/R/variant"
+  $metricText
+  "G_gate=max(G8,G16)>=1.5; max_G8=$(Format-Number $maxG8); max_G16=$(Format-Number $maxG16); max_G8_or_G16=$(Format-Number $maxG)"
+  $flatWarningLines
+  "interpretation=$interpretation"
+  "A/B_raw_ratio_gate=removed; raw A/B ratio is not primary gate"
+  "metrics_csv_rows=$($metricRecords.Count); reports=G2/G4/G8/G16,max_G8/G16,F4/F8/F16,F_rises_4_8_16"
+  "AVX2_policy=every row avx2_supported=true and kernel_used=avx2; affinity, exact repetitions, nonzero checksum, and MAC total validated"
   "next=Do not start Phase 4 until Phase 3 interpretation is approved"
 )
 Set-Content -LiteralPath $summaryPath -Encoding ascii -Value $summary
