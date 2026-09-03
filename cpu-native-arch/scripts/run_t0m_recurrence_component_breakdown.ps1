@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Executable = "",
+  [string]$CalibrationExecutable = "",
   [string]$OutputDirectory = "",
   [string]$CTestExecutable = "",
   [string]$DumpbinExecutable = "",
@@ -14,8 +15,10 @@ $ErrorActionPreference = "Stop"
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = [Globalization.CultureInfo]::InvariantCulture
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Executable)) { $Executable = Join-Path $projectRoot "build\t0m_recurrence_probe.exe" }
-if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot "sweep-output\t0m-recurrence-component-breakdown" }
+if ([string]::IsNullOrWhiteSpace($CalibrationExecutable)) { $CalibrationExecutable = Join-Path $projectRoot "build\int8_probe.exe" }
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot "sweep-output\t0m-recurrence-component-breakdown-d1472" }
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
+if (-not (Test-Path -LiteralPath $CalibrationExecutable -PathType Leaf)) { throw "Calibration executable not found: $CalibrationExecutable" }
 if ($TimedRepetitions -ne 8 -or $Warmup -ne 2 -or $IndependentRuns -ne 10) {
   throw "Approved breakdown requires --timed-repetitions 8, --warmup 2, and 10 independent runs"
 }
@@ -25,14 +28,13 @@ if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) { $null 
 $logsDirectory = Join-Path $OutputDirectory "logs"
 if (-not (Test-Path -LiteralPath $logsDirectory -PathType Container)) { $null = New-Item -ItemType Directory -Path $logsDirectory }
 
-$D = 512
+$D = 1472
 $SValues = @(1, 4, 8, 16)
 $components = @("full", "gemv-only", "transition-only")
 $cpus = @(0, 2, 4, 6)
 $workers = 4
-$rows = @(128, 128, 128, 128)
-$rowText = $rows -join ','
 $cpuText = $cpus -join ','
+$calibrationPath = Join-Path $OutputDirectory "calibration.csv"
 $machinePath = Join-Path $OutputDirectory "machine.csv"
 $aggregatePath = Join-Path $OutputDirectory "aggregate.csv"
 $commandsPath = Join-Path $OutputDirectory "commands.log"
@@ -53,10 +55,11 @@ Set-Content -LiteralPath $commandsPath -Encoding ascii -Value @(
   "T0-M recurrence component breakdown exact commands"
   "executable=$Executable"
   "preflight: CTest recurrence correction, one explicit --self-test, then dumpbin evidence"
-  "measurement: D=512; workers=4; cpus=0,2,4,6; rows-per-worker=128,128,128,128; S=1,4,8,16; R=1"
+  "measurement: D=1472; workers=4; cpus=0,2,4,6; rows-per-worker=calibrated proportional plan; S=1,4,8,16; R=1"
   "components=full,gemv-only,transition-only; mode=fused; timed-repetitions=8; warmup=2; independent-runs=10"
   "semantics=full actual GEMV+transition; gemv-only worker/barrier GEMV with frozen state and no transition; transition-only main-thread apply_transition with deterministic synthetic output and worker/barrier no-op"
   "order=odd runs reverse component order; even runs forward component order; no concurrency; speed invocations never receive --self-test"
+  "calibration=original T0-R mechanism: int8_probe --cpu CPU --m 64 --K 64 --depth 64 --iterations 4 --repetitions 20 --warmup 5 --kernel avx2; total recurrence rows=1472; largest-remainder proportional allocation"
 )
 Set-Content -LiteralPath $stderrPath -Encoding ascii -Value @(
   "T0-M recurrence component breakdown stderr log"
@@ -124,6 +127,17 @@ function Get-PopulationSd([double[]]$Values) {
   foreach ($value in $Values) { $sum += ($value - $mean) * ($value - $mean) }
   return [math]::Sqrt($sum / $Values.Count)
 }
+function Get-ProportionalRows($Calibration, [int]$TotalRows) {
+  $throughputTotal = ($Calibration | Measure-Object -Property mac_per_second -Sum).Sum
+  if ($throughputTotal -le 0) { throw "Calibration throughput must be positive" }
+  $shares = @($Calibration | ForEach-Object {
+      $exact = $TotalRows * $_.mac_per_second / $throughputTotal
+      [pscustomobject]@{ cpu = $_.logical_cpu_index; rows = [math]::Floor($exact); fraction = $exact - [math]::Floor($exact) }
+    })
+  $remaining = $TotalRows - (($shares | Measure-Object -Property rows -Sum).Sum)
+  foreach ($share in ($shares | Sort-Object fraction -Descending | Select-Object -First $remaining)) { $share.rows++ }
+  return @($shares | Sort-Object cpu | ForEach-Object { [int]$_.rows })
+}
 
 if ([string]::IsNullOrWhiteSpace($CTestExecutable)) {
   $ctestCommand = Get-Command ctest.exe -ErrorAction SilentlyContinue
@@ -166,6 +180,27 @@ Set-Content -LiteralPath $preflightStderrPath -Encoding ascii -Value (Limit-Text
 if ($preflight.Result.ExitCode -ne 0 -or (($preflight.Result.Stdout + "`n" + $preflight.Result.Stderr) -notmatch "(?i)T0-M recurrence correction passed")) {
   throw "Explicit recurrence self-test preflight failed or did not report correction pass"
 }
+
+$calibration = @()
+foreach ($cpu in $cpus) {
+  $calibrationArgs = @("--cpu", "$cpu", "--m", 64, "--K", 64, "--depth", 64,
+    "--iterations", 4, "--repetitions", 20, "--warmup", 5, "--kernel", "avx2")
+  Add-Content -LiteralPath $commandsPath -Encoding ascii -Value ("calibration cpu=$cpu `"$CalibrationExecutable`" " + ($calibrationArgs -join ' '))
+  $calibrationResult = Invoke-CapturedProcess $CalibrationExecutable $calibrationArgs
+  if ($calibrationResult.ExitCode -ne 0) { throw "Calibration failed for CPU $cpu" }
+  $calibrationLines = @($calibrationResult.Stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($calibrationLines.Count -ne 2) { throw "Calibration did not produce one CSV row for CPU $cpu" }
+  $calibrationRow = $calibrationLines[1] | ConvertFrom-Csv -Header ($calibrationLines[0] -split ',')
+  if ([string]$calibrationRow.affinity_succeeded -ne "true") { throw "Calibration affinity failed for CPU $cpu" }
+  $calibration += [pscustomobject]@{ logical_cpu_index = $cpu; mac_per_second = [double]$calibrationRow.mac_per_second; elapsed_seconds = [double]$calibrationRow.elapsed_seconds; affinity_succeeded = [string]$calibrationRow.affinity_succeeded }
+}
+$rows = Get-ProportionalRows $calibration $D
+$rowText = $rows -join ','
+Set-Content -LiteralPath $calibrationPath -Encoding ascii -Value "logical_cpu_index,mac_per_second,elapsed_seconds,affinity_succeeded"
+foreach ($calibrationRow in $calibration) {
+  Add-Content -LiteralPath $calibrationPath -Encoding ascii -Value "$($calibrationRow.logical_cpu_index),$($calibrationRow.mac_per_second),$($calibrationRow.elapsed_seconds),$($calibrationRow.affinity_succeeded)"
+}
+Add-Content -LiteralPath $commandsPath -Encoding ascii -Value "calibrated_rows D=1472 cpus=$cpuText rows_per_worker=$rowText"
 
 $dumpbinArgs = @("/DISASM", $Executable)
 Add-Content -LiteralPath $commandsPath -Encoding ascii -Value ("dumpbin_command `"$DumpbinExecutable`" " + ($dumpbinArgs -join ' '))
@@ -353,10 +388,11 @@ $validation = @(
   "raw_rows=$($script:records.Count); expected_raw_rows=120"
   "aggregate_rows=$($aggregates.Count); expected_aggregate_rows=12"
   "cells=4; components_per_cell=3; runs_per_component=10; speed_processes=120"
-  "configuration=D=512; R=1; workers=4; cpus=0,2,4,6; rows_per_worker=128,128,128,128; timed_repetitions=8; warmup=2"
+  "configuration=D=1472; R=1; workers=4; cpus=0,2,4,6; rows_per_worker=calibrated proportional plan; timed_repetitions=8; warmup=2"
   "checksum_determinism=PASS for every S,component cell; nonzero checksum=PASS"
   "all_rounds_valid=PASS; per_round_finite=true; per_round_overflow=false"
   "affinity=PASS for every raw row; affinity=1,1,1,1; affinity_errors=0,0,0,0"
+  "calibration=PASS; original T0-R per-core calibration on CPUs 0,2,4,6; proportional rows=$rowText; D=1472"
   "repetition_validation=PASS; timed_repetitions_exact=true"
   "speed_stderr_correction_autotest_text=PASS absent"
   "component_invariants=full state checksum after actual GEMV+transition; gemv-only output checksum with frozen state; transition-only state checksum after deterministic synthetic output"
@@ -365,8 +401,9 @@ $validation = @(
 Set-Content -LiteralPath $validationPath -Encoding ascii -Value $validation
 $summary = @(
   "status=PASS"
-  "executive_summary=At D=512,R=1, $bottleneckName dominates isolated timing; maximum transition-over-GEMV median ratio occurs at S=$($maxBottleneck.S) and is $($maxBottleneck.transition_over_gemv.ToString('R',[Globalization.CultureInfo]::InvariantCulture))x. Full is actual GEMV+transition recurrence, not arithmetic sum claim."
-  "configuration=D=$D; R=1 fixed for isolated per-step cost; workers=$workers; cpus=$cpuText; rows_per_worker=$rowText"
+  "executive_summary=At D=1472,R=1, $bottleneckName dominates isolated timing; maximum transition-over-GEMV median ratio occurs at S=$($maxBottleneck.S) and is $($maxBottleneck.transition_over_gemv.ToString('R',[Globalization.CultureInfo]::InvariantCulture))x. Full is actual GEMV+transition recurrence, not arithmetic sum claim."
+  "configuration=D=1472; R=1 fixed for isolated per-step cost; workers=$workers; cpus=$cpuText; rows_per_worker=$rowText"
+  "calibration_path=$calibrationPath; calibration_executable=$CalibrationExecutable; rows are largest-remainder shares of measured mac_per_second"
   "components=full,gemv-only,transition-only; mode=fused; S=$($SValues -join ','); timed_repetitions=$TimedRepetitions; warmup=$Warmup; independent_runs=$IndependentRuns"
   "semantics=full actual worker/barrier GEMV plus main-thread apply_transition; gemv-only same worker/barrier GEMV stage with frozen state and no transition; transition-only same main-thread barrier protocol with deterministic synthetic output/state and no GEMV"
   "counts=raw_rows=120; aggregate_rows=12; speed_processes=120; preflight_ctest=1; preflight_self_test=1"
@@ -375,7 +412,7 @@ $summary = @(
   "measurements=each aggregate row below reports exact median elapsed seconds, elapsed seconds per timed step, QPC ticks per step, TSC cycles per step"
   @($aggregates | ForEach-Object { "measurement,S=$($_.S),component=$($_.component),elapsed_seconds_median=$($_.elapsed_seconds_median.ToString('R',[Globalization.CultureInfo]::InvariantCulture)),elapsed_per_timed_step_median=$($_.elapsed_per_timed_step_median.ToString('R',[Globalization.CultureInfo]::InvariantCulture)),qpc_ticks_per_timed_step_median=$($_.qpc_ticks_per_timed_step_median.ToString('R',[Globalization.CultureInfo]::InvariantCulture)),tsc_cycles_per_timed_step_median=$($_.tsc_cycles_per_timed_step_median.ToString('R',[Globalization.CultureInfo]::InvariantCulture)),mac_total=$($_.mac_total),checksum=$($_.checksum)" })
   "dumpbin_evidence=$dumpbinPath; exact command, linker map ranges, and named transition instruction matches saved"
-  "artifacts=machine.csv,aggregate.csv,commands.log,stderr.log,preflight.ctest.stdout,preflight.ctest.stderr,preflight.self-test.stdout,preflight.self-test.stderr,dumpbin-evidence.txt,logs/,summary.txt,validation.txt"
+  "artifacts=calibration.csv,machine.csv,aggregate.csv,commands.log,stderr.log,preflight.ctest.stdout,preflight.ctest.stderr,preflight.self-test.stdout,preflight.self-test.stderr,dumpbin-evidence.txt,logs/,summary.txt,validation.txt"
   "validation=PASS; see validation.txt"
 )
 Set-Content -LiteralPath $summaryPath -Encoding ascii -Value $summary

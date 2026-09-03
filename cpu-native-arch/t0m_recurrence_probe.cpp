@@ -435,42 +435,55 @@ void run_reference_gemv(const Workload& workload, const std::vector<std::int8_t>
   }
 }
 
-template <std::size_t S>
-void run_fused_impl(const Shard& shard, const std::vector<std::int8_t>& weights,
-                   std::uint32_t dimension,
-                   const std::vector<std::int8_t>& state,
-                   std::vector<std::int64_t>& output, bool& overflow) {
-  static_assert(S == 1 || S == 2 || S == 4 || S == 8 || S == 16);
+template <std::size_t S_TILE>
+void run_fused_tile(const Shard& shard, const std::vector<std::int8_t>& weights,
+                    std::uint32_t dimension,
+                    const std::vector<std::int8_t>& state,
+                    std::vector<std::int64_t>& output,
+                    std::size_t slot_base) {
+  static_assert(S_TILE == 1 || S_TILE == 2 || S_TILE == 4 || S_TILE == 8);
   for (std::uint32_t row = 0; row < shard.rows; ++row) {
-    std::array<std::int64_t, S> sums{};
+    __m256i accumulators[S_TILE]{};
+    std::int64_t scalar_tail[S_TILE]{};
     const std::size_t row_start = static_cast<std::size_t>(row) * dimension;
     std::uint32_t dimension_base = 0;
     for (; dimension_base + kWeightTile <= dimension; dimension_base += kWeightTile) {
       const __m256i weight16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
           reinterpret_cast<const __m128i*>(weights.data() + row_start + dimension_base)));
-      for (std::size_t slot = 0; slot < S; ++slot) {
-        const std::size_t state_start = static_cast<std::size_t>(slot) * dimension + dimension_base;
+      for (std::size_t slot = 0; slot < S_TILE; ++slot) {
+        const std::size_t state_start = (slot_base + slot) * dimension + dimension_base;
         const __m256i state16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(
             reinterpret_cast<const __m128i*>(state.data() + state_start)));
-        const std::int64_t chunk = horizontal_sum_i32(_mm256_madd_epi16(weight16, state16));
-        if (!checked_add_i64(sums[slot], chunk, sums[slot])) overflow = true;
+        accumulators[slot] = _mm256_add_epi32(
+            accumulators[slot], _mm256_madd_epi16(weight16, state16));
       }
     }
     for (; dimension_base < dimension; ++dimension_base) {
       const std::int64_t weight = weights[row_start + dimension_base];
-      for (std::size_t slot = 0; slot < S; ++slot) {
-        std::int64_t product = 0;
-        if (!checked_mul_i64(weight,
-                             static_cast<std::int64_t>(state[static_cast<std::size_t>(slot) * dimension + dimension_base]),
-                             product) ||
-            !checked_add_i64(sums[slot], product, sums[slot])) {
-          overflow = true;
-        }
+      for (std::size_t slot = 0; slot < S_TILE; ++slot) {
+        scalar_tail[slot] += weight * static_cast<std::int64_t>(
+            state[(slot_base + slot) * dimension + dimension_base]);
       }
     }
-    for (std::size_t slot = 0; slot < S; ++slot) {
-      output[slot * dimension + shard.row_offset + row] = sums[slot];
+    for (std::size_t slot = 0; slot < S_TILE; ++slot) {
+      output[(slot_base + slot) * dimension + shard.row_offset + row] =
+          static_cast<std::int64_t>(horizontal_sum_i32(accumulators[slot])) + scalar_tail[slot];
     }
+  }
+}
+
+template <std::size_t S>
+void run_fused_impl(const Shard& shard, const std::vector<std::int8_t>& weights,
+                    std::uint32_t dimension,
+                    const std::vector<std::int8_t>& state,
+                    std::vector<std::int64_t>& output, bool& overflow) {
+  static_assert(S == 1 || S == 2 || S == 4 || S == 8 || S == 16);
+  (void)overflow;
+  if constexpr (S == 16) {
+    run_fused_tile<8>(shard, weights, dimension, state, output, 0);
+    run_fused_tile<8>(shard, weights, dimension, state, output, 8);
+  } else {
+    run_fused_tile<S>(shard, weights, dimension, state, output, 0);
   }
 }
 
@@ -1007,10 +1020,13 @@ void run_self_test(const QpcClock&) {
     require(a_blocks.size() == 1 && bclone_blocks.size() == 16,
             "Bclone allocation count is not 16");
     for (std::size_t round = 0; round < bclone_blocks.size(); ++round) {
-      require(&bclone_blocks[round] != &bclone_blocks[0] || round == 0,
-              "Bclone weight allocation address is not distinct");
-      require(bclone_blocks[round] == a_blocks[0],
+      const auto& weights = bclone_blocks[round];
+      require(std::equal(weights.begin(), weights.end(), a_blocks[0].begin(), a_blocks[0].end()),
               "Bclone weight bytes differ from A");
+      for (std::size_t other_round = round + 1; other_round < bclone_blocks.size(); ++other_round) {
+        require(weights.data() != bclone_blocks[other_round].data(),
+                "Bclone weight allocation address is not distinct");
+      }
     }
   }
   const GemvOnlySnapshot a_gemv = run_gemv_only_snapshot(a_workload, Mode::fused);
@@ -1135,17 +1151,11 @@ TimedResult run_timed(const Workload& workload, Mode mode, Component component,
   std::uint64_t tsc_cycles = 0;
   for (std::uint32_t repetition = 0; repetition < warmup + timed_repetitions; ++repetition) {
     state = workload.initial_state;
+    std::vector<std::uint8_t> this_round_finite(workload.recurrent_depth, 0);
+    std::vector<std::uint8_t> this_round_overflow(workload.recurrent_depth, 0);
     const bool timed = repetition >= warmup;
     const LARGE_INTEGER begin = timed ? clock.now() : LARGE_INTEGER{};
     const unsigned __int64 tsc_begin = timed ? __rdtsc() : 0;
-    std::vector<std::uint8_t> this_round_finite;
-    std::vector<std::uint8_t> this_round_overflow;
-    std::vector<std::uint64_t> this_round_clipped_cells;
-    if (timed) {
-      this_round_finite.reserve(workload.recurrent_depth);
-      this_round_overflow.reserve(workload.recurrent_depth);
-      this_round_clipped_cells.reserve(workload.recurrent_depth);
-    }
     for (std::uint32_t round = 0; round < workload.recurrent_depth; ++round) {
       depth_start.arrive_and_wait();
       depth_done.arrive_and_wait();
@@ -1161,10 +1171,8 @@ TimedResult run_timed(const Workload& workload, Mode mode, Component component,
                              : stats.finite && !stats.overflow && kernel_valid;
       all_valid = all_valid && valid;
       if (timed) {
-        clipped_cells += stats.clipped_cells;
-        this_round_finite.push_back((component == Component::gemv_only || stats.finite) ? 1U : 0U);
-        this_round_overflow.push_back(valid ? 0U : 1U);
-        this_round_clipped_cells.push_back(stats.clipped_cells);
+        this_round_finite[round] = (component == Component::gemv_only || stats.finite) ? 1U : 0U;
+        this_round_overflow[round] = valid ? 0U : 1U;
       }
     }
     repetition_done.arrive_and_wait();
@@ -1175,7 +1183,6 @@ TimedResult run_timed(const Workload& workload, Mode mode, Component component,
       tsc_cycles += static_cast<std::uint64_t>(__rdtsc() - tsc_begin);
       result.round_finite = std::move(this_round_finite);
       result.round_overflow = std::move(this_round_overflow);
-      result.round_clipped_cells = std::move(this_round_clipped_cells);
     }
   }
   for (auto& worker : workers) worker.join();
@@ -1188,6 +1195,7 @@ TimedResult run_timed(const Workload& workload, Mode mode, Component component,
     result.round_clipped_cells.assign(workload.recurrent_depth, 0);
     all_valid = all_valid && snapshot.all_rounds_valid;
     result.final_checksum = snapshot.round_checksums.empty() ? 0 : snapshot.round_checksums.back();
+    clipped_cells = 0;
   } else {
     const SequenceResult snapshot = component == Component::transition_only
                                         ? run_transition_only_snapshot(workload)
@@ -1199,6 +1207,7 @@ TimedResult run_timed(const Workload& workload, Mode mode, Component component,
     result.round_clipped_cells = snapshot.round_clipped_cells;
     all_valid = all_valid && snapshot.all_rounds_valid;
     result.final_checksum = snapshot.round_checksums.empty() ? 0 : snapshot.round_checksums.back();
+    clipped_cells = snapshot.clipped_cells * timed_repetitions;
   }
   result.elapsed_seconds = elapsed_seconds;
   const double timed_steps = static_cast<double>(timed_repetitions) * workload.recurrent_depth;

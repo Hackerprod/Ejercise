@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Executable = "",
+  [string]$CalibrationExecutable = "",
   [string]$OutputDirectory = "",
   [string]$CTestExecutable = "",
   [int]$TimedRepetitions = 8,
@@ -13,8 +14,10 @@ $ErrorActionPreference = "Stop"
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = [Globalization.CultureInfo]::InvariantCulture
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Executable)) { $Executable = Join-Path $projectRoot "build\t0m_recurrence_probe.exe" }
-if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot "sweep-output\t0m-recurrence-residency-ab-d512-r16" }
+if ([string]::IsNullOrWhiteSpace($CalibrationExecutable)) { $CalibrationExecutable = Join-Path $projectRoot "build\int8_probe.exe" }
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot "sweep-output\t0m-recurrence-residency-ab-d1472-r16" }
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
+if (-not (Test-Path -LiteralPath $CalibrationExecutable -PathType Leaf)) { throw "Calibration executable not found: $CalibrationExecutable" }
 if ($TimedRepetitions -ne 8 -or $Warmup -ne 2 -or $IndependentRuns -ne 10) {
   throw "Campaign requires --timed-repetitions 8, --warmup 2, and 10 independent runs"
 }
@@ -22,9 +25,10 @@ $summaryPath = Join-Path $OutputDirectory "summary.txt"
 if (Test-Path -LiteralPath $summaryPath -PathType Leaf) { throw "Refusing rerun: summary exists at $summaryPath" }
 if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) { $null = New-Item -ItemType Directory -Path $OutputDirectory }
 
-$D = 512; $S = 1; $R = 16; $workers = 4
-$cpus = @(0, 2, 4, 6); $rows = @(128, 128, 128, 128)
-$cpuText = $cpus -join ','; $rowText = $rows -join ','
+$D = 1472; $S = 1; $R = 16; $workers = 4
+$cpus = @(0, 2, 4, 6)
+$cpuText = $cpus -join ','
+$calibrationPath = Join-Path $OutputDirectory "calibration.csv"
 $machinePath = Join-Path $OutputDirectory "machine.csv"
 $aggregatePath = Join-Path $OutputDirectory "aggregate.csv"
 $comparisonPath = Join-Path $OutputDirectory "comparison.csv"
@@ -41,13 +45,14 @@ $nativeHeader = "D,S,R,variant,rows_per_worker,component,mode,kernel,elapsed_sec
 
 Set-Content -LiteralPath $commandsPath -Encoding ascii -Value @(
   "T0-M recurrence residency control A/B"
-  "scope=D=512; S=1; R=16; mode=fused only; variants=A(shared),B(per-round)"
-  "workers=4; cpus=0,2,4,6; rows_per_worker=128,128,128,128"
+  "scope=D=1472; S=1; R=16; mode=fused only; variants=A(shared),B(per-round)"
+  "workers=4; cpus=0,2,4,6; rows_per_worker=calibrated proportional plan"
   "timed_repetitions=8; warmup=2; independent_runs=10; no concurrency"
   "order=even run A then B; odd run B then A; pair-adjacent"
   "B seed=0xC001CAFE ^ 0x9E3779B9*(shard_index+1) ^ 0x85EBCA6B*(round+1); xorshift32; value=(next%255)-127"
   "A seed=0xC001CAFE ^ 0x9E3779B9*(shard_index+1); same xorshift32/value mapping; block shared across rounds"
   "preflight=one CTest correction plus one explicit --self-test; speed invocations never receive --self-test"
+  "calibration=original T0-R mechanism: int8_probe --cpu CPU --m 64 --K 64 --depth 64 --iterations 4 --repetitions 20 --warmup 5 --kernel avx2; total recurrence rows=1472; largest-remainder proportional allocation"
 )
 Set-Content -LiteralPath $stderrPath -Encoding ascii -Value @(
   "T0-M recurrence residency control stderr log"
@@ -99,6 +104,17 @@ function Get-PopulationSd([double[]]$Values) {
   $mean = [double](($Values | Measure-Object -Average).Average); $sum = 0.0
   foreach ($value in $Values) { $sum += ($value - $mean) * ($value - $mean) }
   return [math]::Sqrt($sum / $Values.Count)
+}
+function Get-ProportionalRows($Calibration, [int]$TotalRows) {
+  $throughputTotal = ($Calibration | Measure-Object -Property mac_per_second -Sum).Sum
+  if ($throughputTotal -le 0) { throw "Calibration throughput must be positive" }
+  $shares = @($Calibration | ForEach-Object {
+      $exact = $TotalRows * $_.mac_per_second / $throughputTotal
+      [pscustomobject]@{ cpu = $_.logical_cpu_index; rows = [math]::Floor($exact); fraction = $exact - [math]::Floor($exact) }
+    })
+  $remaining = $TotalRows - (($shares | Measure-Object -Property rows -Sum).Sum)
+  foreach ($share in ($shares | Sort-Object fraction -Descending | Select-Object -First $remaining)) { $share.rows++ }
+  return @($shares | Sort-Object cpu | ForEach-Object { [int]$_.rows })
 }
 function Invoke-Speed([string]$Variant, [int]$Run, [int]$OrderIndex) {
   $script:invocations++
@@ -174,6 +190,27 @@ if ($selfTestResult.ExitCode -ne 0 -or (($selfTestResult.Stdout + "`n" + $selfTe
   throw "Explicit recurrence self-test preflight failed or did not report correction pass"
 }
 
+$calibration = @()
+foreach ($cpu in $cpus) {
+  $calibrationArgs = @("--cpu", "$cpu", "--m", 64, "--K", 64, "--depth", 64,
+    "--iterations", 4, "--repetitions", 20, "--warmup", 5, "--kernel", "avx2")
+  Add-Content -LiteralPath $commandsPath -Encoding ascii -Value ("calibration cpu=$cpu `"$CalibrationExecutable`" " + ($calibrationArgs -join ' '))
+  $calibrationResult = Invoke-CapturedProcess $CalibrationExecutable $calibrationArgs
+  if ($calibrationResult.ExitCode -ne 0) { throw "Calibration failed for CPU $cpu" }
+  $calibrationLines = @($calibrationResult.Stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($calibrationLines.Count -ne 2) { throw "Calibration did not produce one CSV row for CPU $cpu" }
+  $calibrationRow = $calibrationLines[1] | ConvertFrom-Csv -Header ($calibrationLines[0] -split ',')
+  if ([string]$calibrationRow.affinity_succeeded -ne "true") { throw "Calibration affinity failed for CPU $cpu" }
+  $calibration += [pscustomobject]@{ logical_cpu_index = $cpu; mac_per_second = [double]$calibrationRow.mac_per_second; elapsed_seconds = [double]$calibrationRow.elapsed_seconds; affinity_succeeded = [string]$calibrationRow.affinity_succeeded }
+}
+$rows = Get-ProportionalRows $calibration $D
+$rowText = $rows -join ','
+Set-Content -LiteralPath $calibrationPath -Encoding ascii -Value "logical_cpu_index,mac_per_second,elapsed_seconds,affinity_succeeded"
+foreach ($calibrationRow in $calibration) {
+  Add-Content -LiteralPath $calibrationPath -Encoding ascii -Value "$($calibrationRow.logical_cpu_index),$($calibrationRow.mac_per_second),$($calibrationRow.elapsed_seconds),$($calibrationRow.affinity_succeeded)"
+}
+Add-Content -LiteralPath $commandsPath -Encoding ascii -Value "calibrated_rows D=1472 cpus=$cpuText rows_per_worker=$rowText"
+
 for ($run = 1; $run -le $IndependentRuns; $run++) {
   $order = if (($run % 2) -eq 0) { @("A", "B") } else { @("B", "A") }
   $orderIndex = 0
@@ -237,6 +274,7 @@ $validation = @(
   "checksum_determinism=PASS for A and B; nonzero final/per-round checksums"
   "finite_no_overflow=PASS for every raw row; per_round_finite=true; per_round_overflow=false; all_rounds_valid=true"
   "affinity=PASS for every raw row; cpus=0,2,4,6; affinity=1,1,1,1; affinity_errors=0,0,0,0"
+  "calibration=PASS; original T0-R per-core calibration on CPUs 0,2,4,6; proportional rows=$rowText; D=1472"
   "repetition_validation=PASS; timed_repetitions=8; warmup=2; timed_repetitions_exact=true"
   "speed_stderr_stdout_correction_autotest_text=PASS absent"
   "preflight=PASS; exactly one CTest correction and one explicit self-test before speed rows"
@@ -245,9 +283,10 @@ $validation = @(
 Set-Content -LiteralPath $validationPath -Encoding ascii -Value $validation
 $summary = @(
   "status=PASS"
-  "executive_summary=T0-M recurrence residency control completed for real GEMV plus Norm/Requantize/residual and depth barrier at D=512,S=1,R=16; A shared weights versus B per-round weights."
+  "executive_summary=T0-M recurrence residency control at D=1472 completed for real GEMV plus Norm/Requantize/residual and depth barrier; A shared weights versus B per-round weights."
   "executable=$Executable"
   "D=$D; S=$S; R=$R; workers=$workers; cpus=$cpuText; rows_per_worker=$rowText; mode=fused only"
+  "calibration_path=$calibrationPath; calibration_executable=$CalibrationExecutable; rows are largest-remainder shares of measured mac_per_second"
   "variants=A(shared),B(per-round); timed_repetitions=$TimedRepetitions; warmup=$Warmup; independent_runs=$IndependentRuns"
   "execution_order=even run A then B; odd run B then A; each pair adjacent; never concurrent"
   "A_median_mac_per_second=$(Format-Number ([double]$a.median_mac_per_second)); B_median_mac_per_second=$(Format-Number ([double]$b.median_mac_per_second))"
@@ -255,7 +294,7 @@ $summary = @(
   "seed_formula=B: 0xC001CAFE ^ 0x9E3779B9*(shard_index+1) ^ 0x85EBCA6B*(round+1); A omits round term and shares one block"
   "counts=raw_rows=20; aggregate_rows=2; speed_processes=20; preflight=one_ctest_plus_one_self_test"
   "static_references=T0-R path=$t0rSummaryPath; recent_static_control_path=$staticControlPath; comparisons descriptive and non-equivalent"
-  "artifacts=machine.csv,aggregate.csv,comparison.csv,summary.txt,validation.txt,commands.log,stderr.log,preflight.ctest.stdout.log,preflight.ctest.stderr.log,preflight.self-test.stdout.log,preflight.self-test.stderr.log"
+  "artifacts=calibration.csv,machine.csv,aggregate.csv,comparison.csv,summary.txt,validation.txt,commands.log,stderr.log,preflight.ctest.stdout.log,preflight.ctest.stderr.log,preflight.self-test.stdout.log,preflight.self-test.stderr.log"
   "validation=PASS; see validation.txt"
 )
 Set-Content -LiteralPath $summaryPath -Encoding ascii -Value $summary
