@@ -1,0 +1,14 @@
+/build/
+/model/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.tmp
+*.profraw
+__pycache__/
+/artifacts/
+/dist/
+/.venv*/
+*.pt
+*.pt.json

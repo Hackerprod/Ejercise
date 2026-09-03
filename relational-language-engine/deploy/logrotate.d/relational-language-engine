@@ -1,0 +1,10 @@
+/var/log/relational-language-engine/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su rlm rlm
+}

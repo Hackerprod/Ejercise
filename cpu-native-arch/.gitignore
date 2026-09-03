@@ -1,0 +1,7 @@
+build/
+*.user
+*.suo
+*.vcxproj*
+results/*.csv
+results/*.json
+results/*.log

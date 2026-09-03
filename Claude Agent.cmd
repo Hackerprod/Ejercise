@@ -1,0 +1,1 @@
+claude --dangerously-load-development-channels server:claude-channel

@@ -1,0 +1,5 @@
+/build*/
+/data/
+*.log
+*.zip
+compile_commands.json

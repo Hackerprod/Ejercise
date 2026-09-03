@@ -1,0 +1,11 @@
+[Unit]
+Description=Run bounded MRDL audits hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=mrdl-audit.service
+
+[Install]
+WantedBy=timers.target
