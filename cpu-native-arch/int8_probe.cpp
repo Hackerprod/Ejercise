@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -42,6 +43,8 @@ struct Options {
   Variant variant = Variant::a;
   Kernel kernel = Kernel::scalar;
   bool self_test = false;
+  bool ready_timing_diagnostic = false;
+  bool warmup_affinity_timing_diagnostic = false;
 };
 
 using Variant = Options::Variant;
@@ -186,6 +189,10 @@ class AffinityGuard {
       options.warmup = parse_u32(require_value(argument), argument, true);
     } else if (argument == "--self-test") {
       options.self_test = true;
+    } else if (argument == "--ready-timing-diagnostic") {
+      options.ready_timing_diagnostic = true;
+    } else if (argument == "--warmup-affinity-timing-diagnostic") {
+      options.warmup_affinity_timing_diagnostic = true;
     } else if (argument == "--variant") {
       options.variant = parse_variant(require_value(argument));
     } else if (argument == "--kernel") {
@@ -202,7 +209,8 @@ class AffinityGuard {
     } else if (argument == "--help" || argument == "-h") {
       std::cout << "Usage: int8_probe [--m N|--target-kib N] [--K N] [--depth N] "
                    "[--variant A|B|Bclone|C] [--kernel scalar|avx2|auto] [--cpu N] "
-                   "[--parallel-workers N|--parallel-cpus LIST --parallel-rows LIST]\n";
+                   "[--parallel-workers N|--parallel-cpus LIST --parallel-rows LIST] "
+                   "[--ready-timing-diagnostic] [--warmup-affinity-timing-diagnostic]\n";
       std::exit(0);
     } else {
       throw std::runtime_error("unknown option: " + std::string(argument));
@@ -265,6 +273,17 @@ struct Int8Data {
   std::vector<std::int8_t> input;
 };
 
+struct BlockTiming {
+  double block_loop_elapsed_seconds = 0.0;
+  double first_clone_copy_elapsed_seconds = 0.0;
+  double clone_copy_elapsed_seconds = 0.0;
+};
+
+struct WarmupAffinityTiming {
+  double warmup_elapsed_seconds = 0.0;
+  double affinity_guard_elapsed_seconds = 0.0;
+};
+
 [[nodiscard]] std::uint32_t next_random(std::uint32_t& state) {
   state ^= state << 13;
   state ^= state >> 17;
@@ -273,23 +292,51 @@ struct Int8Data {
 }
 
 [[nodiscard]] Int8Data make_data(std::uint32_t m, std::uint32_t k,
-                                 std::uint32_t depth, Variant variant) {
+                                 std::uint32_t depth, Variant variant,
+                                 const QpcClock* diagnostic_clock = nullptr,
+                                 BlockTiming* block_timing = nullptr) {
   Int8Data data{m, k, {}, std::vector<std::int8_t>(k)};
   const std::uint32_t block_count =
       variant == Variant::b || variant == Variant::bclone ? depth : 1;
   data.blocks.reserve(block_count);
-  for (std::uint32_t block_index = 0; block_index < block_count; ++block_index) {
-    if (variant == Variant::bclone && block_index != 0) {
-      WeightBlock block{data.blocks.front().weights};
+  if (diagnostic_clock == nullptr) {
+    for (std::uint32_t block_index = 0; block_index < block_count; ++block_index) {
+      if (variant == Variant::bclone && block_index != 0) {
+        WeightBlock block{data.blocks.front().weights};
+        data.blocks.push_back(std::move(block));
+        continue;
+      }
+      std::uint32_t state = 0xC001CAFEU ^ (0x9E3779B9U * (block_index + 1U));
+      WeightBlock block{std::vector<std::int8_t>(static_cast<std::size_t>(m) * k)};
+      for (std::int8_t& value : block.weights) {
+        value = static_cast<std::int8_t>(static_cast<int>(next_random(state) & 0xFFU) - 128);
+      }
       data.blocks.push_back(std::move(block));
-      continue;
     }
-    std::uint32_t state = 0xC001CAFEU ^ (0x9E3779B9U * (block_index + 1U));
-    WeightBlock block{std::vector<std::int8_t>(static_cast<std::size_t>(m) * k)};
-    for (std::int8_t& value : block.weights) {
-      value = static_cast<std::int8_t>(static_cast<int>(next_random(state) & 0xFFU) - 128);
+  } else {
+    const LARGE_INTEGER block_loop_begin = diagnostic_clock->now();
+    for (std::uint32_t block_index = 0; block_index < block_count; ++block_index) {
+      if (variant == Variant::bclone && block_index != 0) {
+        const LARGE_INTEGER clone_begin = diagnostic_clock->now();
+        WeightBlock block{data.blocks.front().weights};
+        data.blocks.push_back(std::move(block));
+        const double clone_elapsed =
+            diagnostic_clock->elapsed(clone_begin, diagnostic_clock->now());
+        block_timing->clone_copy_elapsed_seconds += clone_elapsed;
+        if (block_index == 1) {
+          block_timing->first_clone_copy_elapsed_seconds = clone_elapsed;
+        }
+        continue;
+      }
+      std::uint32_t state = 0xC001CAFEU ^ (0x9E3779B9U * (block_index + 1U));
+      WeightBlock block{std::vector<std::int8_t>(static_cast<std::size_t>(m) * k)};
+      for (std::int8_t& value : block.weights) {
+        value = static_cast<std::int8_t>(static_cast<int>(next_random(state) & 0xFFU) - 128);
+      }
+      data.blocks.push_back(std::move(block));
     }
-    data.blocks.push_back(std::move(block));
+    block_timing->block_loop_elapsed_seconds =
+        diagnostic_clock->elapsed(block_loop_begin, diagnostic_clock->now());
   }
   std::uint32_t input_state = 0xA5A5F00DU;
   for (std::int8_t& value : data.input) {
@@ -497,6 +544,9 @@ struct ParallelResult {
   std::uint64_t mac_count = 0;
   double mac_per_second = 0.0;
   std::int64_t checksum = 0;
+  std::vector<double> ready_elapsed_seconds;
+  std::vector<BlockTiming> block_timings;
+  std::vector<WarmupAffinityTiming> warmup_affinity_timings;
 };
 
 [[nodiscard]] ParallelResult run_parallel(const std::vector<CpuTarget>& targets,
@@ -508,6 +558,9 @@ struct ParallelResult {
   const std::size_t pass_count = static_cast<std::size_t>(options.repetitions) *
                                  options.iterations * options.depth;
   std::vector<SingleResult> results(worker_count);
+  std::vector<double> ready_elapsed_seconds(worker_count, 0.0);
+  std::vector<BlockTiming> block_timings(worker_count);
+  std::vector<WarmupAffinityTiming> warmup_affinity_timings(worker_count);
   std::barrier ready(static_cast<std::ptrdiff_t>(worker_count + 1));
   std::barrier start(static_cast<std::ptrdiff_t>(worker_count + 1));
   std::barrier phase_ready(static_cast<std::ptrdiff_t>(worker_count + 1));
@@ -516,14 +569,27 @@ struct ParallelResult {
   workers.reserve(worker_count);
   for (std::size_t index = 0; index < worker_count; ++index) {
     workers.emplace_back([&, index] {
-      Int8Data data = make_data(rows[index], options.k, options.depth, options.variant);
+      LARGE_INTEGER ready_begin{};
+      if (options.ready_timing_diagnostic) ready_begin = clock.now();
+      Int8Data data = make_data(
+          rows[index], options.k, options.depth, options.variant,
+          options.ready_timing_diagnostic ? &clock : nullptr,
+          options.ready_timing_diagnostic ? &block_timings[index] : nullptr);
       std::vector<std::int32_t> output(data.m, 0);
       std::vector<std::uint8_t> eviction;
       if (options.variant == Variant::c) eviction.resize(kEvictionBytes, 0xA5U);
+      LARGE_INTEGER affinity_begin{};
+      if (options.warmup_affinity_timing_diagnostic) affinity_begin = clock.now();
       AffinityGuard affinity(targets[index].group, targets[index].group_index);
+      if (options.warmup_affinity_timing_diagnostic) {
+        warmup_affinity_timings[index].affinity_guard_elapsed_seconds =
+            clock.elapsed(affinity_begin, clock.now());
+      }
       results[index].affinity_succeeded = affinity.succeeded();
       results[index].affinity_error = affinity.error();
       std::uint64_t eviction_checksum = 0;
+      LARGE_INTEGER warmup_begin{};
+      if (options.warmup_affinity_timing_diagnostic) warmup_begin = clock.now();
       for (std::uint32_t warmup = 0; warmup < options.warmup; ++warmup) {
         for (std::uint32_t pass = 0; pass < options.depth; ++pass) {
           if (options.variant == Variant::c) {
@@ -532,7 +598,15 @@ struct ParallelResult {
           (void)pass_function(data, pass, options.variant, output);
         }
       }
+      if (options.warmup_affinity_timing_diagnostic) {
+        warmup_affinity_timings[index].warmup_elapsed_seconds =
+            clock.elapsed(warmup_begin, clock.now());
+      }
       ready.arrive_and_wait();
+      if (options.ready_timing_diagnostic) {
+        const LARGE_INTEGER ready_end = clock.now();
+        ready_elapsed_seconds[index] = clock.elapsed(ready_begin, ready_end);
+      }
       start.arrive_and_wait();
       for (std::size_t slot = 0; slot < pass_count; ++slot) {
         if (options.variant == Variant::c) {
@@ -583,6 +657,9 @@ struct ParallelResult {
   result.mac_count *= options.repetitions;
   result.kernel_elapsed_seconds = kernel_elapsed;
   result.wall_elapsed_seconds = clock.elapsed(wall_begin, wall_end);
+  result.ready_elapsed_seconds = std::move(ready_elapsed_seconds);
+  result.block_timings = std::move(block_timings);
+  result.warmup_affinity_timings = std::move(warmup_affinity_timings);
   result.mac_per_second = kernel_elapsed > 0.0
                               ? static_cast<double>(result.mac_count) / kernel_elapsed
                               : 0.0;
@@ -655,6 +732,55 @@ int main(int argc, char** argv) {
       if (rows.size() != selected.size()) throw std::runtime_error("row/CPU count mismatch");
       const ParallelResult result =
           run_parallel(selected, rows, options, pass_function, clock);
+      if (options.ready_timing_diagnostic) {
+        double ready_sum = 0.0;
+        double ready_min = 0.0;
+        double ready_max = 0.0;
+        for (std::size_t index = 0; index < result.ready_elapsed_seconds.size(); ++index) {
+          const double elapsed = result.ready_elapsed_seconds[index];
+          ready_sum += elapsed;
+          if (index == 0 || elapsed < ready_min) ready_min = elapsed;
+          if (index == 0 || elapsed > ready_max) ready_max = elapsed;
+          std::cerr << "ready_timing variant=" << variant_name(options.variant)
+                    << " worker=" << index << " cpu=" << selected[index].logical_index
+                    << " row=" << rows[index]
+                    << " ready_elapsed_seconds=" << elapsed << '\n';
+        }
+        std::cerr << "ready_timing_aggregate variant=" << variant_name(options.variant)
+                  << " min_seconds=" << ready_min << " max_seconds=" << ready_max
+                  << " mean_seconds=" << (ready_sum / result.ready_elapsed_seconds.size())
+                  << '\n';
+        std::cerr << "coordinator_kernel_elapsed variant=" << variant_name(options.variant)
+                  << " kernel_elapsed_seconds=" << result.kernel_elapsed_seconds << '\n';
+        for (std::size_t index = 0; index < result.block_timings.size(); ++index) {
+          const BlockTiming& timing = result.block_timings[index];
+          std::cerr << "block_timing variant=" << variant_name(options.variant)
+                    << " worker=" << index << " cpu=" << selected[index].logical_index
+                    << " row=" << rows[index]
+                    << " block_loop_elapsed_seconds=" << timing.block_loop_elapsed_seconds
+                    << " first_clone_copy_elapsed_seconds="
+                    << timing.first_clone_copy_elapsed_seconds
+                    << " clone_copy_elapsed_seconds=" << timing.clone_copy_elapsed_seconds
+                    << " remaining_clone_copy_elapsed_seconds="
+                    << (timing.clone_copy_elapsed_seconds -
+                        timing.first_clone_copy_elapsed_seconds)
+                     << '\n';
+        }
+        if (options.warmup_affinity_timing_diagnostic) {
+          for (std::size_t index = 0; index < result.warmup_affinity_timings.size(); ++index) {
+            const WarmupAffinityTiming& timing = result.warmup_affinity_timings[index];
+            std::cerr << "warmup_timing variant=" << variant_name(options.variant)
+                      << " worker=" << index << " cpu=" << selected[index].logical_index
+                      << " row=" << rows[index]
+                      << " warmup_elapsed_seconds=" << timing.warmup_elapsed_seconds << '\n';
+            std::cerr << "affinity_timing variant=" << variant_name(options.variant)
+                      << " worker=" << index << " cpu=" << selected[index].logical_index
+                      << " row=" << rows[index]
+                      << " affinity_guard_elapsed_seconds="
+                      << timing.affinity_guard_elapsed_seconds << '\n';
+          }
+        }
+      }
       std::cout << "probe,kernel_requested,kernel_used,avx2_supported,target_kib,m,K,depth,variant,"
                    "iterations,repetitions,warmup,worker_count,logical_cpu_indices,rows_per_worker,"
                    "all_affinity_succeeded,affinity_error,kernel_elapsed_seconds,wall_elapsed_seconds,"

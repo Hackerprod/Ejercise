@@ -8,7 +8,9 @@ param(
   [string]$FixedRows = "",
   [string]$SizeList = "",
   [string]$DepthList = "",
-  [string]$VariantList = ""
+  [string]$VariantList = "",
+  [switch]$ReadyTimingDiagnostic,
+  [switch]$WarmupAffinityTimingDiagnostic
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,10 +27,9 @@ if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
 if ($RepeatCount -le 0 -or $Repetitions -le 0 -or $Warmup -lt 0) {
   throw "RepeatCount and Repetitions must be positive; Warmup cannot be negative"
 }
-if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) {
-  $null = New-Item -ItemType Directory -Path $OutputDirectory
+if ($WarmupAffinityTimingDiagnostic -and -not $ReadyTimingDiagnostic) {
+  throw "WarmupAffinityTimingDiagnostic requires ReadyTimingDiagnostic"
 }
-
 $cpus = @(0, 2, 4, 6)
 $Workers = $cpus.Count
 $sizes = if ([string]::IsNullOrWhiteSpace($SizeList)) { @(384, 512, 640, 768) } else { @($SizeList -split ',' | ForEach-Object { [int]$_.Trim() }) }
@@ -39,12 +40,21 @@ if (@($variants | Where-Object { $_ -notin @("A", "B", "Bclone", "C") }).Count -
 $rawCsv = Join-Path $OutputDirectory "t0r_int8_sharded.csv"
 $calibrationCsv = Join-Path $OutputDirectory "int8_calibration.csv"
 $stderrLog = Join-Path $OutputDirectory "t0r_int8_sharded.stderr.log"
+$readyTimingLog = Join-Path $OutputDirectory "ready-timing-diagnostic.log"
+$blockTimingLog = Join-Path $OutputDirectory "block-timing-diagnostic.log"
+$readyTimingSummaryPath = Join-Path $OutputDirectory "ready-timing-summary.txt"
+$blockTimingSummaryPath = Join-Path $OutputDirectory "block-timing-summary.txt"
+$warmupTimingLog = Join-Path $OutputDirectory "warmup-timing-diagnostic.log"
+$affinityTimingLog = Join-Path $OutputDirectory "affinity-timing-diagnostic.log"
+$warmupTimingSummaryPath = Join-Path $OutputDirectory "warmup-timing-summary.txt"
+$affinityTimingSummaryPath = Join-Path $OutputDirectory "affinity-timing-summary.txt"
 $summaryPath = Join-Path $OutputDirectory "t0r_int8_sharded.summary.txt"
 $validationPath = Join-Path $OutputDirectory "validation.txt"
 $commandsPath = Join-Path $OutputDirectory "commands.log"
-if (Test-Path -LiteralPath $summaryPath -PathType Leaf) {
-  throw "Refusing rerun: summary exists at $summaryPath"
+if (Test-Path -LiteralPath $OutputDirectory -PathType Container) {
+  throw "Refusing overwrite: output directory exists at $OutputDirectory"
 }
+$null = New-Item -ItemType Directory -Path $OutputDirectory
 $expectedInvocations = $sizes.Count * $depths.Count * $variants.Count * $RepeatCount
 $dramGbps = 32.9295
 
@@ -94,13 +104,51 @@ Set-Content -LiteralPath $stderrLog -Encoding ascii -Value @(
   "executable=$Executable"
   "physical_cpus=$($cpus -join ','); dram_gbps_measured=$dramGbps"
   "target_kib=$($sizes -join ','); depths=$($depths -join ','); variants=$($variants -join ','); repeat_count=$RepeatCount; repetitions=$Repetitions; warmup=$Warmup"
+  "ready_timing_diagnostic=$ReadyTimingDiagnostic"
+  "warmup_affinity_timing_diagnostic=$WarmupAffinityTimingDiagnostic"
 )
 Set-Content -LiteralPath $commandsPath -Encoding ascii -Value @(
   "script=$PSCommandPath"
   "executable=$Executable"
   "target_kib=$($sizes -join ','); depths=$($depths -join ','); variants=$($variants -join ','); repeat_count=$RepeatCount; repetitions=$Repetitions; warmup=$Warmup"
   "cpus=$($cpus -join ',')"
+  "ready_timing_diagnostic=$ReadyTimingDiagnostic"
+  "warmup_affinity_timing_diagnostic=$WarmupAffinityTimingDiagnostic"
 )
+Set-Content -LiteralPath $readyTimingLog -Encoding ascii -Value @(
+  "T0-R ready timing diagnostic stderr"
+  "boundaries=worker lambda entry through immediate QPC after existing ready.arrive_and_wait returns; includes make_data, output allocation, eviction allocation, AffinityGuard, warmup, and wait for coordinator ready arrival"
+  "diagnostic_enabled=$ReadyTimingDiagnostic"
+)
+Set-Content -LiteralPath $blockTimingLog -Encoding ascii -Value @(
+  "T0-R block timing diagnostic stderr"
+  "boundaries=QPC immediately before and after make_data block-construction loop; input fill and all code outside loop excluded"
+  "bclone_first=first WeightBlock copy plus push_back operation only; clone_copy_elapsed_seconds=sum of each clone copy operation; remaining=total-first"
+  "diagnostic_enabled=$ReadyTimingDiagnostic"
+)
+Set-Content -LiteralPath $warmupTimingLog -Encoding ascii -Value @(
+  "T0-R warmup timing diagnostic stderr"
+  "boundaries=QPC immediately before first existing warmup-loop iteration through immediately after last existing warmup-loop iteration; includes only warmup loop pass_function calls and variant C preparation"
+  "diagnostic_enabled=$WarmupAffinityTimingDiagnostic"
+)
+Set-Content -LiteralPath $affinityTimingLog -Encoding ascii -Value @(
+  "T0-R AffinityGuard construction timing diagnostic stderr"
+  "boundaries=QPC immediately before AffinityGuard declaration through immediately after constructor returns; excludes make_data, output allocation, eviction allocation, warmup, barriers, and result assignment"
+  "diagnostic_enabled=$WarmupAffinityTimingDiagnostic"
+)
+
+$preflightLog = Join-Path $OutputDirectory "preflight.self-test.log"
+$preflight = Invoke-Probe @("--self-test")
+Add-Content -LiteralPath $commandsPath -Encoding ascii -Value "preflight_command=$Executable --self-test"
+Set-Content -LiteralPath $preflightLog -Encoding ascii -Value @(
+  "command=$Executable --self-test"
+  "exit_code=$($preflight.ExitCode)"
+  "stdout=$($preflight.Stdout.TrimEnd())"
+  "stderr=$($preflight.Stderr.TrimEnd())"
+)
+if ($preflight.ExitCode -ne 0) {
+  throw "Preflight self-test failed with exit code $($preflight.ExitCode)"
+}
 
 $calibration = @()
 foreach ($cpu in $cpus) {
@@ -177,12 +225,41 @@ for ($repeat = 1; $repeat -le $RepeatCount; $repeat++) {
                   "--parallel-cpus", ($cpus -join ','),
                   "--parallel-rows", ($rows -join ','),
                   "--iterations", 1, "--repetitions", $Repetitions, "--warmup", $Warmup)
+        if ($ReadyTimingDiagnostic) { $args += "--ready-timing-diagnostic" }
+        if ($WarmupAffinityTimingDiagnostic) { $args += "--warmup-affinity-timing-diagnostic" }
         $context = "batch=$invocationNumber/$expectedInvocations repeat=$repeat target_kib=$size depth=$depth variant=$variant"
         Add-Content -LiteralPath $stderrLog -Encoding ascii -Value "command[$invocationNumber/$expectedInvocations]=$(($Executable)) $($args -join ' ')"
         Add-Content -LiteralPath $commandsPath -Encoding ascii -Value "command[$invocationNumber/$expectedInvocations]=$(($Executable)) $($args -join ' ')"
         $invocation = Invoke-Probe $args
         if ($invocation.Stderr) {
           Add-Content -LiteralPath $stderrLog -Encoding ascii -Value $invocation.Stderr.TrimEnd()
+          if ($ReadyTimingDiagnostic) {
+            $diagnosticLines = @($invocation.Stderr -split '\r?\n' | Where-Object {
+                $_ -match '^ready_timing ' -or $_ -match '^ready_timing_aggregate ' -or
+                $_ -match '^coordinator_kernel_elapsed '
+              } | ForEach-Object { "invocation=$invocationNumber $_" })
+            if ($diagnosticLines.Count -gt 0) {
+              Add-Content -LiteralPath $readyTimingLog -Encoding ascii -Value $diagnosticLines
+            }
+            $blockDiagnosticLines = @($invocation.Stderr -split '\r?\n' | Where-Object {
+                $_ -match '^block_timing '
+              } | ForEach-Object { "invocation=$invocationNumber $_" })
+            if ($blockDiagnosticLines.Count -gt 0) {
+              Add-Content -LiteralPath $blockTimingLog -Encoding ascii -Value $blockDiagnosticLines
+            }
+            $warmupDiagnosticLines = @($invocation.Stderr -split '\r?\n' | Where-Object {
+                $_ -match '^warmup_timing '
+              } | ForEach-Object { "invocation=$invocationNumber $_" })
+            if ($warmupDiagnosticLines.Count -gt 0) {
+              Add-Content -LiteralPath $warmupTimingLog -Encoding ascii -Value $warmupDiagnosticLines
+            }
+            $affinityDiagnosticLines = @($invocation.Stderr -split '\r?\n' | Where-Object {
+                $_ -match '^affinity_timing '
+              } | ForEach-Object { "invocation=$invocationNumber $_" })
+            if ($affinityDiagnosticLines.Count -gt 0) {
+              Add-Content -LiteralPath $affinityTimingLog -Encoding ascii -Value $affinityDiagnosticLines
+            }
+          }
         }
         $lines = Read-ProbeRow $invocation $context
         if (-not $headerWritten) {
@@ -205,7 +282,13 @@ if ($rows.Count -ne $expectedInvocations) {
 $invalid = @($rows | Where-Object {
     $_.worker_count -ne "$Workers" -or $_.logical_cpu_indices -ne ($cpus -join ',') -or
     $_.kernel_used -ne "avx2" -or $_.avx2_supported -ne "true" -or
-    $_.all_affinity_succeeded -ne "true"
+    $_.all_affinity_succeeded -ne "true" -or $_.K -ne "512" -or
+    $_.target_kib -notin @($sizes | ForEach-Object { "$_" }) -or
+    $_.depth -notin @($depths | ForEach-Object { "$_" }) -or
+    [int]$_.m -ne [int](([int]$_.target_kib * 1024) / 512) -or
+    $_.iterations -ne "1" -or $_.repetitions -ne "$Repetitions" -or
+    $_.warmup -ne "$Warmup" -or ($fixedRowValues.Count -gt 0 -and
+      $_.rows_per_worker -ne ($fixedRowValues -join ','))
   })
 if ($invalid.Count -gt 0) {
   throw "Invalid parallel rows: $($invalid.Count)"
@@ -266,6 +349,159 @@ $statistics = foreach ($size in $sizes) {
   }
 }
 
+$readyWorkerRecords = @()
+$blockWorkerRecords = @()
+$warmupWorkerRecords = @()
+$affinityWorkerRecords = @()
+$diagnosticInvalid = @()
+if ($ReadyTimingDiagnostic) {
+  foreach ($line in @(Get-Content -LiteralPath $readyTimingLog)) {
+    if ($line -match '^invocation=(\d+) ready_timing variant=(\S+) worker=(\d+) cpu=(\d+) row=(\d+) ready_elapsed_seconds=([0-9.eE+-]+)$') {
+      $readyWorkerRecords += [pscustomobject]@{
+        invocation = [int]$matches[1]; variant = $matches[2]; worker = [int]$matches[3]
+        cpu = [int]$matches[4]; row = [int]$matches[5]; elapsed = [double]$matches[6]
+      }
+    }
+  }
+  foreach ($line in @(Get-Content -LiteralPath $blockTimingLog)) {
+    if ($line -match '^invocation=(\d+) block_timing variant=(\S+) worker=(\d+) cpu=(\d+) row=(\d+) block_loop_elapsed_seconds=([0-9.eE+-]+) first_clone_copy_elapsed_seconds=([0-9.eE+-]+) clone_copy_elapsed_seconds=([0-9.eE+-]+) remaining_clone_copy_elapsed_seconds=([0-9.eE+-]+)$') {
+      $blockWorkerRecords += [pscustomobject]@{
+        invocation = [int]$matches[1]; variant = $matches[2]; worker = [int]$matches[3]
+        cpu = [int]$matches[4]; row = [int]$matches[5]; block_loop = [double]$matches[6]
+        first_clone = [double]$matches[7]; clone_total = [double]$matches[8]; clone_remaining = [double]$matches[9]
+      }
+    }
+  }
+  foreach ($line in @(Get-Content -LiteralPath $warmupTimingLog)) {
+    if ($line -match '^invocation=(\d+) warmup_timing variant=(\S+) worker=(\d+) cpu=(\d+) row=(\d+) warmup_elapsed_seconds=([0-9.eE+-]+)$') {
+      $warmupWorkerRecords += [pscustomobject]@{
+        invocation = [int]$matches[1]; variant = $matches[2]; worker = [int]$matches[3]
+        cpu = [int]$matches[4]; row = [int]$matches[5]; elapsed = [double]$matches[6]
+      }
+    }
+  }
+  foreach ($line in @(Get-Content -LiteralPath $affinityTimingLog)) {
+    if ($line -match '^invocation=(\d+) affinity_timing variant=(\S+) worker=(\d+) cpu=(\d+) row=(\d+) affinity_guard_elapsed_seconds=([0-9.eE+-]+)$') {
+      $affinityWorkerRecords += [pscustomobject]@{
+        invocation = [int]$matches[1]; variant = $matches[2]; worker = [int]$matches[3]
+        cpu = [int]$matches[4]; row = [int]$matches[5]; elapsed = [double]$matches[6]
+      }
+    }
+  }
+  for ($invocation = 1; $invocation -le $expectedInvocations; $invocation++) {
+    $csvRow = $rows[$invocation - 1]
+    $readyForInvocation = @($readyWorkerRecords | Where-Object { $_.invocation -eq $invocation })
+    $blockForInvocation = @($blockWorkerRecords | Where-Object { $_.invocation -eq $invocation })
+    $warmupForInvocation = @($warmupWorkerRecords | Where-Object { $_.invocation -eq $invocation })
+    $affinityForInvocation = @($affinityWorkerRecords | Where-Object { $_.invocation -eq $invocation })
+    if ($readyForInvocation.Count -ne $Workers -or $blockForInvocation.Count -ne $Workers -or
+        $warmupForInvocation.Count -ne $Workers -or $affinityForInvocation.Count -ne $Workers) {
+      $diagnosticInvalid += "invocation=$invocation worker_line_count=$($readyForInvocation.Count)/$($blockForInvocation.Count)/$($warmupForInvocation.Count)/$($affinityForInvocation.Count)"
+      continue
+    }
+    foreach ($record in @($readyForInvocation | Sort-Object worker)) {
+      if ($record.variant -ne $csvRow.variant -or $record.worker -lt 0 -or $record.worker -ge $Workers -or
+          $record.cpu -ne $cpus[$record.worker] -or $record.row -ne $fixedRowValues[$record.worker] -or
+          $record.elapsed -le 0.0) {
+        $diagnosticInvalid += "ready invocation=$invocation worker=$($record.worker)"
+      }
+    }
+    foreach ($record in @($blockForInvocation | Sort-Object worker)) {
+      if ($record.variant -ne $csvRow.variant -or $record.worker -lt 0 -or $record.worker -ge $Workers -or
+          $record.cpu -ne $cpus[$record.worker] -or $record.row -ne $fixedRowValues[$record.worker] -or
+          $record.block_loop -le 0.0 -or $record.first_clone -lt 0.0 -or
+          $record.clone_total -lt $record.first_clone -or $record.clone_remaining -lt 0.0) {
+        $diagnosticInvalid += "block invocation=$invocation worker=$($record.worker)"
+      }
+      if ([math]::Abs($record.clone_total - $record.first_clone - $record.clone_remaining) -gt 1e-9) {
+        $diagnosticInvalid += "clone_remainder_mismatch invocation=$invocation worker=$($record.worker)"
+      }
+      if ($csvRow.variant -ne "Bclone" -and
+          ($record.first_clone -ne 0.0 -or $record.clone_total -ne 0.0 -or $record.clone_remaining -ne 0.0)) {
+        $diagnosticInvalid += "non_bclone_clone_timing invocation=$invocation worker=$($record.worker)"
+      }
+      if ($csvRow.variant -eq "Bclone" -and $record.first_clone -le 0.0) {
+        $diagnosticInvalid += "bclone_first_clone_timing invocation=$invocation worker=$($record.worker)"
+      }
+    }
+    foreach ($recordSet in @($warmupForInvocation, $affinityForInvocation)) {
+      foreach ($record in @($recordSet | Sort-Object worker)) {
+        if ($record.variant -ne $csvRow.variant -or $record.worker -lt 0 -or $record.worker -ge $Workers -or
+            $record.cpu -ne $cpus[$record.worker] -or $record.row -ne $fixedRowValues[$record.worker] -or
+            $record.elapsed -le 0.0) {
+          $diagnosticInvalid += "warmup_or_affinity invocation=$invocation worker=$($record.worker)"
+        }
+      }
+    }
+  }
+  if ($diagnosticInvalid.Count -gt 0) {
+    throw "Invalid timing diagnostics: $($diagnosticInvalid -join '; ')"
+  }
+}
+
+$readyTimingSummaryPath = Join-Path $OutputDirectory "ready-timing-summary.txt"
+$blockTimingSummaryPath = Join-Path $OutputDirectory "block-timing-summary.txt"
+$warmupTimingSummaryPath = Join-Path $OutputDirectory "warmup-timing-summary.txt"
+$affinityTimingSummaryPath = Join-Path $OutputDirectory "affinity-timing-summary.txt"
+$timingSummaryPath = Join-Path $OutputDirectory "timing-summary.txt"
+$timingSummary = @(
+  "T0-R ready and block timing summary"
+  "ready_raw_worker_lines=$($readyWorkerRecords.Count)"
+  "block_raw_worker_lines=$($blockWorkerRecords.Count)"
+  "warmup_raw_worker_lines=$($warmupWorkerRecords.Count)"
+  "affinity_raw_worker_lines=$($affinityWorkerRecords.Count)"
+  "boundaries=block_loop is make_data block construction only; input fill and code outside make_data excluded"
+)
+$readySummary = @(
+  "T0-R ready timing summary"
+  "raw_worker_lines=$($readyWorkerRecords.Count)"
+  "boundaries=existing ready timing boundary; retained unchanged"
+)
+$blockSummary = @(
+  "T0-R block timing summary"
+  "raw_worker_lines=$($blockWorkerRecords.Count)"
+  "boundaries=QPC immediately before and after block-construction loop; Bclone copy/push operation only"
+)
+$warmupSummary = @(
+  "T0-R warmup timing summary"
+  "raw_worker_lines=$($warmupWorkerRecords.Count)"
+  "boundaries=QPC immediately before and after existing warmup loop; no timing inside pass_function or barriers"
+)
+$affinitySummary = @(
+  "T0-R AffinityGuard construction timing summary"
+  "raw_worker_lines=$($affinityWorkerRecords.Count)"
+  "boundaries=QPC immediately before AffinityGuard declaration through immediately after constructor returns"
+)
+foreach ($variant in $variants) {
+  $readyValues = @($readyWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.elapsed })
+  $blockValues = @($blockWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.block_loop })
+  $firstCloneValues = @($blockWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.first_clone })
+  $remainingCloneValues = @($blockWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.clone_remaining })
+  $warmupValues = @($warmupWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.elapsed })
+  $affinityValues = @($affinityWorkerRecords | Where-Object { $_.variant -eq $variant } | ForEach-Object { $_.elapsed })
+  $kernelValues = @($rows | Where-Object { $_.variant -eq $variant } | ForEach-Object { [double]$_.kernel_elapsed_seconds })
+  $macValues = @($rows | Where-Object { $_.variant -eq $variant } | ForEach-Object { [double]$_.mac_per_second })
+  $readyMean = ($readyValues | Measure-Object -Average).Average
+  $blockMean = ($blockValues | Measure-Object -Average).Average
+  $firstCloneMean = ($firstCloneValues | Measure-Object -Average).Average
+  $remainingCloneMean = ($remainingCloneValues | Measure-Object -Average).Average
+  $kernelMean = ($kernelValues | Measure-Object -Average).Average
+  $macMean = ($macValues | Measure-Object -Average).Average
+  $warmupMean = ($warmupValues | Measure-Object -Average).Average
+  $affinityMean = ($affinityValues | Measure-Object -Average).Average
+  $line = "$variant ready_min_seconds=$($readyValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) ready_max_seconds=$($readyValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) ready_mean_seconds=$readyMean block_loop_min_seconds=$($blockValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) block_loop_max_seconds=$($blockValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) block_loop_mean_seconds=$blockMean first_clone_min_seconds=$($firstCloneValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) first_clone_max_seconds=$($firstCloneValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) first_clone_mean_seconds=$firstCloneMean remaining_clone_min_seconds=$($remainingCloneValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) remaining_clone_max_seconds=$($remainingCloneValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) remaining_clone_mean_seconds=$remainingCloneMean kernel_elapsed_min_seconds=$($kernelValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) kernel_elapsed_max_seconds=$($kernelValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) kernel_elapsed_mean_seconds=$kernelMean mac_per_second_min=$($macValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) mac_per_second_max=$($macValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) mac_per_second_mean=$macMean"
+  $timingSummary += $line
+  $readySummary += "$variant ready_min_seconds=$($readyValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) ready_max_seconds=$($readyValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) ready_mean_seconds=$readyMean kernel_elapsed_min_seconds=$($kernelValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) kernel_elapsed_max_seconds=$($kernelValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) kernel_elapsed_mean_seconds=$kernelMean mac_per_second_min=$($macValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) mac_per_second_max=$($macValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) mac_per_second_mean=$macMean"
+  $blockSummary += "$variant block_loop_min_seconds=$($blockValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) block_loop_max_seconds=$($blockValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) block_loop_mean_seconds=$blockMean first_clone_min_seconds=$($firstCloneValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) first_clone_max_seconds=$($firstCloneValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) first_clone_mean_seconds=$firstCloneMean remaining_clone_min_seconds=$($remainingCloneValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) remaining_clone_max_seconds=$($remainingCloneValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) remaining_clone_mean_seconds=$remainingCloneMean"
+  $warmupSummary += "$variant warmup_min_seconds=$($warmupValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) warmup_max_seconds=$($warmupValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) warmup_mean_seconds=$warmupMean"
+  $affinitySummary += "$variant affinity_guard_min_seconds=$($affinityValues | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum) affinity_guard_max_seconds=$($affinityValues | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum) affinity_guard_mean_seconds=$affinityMean"
+}
+Set-Content -LiteralPath $readyTimingSummaryPath -Encoding ascii -Value $readySummary
+Set-Content -LiteralPath $blockTimingSummaryPath -Encoding ascii -Value $blockSummary
+Set-Content -LiteralPath $warmupTimingSummaryPath -Encoding ascii -Value $warmupSummary
+Set-Content -LiteralPath $affinityTimingSummaryPath -Encoding ascii -Value $affinitySummary
+Set-Content -LiteralPath $timingSummaryPath -Encoding ascii -Value $timingSummary
+
 $calibrationText = ($calibration | ForEach-Object {
   "cpu=$($_.logical_cpu_index):$($_.mac_per_second)"
 }) -join '; '
@@ -282,6 +518,15 @@ $summary = @(
   "invalid_rows=$($invalid.Count)"
   "validation_path=$validationPath"
   "commands_path=$commandsPath"
+  "ready_timing_log=$readyTimingLog"
+  "ready_timing_summary_path=$readyTimingSummaryPath"
+  "block_timing_log=$blockTimingLog"
+  "block_timing_summary_path=$blockTimingSummaryPath"
+  "warmup_timing_log=$warmupTimingLog"
+  "warmup_timing_summary_path=$warmupTimingSummaryPath"
+  "affinity_timing_log=$affinityTimingLog"
+  "affinity_timing_summary_path=$affinityTimingSummaryPath"
+  "timing_summary_path=$timingSummaryPath"
   "calibration=$calibrationText"
   $planSummary
   "statistics=population SD and min/max over $RepeatCount alternating repetitions"
@@ -292,11 +537,18 @@ Set-Content -LiteralPath $summaryPath -Encoding ascii -Value $summary
 Set-Content -LiteralPath $validationPath -Encoding ascii -Value @(
   "status=PASS"
   "raw_rows=$($rows.Count); expected_raw_rows=$expectedInvocations; variants=$($variants -join ','); repeat_count=$RepeatCount"
-  "configuration=target_kib=$($sizes -join ',');depths=$($depths -join ',');repetitions=$Repetitions;warmup=$Warmup"
+  "configuration=target_kib=$($sizes -join ',');K=512;m=target_kib*1024/K;depths=$($depths -join ',');iterations=1;repetitions=$Repetitions;warmup=$Warmup"
+  "exact_fixed_rows=$($fixedRowValues -join ',')"
   "affinity=PASS;workers=$Workers;cpus=$($cpus -join ',');fixed_rows=$($fixedRowValues.Count -gt 0)"
   "avx2=PASS; every row avx2_supported=true and kernel_used=avx2"
   "repetitions=PASS; exact repetitions=$Repetitions and warmup=$Warmup"
   "checksums=PASS; nonzero and deterministic per variant; A==Bclone and B distinct per paired run"
   "order=PASS; deterministic alternating variant order; serial process invocations"
+  "ready_timing=PASS; enabled=$ReadyTimingDiagnostic; stderr_log=$readyTimingLog"
+  "block_timing=PASS; enabled=$ReadyTimingDiagnostic; worker_lines=$($blockWorkerRecords.Count); invalid=$($diagnosticInvalid.Count)"
+  "warmup_timing=PASS; enabled=$WarmupAffinityTimingDiagnostic; worker_lines=$($warmupWorkerRecords.Count)"
+  "affinity_timing=PASS; enabled=$WarmupAffinityTimingDiagnostic; worker_lines=$($affinityWorkerRecords.Count)"
+  "diagnostic_counts=ready_worker_lines:$($readyWorkerRecords.Count);block_worker_lines:$($blockWorkerRecords.Count);warmup_worker_lines:$($warmupWorkerRecords.Count);affinity_worker_lines:$($affinityWorkerRecords.Count);expected_each:$($expectedInvocations * $Workers)"
+  "preflight_self_test=PASS;log=$preflightLog"
 )
 Write-Output $summaryPath
