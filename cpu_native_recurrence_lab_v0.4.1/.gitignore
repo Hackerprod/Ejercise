@@ -1,0 +1,8 @@
+build*/
+results/
+*.zip
+*.pdb
+*.obj
+*.ilk
+*.exe
+__pycache__/
