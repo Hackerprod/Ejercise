@@ -97,9 +97,12 @@ class RecurrentCore(nn.Module):
         slots: int = 1,
         rounds: int = 1,
         variant: Baseline = "shared",
+        init_gate_probability: float = 0.1,
     ) -> None:
         super().__init__()
         self._validate_configuration(dimension, slots, rounds, variant)
+        if not 0.0 < init_gate_probability < 1.0:
+            raise ValueError("init_gate_probability must be between 0 and 1")
         self.dimension = dimension
         self.slots = slots
         self.rounds = rounds
@@ -111,8 +114,7 @@ class RecurrentCore(nn.Module):
         core_count = rounds if variant == "untied" else 1
         self.cores = nn.ModuleList(CoreMLP(dimension) for _ in range(core_count))
 
-        gate_probability = 0.1
-        gate_logit = math.log(gate_probability / (1.0 - gate_probability))
+        gate_logit = math.log(init_gate_probability / (1.0 - init_gate_probability))
         self.gate_logits = nn.Parameter(torch.full((rounds, dimension), gate_logit))
         self.rms_norm = RMSNorm(dimension)
 
