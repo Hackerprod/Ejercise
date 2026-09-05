@@ -49,7 +49,7 @@ from train_u0c_c0_oracle import (  # noqa: E402
 )
 
 
-SEED = 101
+DEFAULT_SEED = 101
 TRAIN_TRANSFORM_SEED = 50101
 VAL_TRANSFORM_SEED = 50202
 TEST_TRANSFORM_SEED = 50303
@@ -326,10 +326,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=12000)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c1_joint_seed101")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    random.seed(SEED)
-    torch.manual_seed(SEED)
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
     torch.set_num_threads(4)
     torch.set_num_interop_threads(1)
     torch.use_deterministic_algorithms(True)
@@ -339,11 +340,11 @@ def main() -> int:
     transform_train = make_transform_split(TRAIN_TRANSFORM_SEED)
     transform_val = make_transform_split(VAL_TRANSFORM_SEED)
     transform_test = make_transform_split(TEST_TRANSFORM_SEED)
-    loaders = {task: DataLoader(ExampleDataset(datasets[task]["train"]), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(SEED + index), collate_fn=collate) for index, task in enumerate(TASKS)}
+    loaders = {task: DataLoader(ExampleDataset(datasets[task]["train"]), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(args.seed + index), collate_fn=collate) for index, task in enumerate(TASKS)}
     iterators = {task: iter(loader) for task, loader in loaders.items()}
-    h1_loader = DataLoader(ExampleDataset(build_sequential_h1_table()), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(SEED + len(TASKS)), collate_fn=collate)
+    h1_loader = DataLoader(ExampleDataset(build_sequential_h1_table()), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(args.seed + len(TASKS)), collate_fn=collate)
     h1_iterator = iter(h1_loader)
-    transform_loader = DataLoader(TensorDataset(*(transform_train[key] for key in ("key_ids", "row_order", "values", "query_logical", "query_physical", "transform_ids", "lengths", "target_deltas", "targets"))), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(SEED + 10),)
+    transform_loader = DataLoader(TensorDataset(*(transform_train[key] for key in ("key_ids", "row_order", "values", "query_logical", "query_physical", "transform_ids", "lengths", "target_deltas", "targets"))), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(args.seed + 10),)
     transform_iterator = iter(transform_loader)
     model = load_approved_model()
     initial_state_match = initial_state_matches_original(model)
@@ -351,7 +352,7 @@ def main() -> int:
         raise RuntimeError("new C1 initialization does not match original step0 state_dict")
     initial_parameters = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
     optimizer = build_optimizer(model)
-    config: dict[str, object] = {"phase": "T1-U0-C1 joint", "seed": SEED, "steps": args.steps, "batch_size": BATCH_SIZE, "dimension": DIMENSION, "loss": "(six historical task losses + transformed loss) / 7", "reader": "one SharedMemoryReader; read_mode per instruction; historical workspace BLEND; transformed task SELECT", "transformed_query": "explicit P direction from sampled codebook key; no old Norm(W)+index route", "optimizer": "AdamW(lr=3e-4); weight_decay=1e-4 base decay, 0 corrector/typed; one step per superstep", "schedule": "sequential H1 replay 5:1 with composition; one batch each of six tasks plus transformed task", "initial_u0a": str(U0A_CHECKPOINT.relative_to(ROOT)), "initial_c0": str(C0_CHECKPOINT.relative_to(ROOT)), "train_manifests": transform_manifest(transform_train, TRAIN_TRANSFORM_SEED), "val_manifests": transform_manifest(transform_val, VAL_TRANSFORM_SEED), "test_manifests": transform_manifest(transform_test, TEST_TRANSFORM_SEED), "validation_steps": [0, 100, 500, 1000, "every 1000 thereafter"], "frozen_structural": ["core.workspace_correction"], "final_checkpoint": "final.pt", "best_checkpoint": "best.pt"}
+    config: dict[str, object] = {"phase": "T1-U0-C1 joint", "seed": args.seed, "steps": args.steps, "batch_size": BATCH_SIZE, "dimension": DIMENSION, "loss": "(six historical task losses + transformed loss) / 7", "reader": "one SharedMemoryReader; read_mode per instruction; historical workspace BLEND; transformed task SELECT", "transformed_query": "explicit P direction from sampled codebook key; no old Norm(W)+index route", "optimizer": "AdamW(lr=3e-4); weight_decay=1e-4 base decay, 0 corrector/typed; one step per superstep", "schedule": "sequential H1 replay 5:1 with composition; one batch each of six tasks plus transformed task", "initial_u0a": str(U0A_CHECKPOINT.relative_to(ROOT)), "initial_c0": str(C0_CHECKPOINT.relative_to(ROOT)), "train_manifests": transform_manifest(transform_train, TRAIN_TRANSFORM_SEED), "val_manifests": transform_manifest(transform_val, VAL_TRANSFORM_SEED), "test_manifests": transform_manifest(transform_test, TEST_TRANSFORM_SEED), "validation_steps": [0, 100, 500, 1000, "every 1000 thereafter"], "frozen_structural": ["core.workspace_correction"], "final_checkpoint": "final.pt", "best_checkpoint": "best.pt"}
     save_json(args.output_dir / "config.json", config)
     metrics_path = args.output_dir / "metrics.jsonl"
     latest_path = args.output_dir / "latest.pt"
@@ -455,7 +456,7 @@ def main() -> int:
         entry["update_l2"] += float(update.square().sum())
         if not torch.equal(parameter.detach(), initial_parameters[name]):
             entry["changed_parameter_count"] += 1
-    final = {"status": "completed", "seed": SEED, "steps": args.steps, "best_step": best_step, "best_validation_score": best_score, "elapsed_seconds": time.perf_counter() - started, "final_checkpoint": str((args.output_dir / "final.pt").relative_to(ROOT)), "best_checkpoint": str((args.output_dir / "best.pt").relative_to(ROOT)), "historical_test": final_historical, "transformed_real_reader": final_real, "transformed_oracle_reader": {key: value for key, value in final_oracle.items() if key != "predicted_deltas"}, "trainable_parameter_updates": update_groups}
+    final = {"status": "completed", "seed": args.seed, "steps": args.steps, "best_step": best_step, "best_validation_score": best_score, "elapsed_seconds": time.perf_counter() - started, "final_checkpoint": str((args.output_dir / "final.pt").relative_to(ROOT)), "best_checkpoint": str((args.output_dir / "best.pt").relative_to(ROOT)), "historical_test": final_historical, "transformed_real_reader": final_real, "transformed_oracle_reader": {key: value for key, value in final_oracle.items() if key != "predicted_deltas"}, "trainable_parameter_updates": update_groups}
     save_json(args.output_dir / "final.json", final)
     print(json.dumps(final, indent=2, sort_keys=True))
     return 0
