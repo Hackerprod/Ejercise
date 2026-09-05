@@ -186,7 +186,7 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
     for round_index in range(MAX_H):
         state = torch.zeros(samples, SLOT_COUNT, DIMENSION)
         state[:, SLOT_P, :] = memory_keys[torch.arange(samples), query_indices[:, round_index]]
-        result = reader.memory_reader(
+        result_soft = reader.memory_reader(
             state,
             memory_keys,
             memory_values,
@@ -196,11 +196,22 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
             torch.full((samples,), 511, dtype=torch.long),
             torch.full((samples,), SLOT_P, dtype=torch.long),
         )
-        real_payload[:, round_index, :] = result.payload
-        selected = result.attention.argmax(dim=-1)
-        hard_payload[:, round_index, :] = memory_values[torch.arange(samples), selected]
-        attention_max[:, round_index] = result.attention.max(dim=-1).values
-        attention_target[:, round_index] = result.attention.gather(1, query_indices[:, round_index].unsqueeze(-1)).squeeze(-1)
+        result_select = reader.memory_reader(
+            state,
+            memory_keys,
+            memory_values,
+            memory_types,
+            row_mask,
+            torch.full((samples,), OPCODE_IDS["ACCUM_W"], dtype=torch.long),
+            torch.full((samples,), 511, dtype=torch.long),
+            torch.full((samples,), SLOT_P, dtype=torch.long),
+            read_mode="SELECT",
+        )
+        real_payload[:, round_index, :] = result_soft.payload
+        hard_payload[:, round_index, :] = result_select.payload
+        selected = result_select.selected_index
+        attention_max[:, round_index] = result_select.attention_soft.max(dim=-1).values
+        attention_target[:, round_index] = result_select.attention_soft.gather(1, query_indices[:, round_index].unsqueeze(-1)).squeeze(-1)
         top1_accuracy[:, round_index] = selected == query_indices[:, round_index]
     active = torch.arange(MAX_H).view(1, -1) < lengths.view(-1, 1)
     reader_cosine = torch.nn.functional.cosine_similarity(real_payload, evidence, dim=-1)

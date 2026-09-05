@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from t1_trainability.unified import (
     OPCODE_IDS,
@@ -111,6 +112,45 @@ def test_reader_concentrates_on_exact_key_and_returns_p2_fixture_payload() -> No
     assert int(result.attention.argmax(dim=-1).item()) == 0
     assert float(result.attention[0, 0].detach()) > 0.99
     assert torch.cosine_similarity(result.payload, values[0, 0]).item() > 0.99
+
+
+def test_reader_select_returns_hard_payload_and_preserves_soft_diagnostics() -> None:
+    dimension = 8
+    reader = SharedMemoryReader(dimension, attention_temperature=8.0)
+    state = torch.zeros(1, 4, dimension)
+    state[0, SLOT_P, 0] = 1.0
+    keys = torch.zeros(1, 2, dimension)
+    keys[0, 0, 0] = 8.0
+    keys[0, 1, 1] = 8.0
+    values = torch.zeros_like(keys)
+    values[0, 0, 3] = 1.0
+    values[0, 1, 4] = 1.0
+    result = reader(
+        state,
+        keys,
+        values,
+        torch.full((1, 2), ROW_VEC, dtype=torch.long),
+        torch.ones(1, 2, dtype=torch.bool),
+        torch.tensor([OPCODE_IDS["ACCUM_W"]]),
+        torch.tensor([511]),
+        torch.tensor([SLOT_P]),
+        read_mode="SELECT",
+    )
+    assert result.read_mode == "SELECT"
+    assert result.selected_index.tolist() == [0]
+    assert torch.equal(result.payload, values[:, 0])
+    assert torch.equal(result.attention, result.attention_soft)
+    assert torch.equal(result.margin, result.selection_margin)
+
+
+def test_reader_select_rejects_non_accum_w_opcode() -> None:
+    reader = SharedMemoryReader(8)
+    state = torch.zeros(1, 4, 8)
+    keys = torch.zeros(1, 1, 8)
+    types = torch.full((1, 1), ROW_REL, dtype=torch.long)
+    mask = torch.ones(1, 1, dtype=torch.bool)
+    with pytest.raises(ValueError, match="only for ACCUM_W"):
+        reader(state, keys, keys, types, mask, torch.tensor([OPCODE_IDS["READ_P"]]), torch.tensor([511]), torch.tensor([SLOT_P]), read_mode="SELECT")
 
 
 def test_one_reader_call_per_read_round_and_none_for_alu_emit() -> None:

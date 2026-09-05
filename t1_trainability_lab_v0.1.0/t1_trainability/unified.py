@@ -46,14 +46,54 @@ READ_OPCODE_IDS = frozenset(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ReadResult:
     """Single shared-reader result for one recurrent round."""
 
     payload: Tensor
-    attention: Tensor
-    margin: Tensor
+    selected_index: Tensor
+    attention_soft: Tensor
+    selection_margin: Tensor
     valid: Tensor
+    read_mode: str
+
+    def __init__(
+        self,
+        payload: Tensor,
+        attention_soft: Tensor | None = None,
+        selection_margin: Tensor | None = None,
+        valid: Tensor | None = None,
+        selected_index: Tensor | None = None,
+        read_mode: str = "BLEND",
+        *,
+        attention: Tensor | None = None,
+        margin: Tensor | None = None,
+    ) -> None:
+        """Build result, retaining aliases for legacy ablation scripts."""
+        if attention_soft is None:
+            attention_soft = attention
+        if selection_margin is None:
+            selection_margin = margin
+        if attention_soft is None or selection_margin is None or valid is None:
+            raise TypeError("ReadResult requires attention_soft, selection_margin, and valid")
+        if selected_index is None:
+            selected_index = torch.full((payload.shape[0],), -1, dtype=torch.long, device=payload.device)
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(self, "selected_index", selected_index)
+        object.__setattr__(self, "attention_soft", attention_soft)
+        object.__setattr__(self, "selection_margin", selection_margin)
+        object.__setattr__(self, "valid", valid)
+        object.__setattr__(self, "read_mode", read_mode)
+
+    @property
+    def attention(self) -> Tensor:
+        """Legacy alias for diagnostic soft attention."""
+        return self.attention_soft
+
+    @property
+    def margin(self) -> Tensor:
+        """Legacy alias for selection margin."""
+        return self.selection_margin
 
 
 @dataclass(frozen=True)
@@ -148,7 +188,15 @@ class SharedMemoryReader(nn.Module):
         opcode: Tensor,
         immediate: Tensor,
         source_slot: Tensor,
+        read_mode: str = "BLEND",
     ) -> ReadResult:
+        if read_mode not in {"BLEND", "SELECT"}:
+            raise ValueError("read_mode must be SELECT or BLEND")
+        if read_mode == "SELECT":
+            opcode_long = opcode.to(dtype=torch.long)
+            read_opcodes = torch.isin(opcode_long, torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device))
+            if torch.any(read_opcodes & (opcode_long != OPCODE_IDS["ACCUM_W"])):
+                raise ValueError("SELECT is currently supported only for ACCUM_W")
         self.call_count += 1
         if state.ndim != 3 or state.shape[1] != SLOT_COUNT or state.shape[-1] != self.dimension:
             raise ValueError("state must have shape [B, 4, D]")
@@ -185,8 +233,13 @@ class SharedMemoryReader(nn.Module):
         attention = torch.softmax(safe_logits, dim=-1)
         attention = torch.where(legal, attention, torch.zeros_like(attention))
         attention = torch.nan_to_num(attention)
-        payload = torch.einsum("bm,bmd->bd", attention, values)
+        selected_index = safe_logits.argmax(dim=-1)
+        if read_mode == "SELECT":
+            payload = values.gather(1, selected_index.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
+        else:
+            payload = torch.einsum("bm,bmd->bd", attention, values)
         payload = torch.where(valid.unsqueeze(-1), payload, torch.zeros_like(payload))
+        selected_index = torch.where(valid, selected_index, torch.full_like(selected_index, -1))
 
         sorted_logits = safe_logits.sort(dim=-1, descending=True).values
         top1 = sorted_logits[:, 0]
@@ -194,7 +247,14 @@ class SharedMemoryReader(nn.Module):
         row_counts = legal.sum(dim=1)
         margin = torch.where(row_counts > 1, top1 - top2, top1)
         margin = torch.where(valid, margin, torch.zeros_like(margin))
-        return ReadResult(payload=payload, attention=attention, margin=margin, valid=valid)
+        return ReadResult(
+            payload=payload,
+            selected_index=selected_index,
+            attention_soft=attention,
+            selection_margin=margin,
+            valid=valid,
+            read_mode=read_mode,
+        )
 
 
 class SharedRecurrentCore(nn.Module):
@@ -463,6 +523,7 @@ class UnifiedT1U0(nn.Module):
         source_slot: Tensor,
         destination_slot: Tensor,
         presence_mask: Tensor,
+        read_mode: str = "BLEND",
     ) -> tuple[Tensor, CandidateState, ReadResult]:
         """Execute one auditable READ → COMPUTE → COMMIT round."""
 
@@ -480,6 +541,7 @@ class UnifiedT1U0(nn.Module):
                 opcode,
                 immediate,
                 source_slot,
+                read_mode=read_mode,
             )
         else:
             if immediate.ndim == 2:
@@ -492,6 +554,7 @@ class UnifiedT1U0(nn.Module):
                 attention=torch.zeros((batch, memory_width), dtype=state.dtype, device=state.device),
                 margin=torch.zeros(batch, dtype=state.dtype, device=state.device),
                 valid=torch.zeros(batch, dtype=torch.bool, device=state.device),
+                read_mode=read_mode,
             )
         opcode_embedding = self.opcode_embedding(opcode.to(dtype=torch.long))
         immediate_embedding = self.memory_reader._batch_vector(
