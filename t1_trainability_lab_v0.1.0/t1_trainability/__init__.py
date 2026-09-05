@@ -9,6 +9,16 @@ from .data import (
     generate_all_datasets,
 )
 from .model import RecurrentCore
+from .unified import (
+    OPCODE_IDS,
+    OPCODES,
+    CandidateState,
+    ReadResult,
+    SharedMemoryReader,
+    SharedRecurrentCore,
+    TypedCommit,
+    UnifiedT1U0,
+)
 
 __all__ = [
     "DEFAULT_COUNTS",
@@ -16,7 +26,15 @@ __all__ = [
     "OUTPUT_CARDINALITIES",
     "OutputReader",
     "RecurrentCore",
+    "CandidateState",
+    "OPCODE_IDS",
+    "OPCODES",
+    "ReadResult",
+    "SharedMemoryReader",
+    "SharedRecurrentCore",
     "TASK_NAMES",
     "TokenVocabulary",
+    "TypedCommit",
+    "UnifiedT1U0",
     "generate_all_datasets",
 ]
