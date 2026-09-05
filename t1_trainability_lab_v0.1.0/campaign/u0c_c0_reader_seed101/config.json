@@ -4,7 +4,9 @@
     "oracle_exact_evaluator",
     "oracle_learned_c0",
     "real_reader_exact_evaluator",
-    "real_reader_learned_c0"
+    "real_reader_learned_c0",
+    "real_reader_top1_exact_evaluator",
+    "real_reader_top1_learned_c0"
   ],
   "dataset_seed": 40404,
   "phase": "T1-U0-C0-reader",

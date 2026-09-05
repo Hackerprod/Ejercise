@@ -1464,6 +1464,738 @@
         "passes_final_gate": false
       },
       "name": "real reader + learned correction"
+    },
+    "real_reader_top1_exact_evaluator": {
+      "epsilon_delta_by_h_round_transform": {
+        "1": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 522
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 510
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 506
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 510
+            }
+          }
+        },
+        "2": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 517
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 538
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 495
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 498
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 532
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 504
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 496
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 516
+            }
+          }
+        },
+        "4": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 524
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 493
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 521
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 510
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 544
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 513
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 492
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 499
+            }
+          },
+          "3": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 524
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 522
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 522
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 480
+            }
+          },
+          "4": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 486
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 509
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 531
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 522
+            }
+          }
+        },
+        "6": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 527
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 504
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 502
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 515
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 527
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 486
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 530
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 505
+            }
+          },
+          "3": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 475
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 513
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 559
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 501
+            }
+          },
+          "4": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 532
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 487
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 497
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 532
+            }
+          },
+          "5": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 507
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 499
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 516
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 526
+            }
+          },
+          "6": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 517
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 518
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 501
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0,
+              "samples": 512
+            }
+          }
+        }
+      },
+      "final_by_h": {
+        "1": {
+          "cosine": 1.0,
+          "normalized_error": 0.0,
+          "samples": 2048
+        },
+        "2": {
+          "cosine": 1.0,
+          "normalized_error": 0.0,
+          "samples": 2048
+        },
+        "4": {
+          "cosine": 1.0,
+          "normalized_error": 0.0,
+          "samples": 2048
+        },
+        "6": {
+          "cosine": 1.0,
+          "normalized_error": 0.0,
+          "samples": 2048
+        }
+      },
+      "final_by_h_final_transform": {
+        "1": {
+          "circular_shift": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 522
+          },
+          "identity": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 510
+          },
+          "negation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 506
+          },
+          "pair_signed_permutation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 510
+          }
+        },
+        "2": {
+          "circular_shift": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 532
+          },
+          "identity": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 504
+          },
+          "negation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 496
+          },
+          "pair_signed_permutation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 516
+          }
+        },
+        "4": {
+          "circular_shift": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 486
+          },
+          "identity": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 509
+          },
+          "negation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 531
+          },
+          "pair_signed_permutation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 522
+          }
+        },
+        "6": {
+          "circular_shift": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 517
+          },
+          "identity": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 518
+          },
+          "negation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 501
+          },
+          "pair_signed_permutation": {
+            "cosine": 1.0,
+            "normalized_error": 0.0,
+            "samples": 512
+          }
+        }
+      },
+      "gate": {
+        "max_epsilon_delta_relative": 0.0,
+        "max_final_normalized_error": 0.0,
+        "min_final_cosine": 1.0,
+        "passes_delta_gate": true,
+        "passes_final_gate": true
+      },
+      "name": "real reader top1 + exact transform evaluator"
+    },
+    "real_reader_top1_learned_c0": {
+      "epsilon_delta_by_h_round_transform": {
+        "1": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007523142267018557,
+              "samples": 522
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.002211405197158456,
+              "samples": 510
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.00873130839318037,
+              "samples": 506
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007041650824248791,
+              "samples": 510
+            }
+          }
+        },
+        "2": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007469929754734039,
+              "samples": 517
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022168902214616537,
+              "samples": 538
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008775869384407997,
+              "samples": 495
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007080396171659231,
+              "samples": 498
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007519668899476528,
+              "samples": 532
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022330216597765684,
+              "samples": 504
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008703346364200115,
+              "samples": 496
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007115880958735943,
+              "samples": 516
+            }
+          }
+        },
+        "4": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007737115956842899,
+              "samples": 524
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022062731441110373,
+              "samples": 493
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008771462365984917,
+              "samples": 521
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007116667926311493,
+              "samples": 510
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007558152079582214,
+              "samples": 544
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.002231522696092725,
+              "samples": 513
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008817847818136215,
+              "samples": 492
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007070499937981367,
+              "samples": 499
+            }
+          },
+          "3": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007547042332589626,
+              "samples": 524
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022346372716128826,
+              "samples": 522
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008653642609715462,
+              "samples": 522
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0070959716103971004,
+              "samples": 480
+            }
+          },
+          "4": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.00746497418731451,
+              "samples": 486
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022348156198859215,
+              "samples": 509
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008814284577965736,
+              "samples": 531
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007147766184061766,
+              "samples": 522
+            }
+          }
+        },
+        "6": {
+          "1": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007448112592101097,
+              "samples": 527
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022185861598700285,
+              "samples": 504
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008789092302322388,
+              "samples": 502
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007094975560903549,
+              "samples": 515
+            }
+          },
+          "2": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007657475303858519,
+              "samples": 527
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022247103042900562,
+              "samples": 486
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008798178285360336,
+              "samples": 530
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007138079032301903,
+              "samples": 505
+            }
+          },
+          "3": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007508100010454655,
+              "samples": 475
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.002216071356087923,
+              "samples": 513
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008795652538537979,
+              "samples": 559
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007109266240149736,
+              "samples": 501
+            }
+          },
+          "4": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.00768401101231575,
+              "samples": 532
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.002225129399448633,
+              "samples": 487
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008822220377624035,
+              "samples": 497
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007139168679714203,
+              "samples": 532
+            }
+          },
+          "5": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007548565044999123,
+              "samples": 507
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.0022490513511002064,
+              "samples": 499
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008768527768552303,
+              "samples": 516
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.007082785479724407,
+              "samples": 526
+            }
+          },
+          "6": {
+            "circular_shift": {
+              "epsilon_delta_relative": 0.007515410427004099,
+              "samples": 517
+            },
+            "identity": {
+              "epsilon_delta_relative": 0.002237171633169055,
+              "samples": 518
+            },
+            "negation": {
+              "epsilon_delta_relative": 0.008821617811918259,
+              "samples": 501
+            },
+            "pair_signed_permutation": {
+              "epsilon_delta_relative": 0.0071908412501215935,
+              "samples": 512
+            }
+          }
+        }
+      },
+      "final_by_h": {
+        "1": {
+          "cosine": 0.9999767541885376,
+          "normalized_error": 0.0063789947889745235,
+          "samples": 2048
+        },
+        "2": {
+          "cosine": 0.9999759793281555,
+          "normalized_error": 0.006830975413322449,
+          "samples": 2048
+        },
+        "4": {
+          "cosine": 0.9999741315841675,
+          "normalized_error": 0.007107619196176529,
+          "samples": 2048
+        },
+        "6": {
+          "cosine": 0.9999730587005615,
+          "normalized_error": 0.007266726344823837,
+          "samples": 2048
+        }
+      },
+      "final_by_h_final_transform": {
+        "1": {
+          "circular_shift": {
+            "cosine": 0.9999715685844421,
+            "normalized_error": 0.007523142267018557,
+            "samples": 522
+          },
+          "identity": {
+            "cosine": 0.9999980330467224,
+            "normalized_error": 0.002211405197158456,
+            "samples": 510
+          },
+          "negation": {
+            "cosine": 0.999962329864502,
+            "normalized_error": 0.00873130839318037,
+            "samples": 506
+          },
+          "pair_signed_permutation": {
+            "cosine": 0.9999750256538391,
+            "normalized_error": 0.007041650824248791,
+            "samples": 510
+          }
+        },
+        "2": {
+          "circular_shift": {
+            "cosine": 0.9999722242355347,
+            "normalized_error": 0.007318317424505949,
+            "samples": 532
+          },
+          "identity": {
+            "cosine": 0.9999837279319763,
+            "normalized_error": 0.005675019230693579,
+            "samples": 504
+          },
+          "negation": {
+            "cosine": 0.9999732375144958,
+            "normalized_error": 0.007259273435920477,
+            "samples": 496
+          },
+          "pair_signed_permutation": {
+            "cosine": 0.9999746680259705,
+            "normalized_error": 0.007045898120850325,
+            "samples": 516
+          }
+        },
+        "4": {
+          "circular_shift": {
+            "cosine": 0.999972939491272,
+            "normalized_error": 0.007263613399118185,
+            "samples": 486
+          },
+          "identity": {
+            "cosine": 0.9999802112579346,
+            "normalized_error": 0.006221214309334755,
+            "samples": 509
+          },
+          "negation": {
+            "cosine": 0.999970018863678,
+            "normalized_error": 0.007701778784394264,
+            "samples": 531
+          },
+          "pair_signed_permutation": {
+            "cosine": 0.9999733567237854,
+            "normalized_error": 0.007222311571240425,
+            "samples": 522
+          }
+        },
+        "6": {
+          "circular_shift": {
+            "cosine": 0.9999727010726929,
+            "normalized_error": 0.00733955530449748,
+            "samples": 517
+          },
+          "identity": {
+            "cosine": 0.9999766945838928,
+            "normalized_error": 0.006740059703588486,
+            "samples": 518
+          },
+          "negation": {
+            "cosine": 0.9999703168869019,
+            "normalized_error": 0.0076499623246490955,
+            "samples": 501
+          },
+          "pair_signed_permutation": {
+            "cosine": 0.9999724626541138,
+            "normalized_error": 0.007351023145020008,
+            "samples": 512
+          }
+        }
+      },
+      "gate": {
+        "max_epsilon_delta_relative": 0.008822220377624035,
+        "max_final_normalized_error": 0.00873130839318037,
+        "min_final_cosine": 0.999962329864502,
+        "passes_delta_gate": true,
+        "passes_final_gate": true
+      },
+      "name": "real reader top1 + learned correction"
     }
   },
   "dataset_seed": 40404,
@@ -1503,7 +2235,46 @@
       "2": 0.9999766945838928,
       "4": 0.9999763369560242,
       "6": 0.9999763369560242
-    }
+    },
+    "top1_accuracy_by_h_round": {
+      "1": {
+        "1": 1.0
+      },
+      "2": {
+        "1": 1.0,
+        "2": 1.0
+      },
+      "4": {
+        "1": 1.0,
+        "2": 1.0,
+        "3": 1.0,
+        "4": 1.0
+      },
+      "6": {
+        "1": 1.0,
+        "2": 1.0,
+        "3": 1.0,
+        "4": 1.0,
+        "5": 1.0,
+        "6": 1.0
+      }
+    },
+    "top1_accuracy_over_active_rounds": 1.0
+  },
+  "reader_provenance": {
+    "all_equal": true,
+    "checkpoint": "campaign\\u0a_iso_clean_seed101_12000\\best.pt",
+    "compared_groups": [
+      "memory_reader.query",
+      "memory_reader.input_norm",
+      "memory_reader.condition_projection",
+      "all existing embeddings",
+      "token_embedding/codebook"
+    ],
+    "compared_tensor_count": 12,
+    "max_abs_diff": 0.0,
+    "mismatches": [],
+    "strict_load": true
   },
   "seed": 101,
   "status": "completed",

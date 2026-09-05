@@ -1,0 +1,71 @@
+{
+  "reader_provenance": {
+    "all_equal": true,
+    "checkpoint": "campaign\\u0a_iso_clean_seed101_12000\\best.pt",
+    "compared_groups": [
+      "memory_reader.query",
+      "memory_reader.input_norm",
+      "memory_reader.condition_projection",
+      "all existing embeddings",
+      "token_embedding/codebook"
+    ],
+    "compared_tensor_count": 12,
+    "max_abs_diff": 0.0,
+    "mismatches": [],
+    "strict_load": true
+  },
+  "soft_vs_top1_gates": {
+    "real_reader_exact_evaluator": {
+      "max_epsilon_delta_relative": 0.0093258460983634,
+      "max_final_normalized_error": 0.013157413341104984,
+      "min_final_cosine": 0.9999372959136963,
+      "passes_delta_gate": true,
+      "passes_final_gate": false
+    },
+    "real_reader_learned_c0": {
+      "max_epsilon_delta_relative": 0.01431015320122242,
+      "max_final_normalized_error": 0.015413273125886917,
+      "min_final_cosine": 0.9999091029167175,
+      "passes_delta_gate": false,
+      "passes_final_gate": false
+    },
+    "real_reader_top1_exact_evaluator": {
+      "max_epsilon_delta_relative": 0.0,
+      "max_final_normalized_error": 0.0,
+      "min_final_cosine": 1.0,
+      "passes_delta_gate": true,
+      "passes_final_gate": true
+    },
+    "real_reader_top1_learned_c0": {
+      "max_epsilon_delta_relative": 0.008822220377624035,
+      "max_final_normalized_error": 0.00873130839318037,
+      "min_final_cosine": 0.999962329864502,
+      "passes_delta_gate": true,
+      "passes_final_gate": true
+    }
+  },
+  "top1_accuracy_by_h_round": {
+    "1": {
+      "1": 1.0
+    },
+    "2": {
+      "1": 1.0,
+      "2": 1.0
+    },
+    "4": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0
+    },
+    "6": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0
+    }
+  },
+  "top1_accuracy_over_active_rounds": 1.0
+}

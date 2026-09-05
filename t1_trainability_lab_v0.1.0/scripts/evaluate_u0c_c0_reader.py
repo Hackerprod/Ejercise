@@ -123,6 +123,35 @@ def load_reader() -> UnifiedT1U0:
     return model.eval()
 
 
+def audit_reader_provenance(reader: UnifiedT1U0) -> dict[str, object]:
+    checkpoint = torch.load(READER_CHECKPOINT, map_location="cpu", weights_only=False)
+    checkpoint_state = checkpoint["model"]
+    loaded_state = reader.state_dict()
+    names = [
+        name for name in checkpoint_state
+        if name.startswith("memory_reader.")
+        or "embedding" in name
+        or name == "slot_type_embeddings"
+        or name.startswith("commit.register_codebook")
+    ]
+    mismatches: list[str] = []
+    max_abs_diff = 0.0
+    for name in names:
+        if name not in loaded_state or not torch.equal(loaded_state[name], checkpoint_state[name]):
+            mismatches.append(name)
+            if name in loaded_state:
+                max_abs_diff = max(max_abs_diff, float((loaded_state[name] - checkpoint_state[name]).abs().max()))
+    return {
+        "checkpoint": str(READER_CHECKPOINT.relative_to(ROOT)),
+        "strict_load": True,
+        "compared_tensor_count": len(names),
+        "all_equal": not mismatches,
+        "max_abs_diff": max_abs_diff,
+        "mismatches": mismatches,
+        "compared_groups": ["memory_reader.query", "memory_reader.input_norm", "memory_reader.condition_projection", "all existing embeddings", "token_embedding/codebook"],
+    }
+
+
 def load_c0() -> C0OracleModel:
     model = C0OracleModel(DIMENSION, train_residual_network=True)
     checkpoint = torch.load(C0_CHECKPOINT, map_location="cpu", weights_only=False)
@@ -133,7 +162,7 @@ def load_c0() -> C0OracleModel:
 
 
 @torch.no_grad()
-def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_ids: Tensor, lengths: Tensor) -> tuple[Tensor, dict[str, object]]:
+def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_ids: Tensor, lengths: Tensor) -> tuple[Tensor, Tensor, dict[str, object]]:
     samples = evidence.shape[0]
     row_count = len(MEMORY_ROW_IDS)
     row_ids = torch.tensor(MEMORY_ROW_IDS, dtype=torch.long)
@@ -149,8 +178,10 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
     memory_types = torch.full((samples, row_count), ROW_VEC, dtype=torch.long)
     row_mask = torch.ones((samples, row_count), dtype=torch.bool)
     real_payload = torch.zeros_like(evidence)
+    hard_payload = torch.zeros_like(evidence)
     attention_max = torch.zeros((samples, MAX_H))
     attention_target = torch.zeros((samples, MAX_H))
+    top1_accuracy = torch.zeros((samples, MAX_H), dtype=torch.bool)
     for round_index in range(MAX_H):
         state = torch.zeros(samples, SLOT_COUNT, DIMENSION)
         state[:, SLOT_P, :] = memory_keys[torch.arange(samples), query_indices[:, round_index]]
@@ -165,8 +196,11 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
             torch.full((samples,), SLOT_P, dtype=torch.long),
         )
         real_payload[:, round_index, :] = result.payload
+        selected = result.attention.argmax(dim=-1)
+        hard_payload[:, round_index, :] = memory_values[torch.arange(samples), selected]
         attention_max[:, round_index] = result.attention.max(dim=-1).values
         attention_target[:, round_index] = result.attention.gather(1, query_indices[:, round_index].unsqueeze(-1)).squeeze(-1)
+        top1_accuracy[:, round_index] = selected == query_indices[:, round_index]
     active = torch.arange(MAX_H).view(1, -1) < lengths.view(-1, 1)
     reader_cosine = torch.nn.functional.cosine_similarity(real_payload, evidence, dim=-1)
     diagnostics = {
@@ -176,10 +210,14 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
         },
         "attention_max_by_h": {str(h): float(attention_max[lengths == h, :h].mean()) for h in H_VALUES},
         "attention_target_by_h": {str(h): float(attention_target[lengths == h, :h].mean()) for h in H_VALUES},
+        "top1_accuracy_by_h_round": {
+            str(h): {str(round_index + 1): float(top1_accuracy[lengths == h, round_index].float().mean()) for round_index in range(h)} for h in H_VALUES
+        },
+        "top1_accuracy_over_active_rounds": float(top1_accuracy[active].float().mean()),
         "payload_cosine_min": float(reader_cosine[active].min()),
         "payload_cosine_max": float(reader_cosine[active].max()),
     }
-    return real_payload, diagnostics
+    return real_payload, hard_payload, diagnostics
 
 
 def main() -> int:
@@ -197,7 +235,8 @@ def main() -> int:
     transform_ids, lengths = split["transform_ids"], split["lengths"]
     reader = load_reader()
     c0_model = load_c0()
-    real_payload, reader_diagnostics = make_real_reader_payload(reader, evidence, transform_ids, lengths)
+    provenance = audit_reader_provenance(reader)
+    real_payload, hard_payload, reader_diagnostics = make_real_reader_payload(reader, evidence, transform_ids, lengths)
     oracle_deltas, oracle_target = external_targets(evidence, transform_ids, lengths)
     real_deltas, real_target = external_targets(real_payload, transform_ids, lengths)
 
@@ -205,12 +244,16 @@ def main() -> int:
     oracle_learned_output, oracle_learned_predicted, _ = run_sequence(c0_model, evidence, transform_ids, lengths)
     real_exact_output, _ = transform_exact(real_payload, transform_ids, lengths)
     real_learned_output, real_learned_predicted, _ = run_sequence(c0_model, real_payload, transform_ids, lengths)
+    hard_exact_output, _ = transform_exact(hard_payload, transform_ids, lengths)
+    hard_learned_output, hard_learned_predicted, _ = run_sequence(c0_model, hard_payload, transform_ids, lengths)
 
     results = {
         "oracle_exact_evaluator": summarize("oracle + exact transform evaluator", oracle_exact_output, oracle_deltas, oracle_target, oracle_deltas, transform_ids, lengths),
         "oracle_learned_c0": summarize("oracle + learned correction (official C0-oracle)", oracle_learned_output, oracle_learned_predicted, oracle_target, oracle_deltas, transform_ids, lengths),
         "real_reader_exact_evaluator": summarize("real reader + exact transform evaluator", real_exact_output, real_deltas, oracle_target, oracle_deltas, transform_ids, lengths),
         "real_reader_learned_c0": summarize("real reader + learned correction", real_learned_output, real_learned_predicted, oracle_target, oracle_deltas, transform_ids, lengths),
+        "real_reader_top1_exact_evaluator": summarize("real reader top1 + exact transform evaluator", hard_exact_output, external_targets(hard_payload, transform_ids, lengths)[0], oracle_target, oracle_deltas, transform_ids, lengths),
+        "real_reader_top1_learned_c0": summarize("real reader top1 + learned correction", hard_learned_output, hard_learned_predicted, oracle_target, oracle_deltas, transform_ids, lengths),
     }
     real_exact_gate = results["real_reader_exact_evaluator"]["gate"]
     result = {
@@ -224,6 +267,7 @@ def main() -> int:
         "transform_names": TRANSFORM_NAMES,
         "h_values": H_VALUES,
         "reader_diagnostics": reader_diagnostics,
+        "reader_provenance": provenance,
         "conditions": results,
         "training_stop_decision": {
             "real_reader_exact_condition_fails_gate": not bool(real_exact_gate["passes_final_gate"]),
@@ -241,6 +285,19 @@ def main() -> int:
         "conditions": list(results),
         "reader": "real frozen U0-A reader; no retraining",
         "target": "external raw memory value transformed by generator-only A_tau",
+    })
+    save_json(args.output_dir / "reader_audit.json", {
+        "reader_provenance": provenance,
+        "top1_accuracy_by_h_round": reader_diagnostics["top1_accuracy_by_h_round"],
+        "top1_accuracy_over_active_rounds": reader_diagnostics["top1_accuracy_over_active_rounds"],
+        "soft_vs_top1_gates": {
+            key: results[key]["gate"] for key in (
+                "real_reader_exact_evaluator",
+                "real_reader_learned_c0",
+                "real_reader_top1_exact_evaluator",
+                "real_reader_top1_learned_c0",
+            )
+        },
     })
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
