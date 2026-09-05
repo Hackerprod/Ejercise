@@ -80,7 +80,7 @@ def evaluate_sequential(model: UnifiedT1U0, examples: list[object], teacher_forc
         for round_index in range(6):
             if teacher_forced and round_index > 0:
                 targets = data["intermediate_target_ids"][:, round_index - 1]
-                active = targets >= 0
+                active = (targets >= 0) & (data["opcodes"][:, round_index] != OPCODE_IDS["EMIT"])
                 state[:, SLOT_R, :] = torch.where(active.unsqueeze(-1), model.token_embedding(targets.clamp_min(0)), state[:, SLOT_R, :])
             state, _, _ = model.step(
                 state,
@@ -119,7 +119,7 @@ def evaluate_by_final_operation(model: UnifiedT1U0, examples: list[object], teac
         for round_index in range(6):
             if teacher_forced and round_index > 0:
                 targets = data["intermediate_target_ids"][:, round_index - 1]
-                active = targets >= 0
+                active = (targets >= 0) & (data["opcodes"][:, round_index] != OPCODE_IDS["EMIT"])
                 state[:, SLOT_R, :] = torch.where(active.unsqueeze(-1), model.token_embedding(targets.clamp_min(0)), state[:, SLOT_R, :])
             state, _, _ = model.step(
                 state,
@@ -200,6 +200,7 @@ def main() -> int:
         "phase": "T1-U0-B4",
         "ablation": "remove ALU softmax normalization; write unnormalized logits @ value codebook as continuous R",
         "implementation_note": "U0-A operation heads emit 32 logits; unnormalized logits @ D-dimensional value basis is the checkpoint-compatible analogue of historical D-dimensional continuous heads.",
+        "evaluation_note": "Teacher forcing injects prior intermediate targets only before non-EMIT rounds; padded EMIT rounds preserve the model's preceding output.",
         "training_performed": False,
         "seeds": list(args.seeds),
         "runs": runs,

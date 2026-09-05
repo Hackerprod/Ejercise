@@ -29,11 +29,18 @@ from train_u0a import (  # noqa: E402
     evaluate_accuracy,
     evaluate_all,
 )
-from t1_trainability.unified import OPCODE_IDS, TypedCommit, UnifiedT1U0  # noqa: E402
+from t1_trainability.unified import (  # noqa: E402
+    CandidateState,
+    OPCODE_IDS,
+    READ_OPCODE_IDS,
+    ReadResult,
+    SLOT_R,
+    UnifiedT1U0,
+)
 
 
-class B5CyclicHeadCommit(TypedCommit):
-    """Dispatch each ALU opcode to next operation's trained head."""
+class B5AdapterOpcodePermutationModel(UnifiedT1U0):
+    """Feed cyclically permuted ALU opcode identity into shared ALU adapter."""
 
     HEAD_PERMUTATION = {
         "ALU_ADD": "ALU_SUB",
@@ -41,26 +48,82 @@ class B5CyclicHeadCommit(TypedCommit):
         "ALU_MUL": "ALU_ADD",
     }
 
-    def select_alu_logits(self, register: torch.Tensor, opcode: torch.Tensor) -> torch.Tensor:
-        if register.ndim != 2 or register.shape[-1] != self.dimension or opcode.shape != (register.shape[0],):
-            raise ValueError("register/opcode shapes invalid")
-        selected = torch.zeros(register.shape[0], 32, dtype=register.dtype, device=register.device)
-        for target_name, source_name in self.HEAD_PERMUTATION.items():
-            indices = (opcode == OPCODE_IDS[target_name]).nonzero(as_tuple=False).flatten()
-            if indices.numel():
-                selected = selected.index_copy(
-                    0,
-                    indices,
-                    self.operation_heads[source_name](register.index_select(0, indices)),
-                )
-        return selected
+    def permute_adapter_opcode(self, opcode: torch.Tensor) -> torch.Tensor:
+        adapter_opcode = opcode.clone()
+        for source_name, target_name in self.HEAD_PERMUTATION.items():
+            adapter_opcode = torch.where(
+                opcode == OPCODE_IDS[source_name],
+                torch.full_like(opcode, OPCODE_IDS[target_name]),
+                adapter_opcode,
+            )
+        return adapter_opcode
+
+    def step(self, state, memory_keys, memory_values, memory_types, row_mask, opcode, immediate, source_slot, destination_slot, presence_mask):  # type: ignore[no-untyped-def]
+        """Run shared core under fake ALU opcode, then commit with real opcode."""
+        batch = state.shape[0]
+        if opcode.shape != (batch,):
+            raise ValueError("opcode must have shape [B]")
+        adapter_opcode = self.permute_adapter_opcode(opcode)
+        read_required = torch.isin(opcode.to(dtype=torch.long), torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device)).any()
+        if read_required:
+            read_result = self.memory_reader(
+                state,
+                memory_keys,
+                memory_values,
+                memory_types,
+                row_mask,
+                opcode,
+                immediate,
+                source_slot,
+            )
+        else:
+            if immediate.ndim == 2:
+                payload = torch.zeros((batch, self.dimension), dtype=state.dtype, device=state.device)
+            else:
+                payload = torch.zeros_like(state[:, 0, :])
+            memory_width = memory_types.shape[-1]
+            read_result = ReadResult(
+                payload=payload,
+                attention=torch.zeros((batch, memory_width), dtype=state.dtype, device=state.device),
+                margin=torch.zeros(batch, dtype=state.dtype, device=state.device),
+                valid=torch.zeros(batch, dtype=torch.bool, device=state.device),
+            )
+        opcode_embedding = self.opcode_embedding(adapter_opcode.to(dtype=torch.long))
+        immediate_embedding = self.memory_reader._batch_vector(
+            immediate,
+            dimension=self.dimension,
+            embedding=self.immediate_embedding,
+        )
+        normalized = self.normalize_state(state, presence_mask)
+        candidates = self.core(
+            normalized,
+            opcode_embedding,
+            immediate_embedding,
+            read_result.payload,
+            self.slot_type_embeddings,
+            presence_mask,
+            opcode=adapter_opcode,
+        )
+        alu_logits = self.commit.select_alu_logits(candidates.values[:, SLOT_R, :], opcode)
+        register_codebook = self.token_embedding(torch.arange(288, 320, device=state.device))
+        next_state = self.commit(
+            state,
+            candidates,
+            read_result,
+            opcode,
+            destination_slot,
+            presence_mask,
+            register_codebook=register_codebook,
+            alu_logits=alu_logits,
+        )
+        return next_state, CandidateState(candidates.values, alu_logits), read_result
 
 
 def load_model(checkpoint: Path, ablated: bool) -> UnifiedT1U0:
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     model = UnifiedT1U0(64)
     if ablated:
-        model.commit = B5CyclicHeadCommit(64)
+        model = B5AdapterOpcodePermutationModel(64)
     model.load_state_dict(payload["model"], strict=False)
     model.eval()
     return model
@@ -85,7 +148,7 @@ def b5_summary(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=ROOT / "campaign" / "u0b_b5_head_permutation.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "campaign" / "u0b_b5_adapter_opcode_permutation.json")
     parser.add_argument("--seeds", type=int, nargs="+", default=list(SEEDS))
     args = parser.parse_args()
 
@@ -148,8 +211,9 @@ def main() -> int:
 
     result = {
         "phase": "T1-U0-B5",
-        "ablation": "cyclic ALU head permutation: ADD->SUB, SUB->MUL, MUL->ADD",
-        "implementation_note": "Opcode semantics and all non-ALU paths remain unchanged; only TypedCommit ALU head dispatch is permuted at runtime.",
+        "ablation": "cyclic ALU adapter opcode permutation: ADD->SUB, SUB->MUL, MUL->ADD",
+        "implementation_note": "The fake cyclic opcode and its embedding enter SharedRecurrentCore/ALU adapters; TypedCommit retains real opcode and corresponding real operation head. Non-ALU paths remain unchanged.",
+        "prior_attempt": "The TypedCommit-only permutation from commit 7b555df was invalidated by design after diagnosis; this artifact replaces it.",
         "training_performed": False,
         "seeds": list(args.seeds),
         "runs": runs,
