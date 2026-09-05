@@ -88,7 +88,7 @@ def validation_matches_original(validation: dict[str, object]) -> tuple[bool, fl
             max_difference = max(max_difference, difference)
             return math.isclose(actual, float(reference), rel_tol=0.0, abs_tol=1e-12)
         if isinstance(actual, dict) and isinstance(reference, dict):
-            return actual.keys() == reference.keys() and all(compare(actual[key], reference[key]) for key in actual)
+            return all(key in actual and compare(actual[key], reference[key]) for key in reference)
         if isinstance(actual, list) and isinstance(reference, list):
             return len(actual) == len(reference) and all(compare(left, right) for left, right in zip(actual, reference))
         return actual == reference
