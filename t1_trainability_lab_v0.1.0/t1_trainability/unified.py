@@ -420,6 +420,7 @@ class TypedCommit(nn.Module):
         presence_mask: Tensor,
         register_codebook: Tensor | None = None,
         alu_logits: Tensor | None = None,
+        workspace_correction: Tensor | None = None,
     ) -> Tensor:
         values = candidates.values if isinstance(candidates, CandidateState) else candidates
         if state.ndim != 3 or state.shape[1:] != (SLOT_COUNT, self.dimension) or values.shape != state.shape:
@@ -429,6 +430,8 @@ class TypedCommit(nn.Module):
             raise ValueError("read_result payload must have shape [B, D]")
         if opcode.shape != (batch,) or destination_slot.shape != (batch,) or presence_mask.shape != state.shape[:2]:
             raise ValueError("opcode, destination_slot, and presence_mask have invalid shapes")
+        if workspace_correction is not None and workspace_correction.shape != (batch, self.dimension):
+            raise ValueError("workspace_correction must have shape [B, D]")
         destination = F.one_hot(destination_slot.to(dtype=torch.long), num_classes=SLOT_COUNT).to(dtype=torch.bool).unsqueeze(-1)
         next_state = state
 
@@ -440,6 +443,8 @@ class TypedCommit(nn.Module):
         write(opcode == OPCODE_IDS["READ_P"], read_result.payload)
         write(opcode == OPCODE_IDS["READ_E"], read_result.payload)
         workspace = state[:, SLOT_W, :] + read_result.payload + values[:, SLOT_W, :]
+        if workspace_correction is not None:
+            workspace = workspace + workspace_correction
         write(opcode == OPCODE_IDS["ACCUM_W"], workspace)
 
         is_alu = torch.zeros(batch, dtype=torch.bool, device=opcode.device)
@@ -552,6 +557,8 @@ class UnifiedT1U0(nn.Module):
         destination_slot: Tensor,
         presence_mask: Tensor,
         read_mode: str | Tensor = "BLEND",
+        transform_id: Tensor | None = None,
+        correction_module: nn.Module | None = None,
     ) -> tuple[Tensor, CandidateState, ReadResult]:
         """Execute one auditable READ → COMPUTE → COMMIT round."""
 
@@ -584,6 +591,13 @@ class UnifiedT1U0(nn.Module):
                 valid=torch.zeros(batch, dtype=torch.bool, device=state.device),
                 read_mode=read_mode,
             )
+        if (transform_id is None) != (correction_module is None):
+            raise ValueError("transform_id and correction_module must be provided together")
+        workspace_correction = None
+        if transform_id is not None and correction_module is not None:
+            if transform_id.shape != (batch,):
+                raise ValueError("transform_id must have shape [B]")
+            workspace_correction = correction_module(read_result.payload, state[:, SLOT_W, :], transform_id)
         opcode_embedding = self.opcode_embedding(opcode.to(dtype=torch.long))
         immediate_embedding = self.memory_reader._batch_vector(
             immediate,
@@ -611,5 +625,6 @@ class UnifiedT1U0(nn.Module):
             presence_mask,
             register_codebook=register_codebook,
             alu_logits=alu_logits,
+            workspace_correction=workspace_correction,
         )
         return next_state, CandidateState(candidates.values, alu_logits), read_result
