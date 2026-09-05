@@ -16,9 +16,12 @@ from t1_trainability.unified import (
     SLOT_COUNT,
     CandidateState,
     ReadResult,
+    READ_MODE_BLEND,
+    READ_MODE_SELECT,
     SharedMemoryReader,
     TypedCommit,
     UnifiedT1U0,
+    _select_payload,
 )
 
 
@@ -151,6 +154,99 @@ def test_reader_select_rejects_non_accum_w_opcode() -> None:
     mask = torch.ones(1, 1, dtype=torch.bool)
     with pytest.raises(ValueError, match="only for ACCUM_W"):
         reader(state, keys, keys, types, mask, torch.tensor([OPCODE_IDS["READ_P"]]), torch.tensor([511]), torch.tensor([SLOT_P]), read_mode="SELECT")
+
+
+def test_select_ste_forward_matches_eval_gather() -> None:
+    torch.manual_seed(41)
+    reader = SharedMemoryReader(8, attention_temperature=4.0)
+    state = torch.randn(1, 4, 8)
+    keys = torch.randn(1, 3, 8)
+    values = torch.randn(1, 3, 8)
+    types = torch.full((1, 3), ROW_VEC, dtype=torch.long)
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    args = (state, keys, values, types, mask, torch.tensor([OPCODE_IDS["ACCUM_W"]]), torch.tensor([511]), torch.tensor([SLOT_P]))
+    reader.train()
+    ste = reader(*args, read_mode="SELECT")
+    reader.eval()
+    hard = reader(*args, read_mode="SELECT")
+    assert torch.equal(ste.selected_index, hard.selected_index)
+    torch.testing.assert_close(ste.payload, hard.payload, rtol=0.0, atol=0.0)
+
+
+def test_select_ste_score_gradient_matches_soft_substitute() -> None:
+    scores = torch.tensor([[2.0, 0.5, -1.0]], requires_grad=True)
+    values = torch.tensor([[[1.0, 2.0], [-2.0, 0.5], [0.25, -1.0]]])
+    legal = torch.ones_like(scores, dtype=torch.bool)
+    attention = torch.softmax(scores.masked_fill(~legal, torch.finfo(scores.dtype).min), dim=-1)
+    selected = scores.argmax(dim=-1)
+    valid = torch.ones(1, dtype=torch.bool)
+    upstream = torch.tensor([[0.75, -1.25]])
+    payload = _select_payload(attention, values, selected, valid, training=True)
+    actual = torch.autograd.grad((payload * upstream).sum(), scores, retain_graph=True)[0]
+    expected = torch.autograd.grad((attention.unsqueeze(-1) * values * upstream.unsqueeze(1)).sum(), scores)[0]
+    torch.testing.assert_close(actual, expected, rtol=0.0, atol=1e-7)
+
+
+def test_select_ste_value_gradient_hits_selected_row_only() -> None:
+    scores = torch.tensor([[0.25, 3.0, -0.5]], requires_grad=True)
+    values = torch.randn(1, 3, 4, requires_grad=True)
+    attention = torch.softmax(scores, dim=-1)
+    selected = scores.argmax(dim=-1)
+    payload = _select_payload(attention, values, selected, torch.ones(1, dtype=torch.bool), training=True)
+    gradient = torch.autograd.grad(payload.sum(), values)[0]
+    expected = torch.zeros_like(values)
+    expected[0, 1] = 1.0
+    torch.testing.assert_close(gradient, expected, rtol=0.0, atol=0.0)
+
+
+def test_mixed_select_blend_ste_gradient_matches_separate_mean_loss() -> None:
+    scores = torch.tensor([[2.0, 0.5], [0.25, 1.5]], requires_grad=True)
+    values = torch.randn(2, 2, 3, requires_grad=True)
+    attention = torch.softmax(scores, dim=-1)
+    selected = scores.argmax(dim=-1)
+    valid = torch.ones(2, dtype=torch.bool)
+    select_payload = _select_payload(attention, values, selected, valid, training=True)
+    blend_payload = torch.einsum("bm,bmd->bd", attention, values)
+    mixed = torch.where(torch.tensor([[True], [False]]), select_payload, blend_payload)
+    mixed_grads = torch.autograd.grad(mixed.square().mean(), (scores, values))
+
+    scores_ref = scores.detach().clone().requires_grad_()
+    values_ref = values.detach().clone().requires_grad_()
+    attention_ref = torch.softmax(scores_ref, dim=-1)
+    selected_ref = scores_ref.argmax(dim=-1)
+    select_ref = _select_payload(attention_ref[:1], values_ref[:1], selected_ref[:1], valid[:1], training=True)
+    blend_ref = torch.einsum("bm,bmd->bd", attention_ref[1:], values_ref[1:])
+    separate_loss = (select_ref.square().mean() + blend_ref.square().mean()) / 2.0
+    separate_grads = torch.autograd.grad(separate_loss, (scores_ref, values_ref))
+    torch.testing.assert_close(mixed_grads[0], separate_grads[0], rtol=0.0, atol=1e-7)
+    torch.testing.assert_close(mixed_grads[1], separate_grads[1], rtol=0.0, atol=1e-7)
+
+
+def test_select_ste_masks_illegal_rows_and_nonread_padding() -> None:
+    reader = SharedMemoryReader(4).train()
+    state = torch.zeros(3, 4, 4)
+    keys = torch.randn(3, 2, 4)
+    values = torch.randn(3, 2, 4, requires_grad=True)
+    types = torch.tensor([[ROW_VEC, ROW_REL], [ROW_REL, ROW_REL], [ROW_VEC, ROW_REL]])
+    mask = torch.ones(3, 2, dtype=torch.bool)
+    result = reader(
+        state,
+        keys,
+        values,
+        types,
+        mask,
+        torch.tensor([OPCODE_IDS["ACCUM_W"], OPCODE_IDS["ACCUM_W"], OPCODE_IDS["EMIT"]]),
+        torch.tensor([511, 511, 511]),
+        torch.tensor([SLOT_P, SLOT_P, SLOT_P]),
+        read_mode=torch.tensor([READ_MODE_SELECT, READ_MODE_SELECT, READ_MODE_SELECT]),
+    )
+    assert result.valid.tolist() == [True, False, False]
+    assert result.selected_index.tolist()[1:] == [-1, -1]
+    assert torch.isfinite(result.payload).all()
+    assert torch.equal(result.payload[1:], torch.zeros_like(result.payload[1:]))
+    result.payload.sum().backward()
+    assert values.grad is not None
+    assert torch.count_nonzero(values.grad[1:]) == 0
 
 
 def test_one_reader_call_per_read_round_and_none_for_alu_emit() -> None:

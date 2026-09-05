@@ -48,6 +48,25 @@ READ_MODE_BLEND = 0
 READ_MODE_SELECT = 1
 
 
+def _select_payload(
+    attention: Tensor,
+    values: Tensor,
+    selected_index: Tensor,
+    valid: Tensor,
+    *,
+    training: bool,
+) -> Tensor:
+    """Materialize SELECT payload, optionally with straight-through weights."""
+    batch = attention.shape[0]
+    hard = torch.zeros_like(attention).scatter(1, selected_index.unsqueeze(-1), 1.0)
+    hard = hard * valid.unsqueeze(-1).to(dtype=attention.dtype)
+    if training:
+        weights = hard + (attention - attention.detach())
+        weights = torch.where(valid.unsqueeze(-1), weights, torch.zeros_like(weights))
+        return torch.einsum("bm,bmd->bd", weights, values)
+    return values.gather(1, selected_index.view(batch, 1, 1).expand(-1, 1, values.shape[-1])).squeeze(1)
+
+
 @dataclass(frozen=True, init=False)
 class ReadResult:
     """Single shared-reader result for one recurrent round."""
@@ -245,7 +264,7 @@ class SharedMemoryReader(nn.Module):
         attention = torch.nan_to_num(attention)
         selected_index = safe_logits.argmax(dim=-1)
         payload_blend = torch.einsum("bm,bmd->bd", attention, values)
-        payload_select = values.gather(1, selected_index.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
+        payload_select = _select_payload(attention, values, selected_index, valid, training=self.training)
         payload = torch.where((mode_ids == READ_MODE_SELECT).unsqueeze(-1), payload_select, payload_blend)
         payload = torch.where(valid.unsqueeze(-1), payload, torch.zeros_like(payload))
         selected_index = torch.where(valid, selected_index, torch.full_like(selected_index, -1))
