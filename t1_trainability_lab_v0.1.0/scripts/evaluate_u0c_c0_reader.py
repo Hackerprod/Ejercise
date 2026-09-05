@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from t1_trainability.unified import (  # noqa: E402
     OPCODE_IDS,
     ROW_VEC,
+    READ_MODE_SELECT,
     SLOT_COUNT,
     SLOT_P,
     UnifiedT1U0,
@@ -183,6 +184,7 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
     attention_max = torch.zeros((samples, MAX_H))
     attention_target = torch.zeros((samples, MAX_H))
     top1_accuracy = torch.zeros((samples, MAX_H), dtype=torch.bool)
+    payload_relative_error = torch.zeros((samples, MAX_H))
     for round_index in range(MAX_H):
         state = torch.zeros(samples, SLOT_COUNT, DIMENSION)
         state[:, SLOT_P, :] = memory_keys[torch.arange(samples), query_indices[:, round_index]]
@@ -205,7 +207,7 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
             torch.full((samples,), OPCODE_IDS["ACCUM_W"], dtype=torch.long),
             torch.full((samples,), 511, dtype=torch.long),
             torch.full((samples,), SLOT_P, dtype=torch.long),
-            read_mode="SELECT",
+            read_mode=torch.full((samples,), READ_MODE_SELECT, dtype=torch.long),
         )
         real_payload[:, round_index, :] = result_soft.payload
         hard_payload[:, round_index, :] = result_select.payload
@@ -213,6 +215,8 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
         attention_max[:, round_index] = result_select.attention_soft.max(dim=-1).values
         attention_target[:, round_index] = result_select.attention_soft.gather(1, query_indices[:, round_index].unsqueeze(-1)).squeeze(-1)
         top1_accuracy[:, round_index] = selected == query_indices[:, round_index]
+        expected_payload = evidence[:, round_index, :]
+        payload_relative_error[:, round_index] = torch.linalg.vector_norm(result_select.payload - expected_payload, dim=-1) / torch.linalg.vector_norm(expected_payload, dim=-1).clamp_min(1e-8)
     active = torch.arange(MAX_H).view(1, -1) < lengths.view(-1, 1)
     reader_cosine = torch.nn.functional.cosine_similarity(real_payload, evidence, dim=-1)
     diagnostics = {
@@ -226,6 +230,9 @@ def make_real_reader_payload(reader: UnifiedT1U0, evidence: Tensor, transform_id
             str(h): {str(round_index + 1): float(top1_accuracy[lengths == h, round_index].float().mean()) for round_index in range(h)} for h in H_VALUES
         },
         "top1_accuracy_over_active_rounds": float(top1_accuracy[active].float().mean()),
+        "reader_payload_relative_error_by_h_round": {
+            str(h): {str(round_index + 1): float(payload_relative_error[lengths == h, round_index].mean()) for round_index in range(h)} for h in H_VALUES
+        },
         "payload_cosine_min": float(reader_cosine[active].min()),
         "payload_cosine_max": float(reader_cosine[active].max()),
     }
@@ -302,6 +309,7 @@ def main() -> int:
         "reader_provenance": provenance,
         "top1_accuracy_by_h_round": reader_diagnostics["top1_accuracy_by_h_round"],
         "top1_accuracy_over_active_rounds": reader_diagnostics["top1_accuracy_over_active_rounds"],
+        "reader_payload_relative_error_by_h_round": reader_diagnostics["reader_payload_relative_error_by_h_round"],
         "soft_vs_top1_gates": {
             key: results[key]["gate"] for key in (
                 "real_reader_exact_evaluator",

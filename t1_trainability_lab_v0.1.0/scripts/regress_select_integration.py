@@ -15,22 +15,18 @@ sys.path.insert(0, str(ROOT))
 
 from t1_trainability.unified import (  # noqa: E402
     OPCODE_IDS,
+    READ_MODE_BLEND,
+    READ_MODE_SELECT,
     ROW_VEC,
     SLOT_P,
     SLOT_COUNT,
     UnifiedT1U0,
 )
 from train_u0a import (  # noqa: E402
-    BATCH_SIZE,
     DIMENSION,
-    ExampleDataset,
     build_canonical_data,
-    collate,
     evaluate_all,
-    immediate_vectors,
-    materialize,
 )
-from torch.utils.data import DataLoader  # noqa: E402
 
 
 CHECKPOINT = ROOT / "campaign" / "u0a_iso_clean_seed101_12000" / "best.pt"
@@ -81,7 +77,7 @@ def run_sampled_permuted_regression(model: UnifiedT1U0) -> dict[str, object]:
                 opcode,
                 immediate,
                 source_slot,
-                read_mode="SELECT",
+                read_mode=torch.full((SAMPLES,), READ_MODE_SELECT, dtype=torch.long),
             )
             expected_index = query_physical[:, round_index]
             expected_payload = memory_values[torch.arange(SAMPLES), expected_index]
@@ -109,43 +105,30 @@ def run_sampled_permuted_regression(model: UnifiedT1U0) -> dict[str, object]:
 
 
 @torch.no_grad()
-def workspace_select_diagnostics(model: UnifiedT1U0, examples: list[object]) -> dict[str, object]:
-    loader = DataLoader(ExampleDataset(examples), batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
-    by_h: dict[str, dict[str, list[float]]] = {str(h): {"selection": [], "payload_error": []} for h in (2, 4, 6)}
-    for batch in loader:
-        data = materialize(model, batch)
-        state = data["state"]
-        for round_index in range(6):
-            opcode = data["opcodes"][:, round_index]
-            state, _, result = model.step(
-                state,
-                data["memory_keys"],
-                data["memory_values"],
-                data["memory_types"],
-                data["row_mask"],
-                opcode,
-                immediate_vectors(model, data["immediates"][:, round_index]),
-                data["source_slots"][:, round_index],
-                data["destination_slots"][:, round_index],
-                data["presence"],
-                read_mode="SELECT",
-            )
-            active = data["hops"] > round_index
-            for h in (2, 4, 6):
-                selected = active & (data["hops"] == h)
-                if not selected.any():
-                    continue
-                hit = (result.selected_index[selected] == round_index).float()
-                expected = data["raw_values"][selected, round_index]
-                relative = torch.linalg.vector_norm(result.payload[selected] - expected, dim=-1) / torch.linalg.vector_norm(expected, dim=-1).clamp_min(1e-8)
-                by_h[str(h)]["selection"].extend(hit.tolist())
-                by_h[str(h)]["payload_error"].extend(relative.tolist())
+def test_mixed_mode_isolation(model: UnifiedT1U0) -> dict[str, object]:
+    generator = torch.Generator().manual_seed(DATASET_SEED + 1)
+    state = torch.randn((2, SLOT_COUNT, DIMENSION), generator=generator)
+    memory_keys = torch.randn((2, MEMORY_WIDTH, DIMENSION), generator=generator)
+    memory_values = torch.randn((2, MEMORY_WIDTH, DIMENSION), generator=generator)
+    memory_types = torch.full((2, MEMORY_WIDTH), ROW_VEC, dtype=torch.long)
+    row_mask = torch.ones((2, MEMORY_WIDTH), dtype=torch.bool)
+    opcode = torch.full((2,), OPCODE_IDS["ACCUM_W"], dtype=torch.long)
+    immediate = torch.full((2,), 511, dtype=torch.long)
+    source_slot = torch.full((2,), SLOT_P, dtype=torch.long)
+    modes = torch.tensor([READ_MODE_SELECT, READ_MODE_BLEND], dtype=torch.long)
+    mixed = model.memory_reader(state, memory_keys, memory_values, memory_types, row_mask, opcode, immediate, source_slot, read_mode=modes)
+    separate_select = model.memory_reader(state[:1], memory_keys[:1], memory_values[:1], memory_types[:1], row_mask[:1], opcode[:1], immediate[:1], source_slot[:1], read_mode="SELECT")
+    separate_blend = model.memory_reader(state[1:], memory_keys[1:], memory_values[1:], memory_types[1:], row_mask[1:], opcode[1:], immediate[1:], source_slot[1:], read_mode="BLEND")
+    payload_diffs = [float((mixed.payload[0] - separate_select.payload[0]).abs().max()), float((mixed.payload[1] - separate_blend.payload[0]).abs().max())]
+    attention_diffs = [float((mixed.attention_soft[0] - separate_select.attention_soft[0]).abs().max()), float((mixed.attention_soft[1] - separate_blend.attention_soft[0]).abs().max())]
+    selected_diffs = [float((mixed.selected_index[0] - separate_select.selected_index[0]).abs().max()), float((mixed.selected_index[1] - separate_blend.selected_index[0]).abs().max())]
     return {
-        str(h): {
-            "top1_accuracy": sum(values["selection"]) / len(values["selection"]),
-            "max_payload_relative_error": max(values["payload_error"]),
-        }
-        for h, values in by_h.items()
+        "mixed_read_modes": ["SELECT", "BLEND"],
+        "payload_max_abs_diff_per_example": payload_diffs,
+        "attention_max_abs_diff_per_example": attention_diffs,
+        "selected_index_max_abs_diff_per_example": selected_diffs,
+        "comparison_atol": 1e-6,
+        "passes": max(payload_diffs + attention_diffs + selected_diffs) <= 1e-6,
     }
 
 
@@ -161,19 +144,20 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model = load_model()
     datasets = build_canonical_data(args.output_dir)
-    baseline_tasks = evaluate_all(model, datasets, "test", read_mode="BLEND")
-    tasks = evaluate_all(model, datasets, "test", read_mode="SELECT")
+    baseline_tasks = evaluate_all(model, datasets, "test")
+    tasks = evaluate_all(model, datasets, "test")
     sampled = run_sampled_permuted_regression(model)
-    workspace_reader = workspace_select_diagnostics(model, datasets["workspace_accumulation"]["test"])
+    isolation = test_mixed_mode_isolation(model)
     result = {
         "status": "completed",
         "checkpoint": str(CHECKPOINT.relative_to(ROOT)),
         "read_mode": "SELECT",
+        "read_mode_encoding": {"BLEND": READ_MODE_BLEND, "SELECT": READ_MODE_SELECT},
         "scope": "ACCUM_W only; READ_P and READ_E remain BLEND",
-        "six_task_test_blend_baseline": baseline_tasks,
-        "six_task_test_select": tasks,
+        "six_task_test_historical_blend": baseline_tasks,
+        "six_task_test_compatibility_rerun": tasks,
         "sampled_permuted_codebook_regression": sampled,
-        "workspace_select_reader_diagnostics": workspace_reader,
+        "mixed_instruction_isolation": isolation,
         "emit_invariant": "covered by tests/test_unified.py::test_emit_is_identity_after_each_task_round",
     }
     (args.output_dir / "final.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -44,6 +44,8 @@ ROW_COUNT = 5
 READ_OPCODE_IDS = frozenset(
     (OPCODE_IDS["READ_P"], OPCODE_IDS["READ_E"], OPCODE_IDS["ACCUM_W"])
 )
+READ_MODE_BLEND = 0
+READ_MODE_SELECT = 1
 
 
 @dataclass(frozen=True, init=False)
@@ -55,7 +57,7 @@ class ReadResult:
     attention_soft: Tensor
     selection_margin: Tensor
     valid: Tensor
-    read_mode: str
+    read_mode: str | Tensor
 
     def __init__(
         self,
@@ -64,7 +66,7 @@ class ReadResult:
         selection_margin: Tensor | None = None,
         valid: Tensor | None = None,
         selected_index: Tensor | None = None,
-        read_mode: str = "BLEND",
+        read_mode: str | Tensor = "BLEND",
         *,
         attention: Tensor | None = None,
         margin: Tensor | None = None,
@@ -188,15 +190,8 @@ class SharedMemoryReader(nn.Module):
         opcode: Tensor,
         immediate: Tensor,
         source_slot: Tensor,
-        read_mode: str = "BLEND",
+        read_mode: str | Tensor = "BLEND",
     ) -> ReadResult:
-        if read_mode not in {"BLEND", "SELECT"}:
-            raise ValueError("read_mode must be SELECT or BLEND")
-        if read_mode == "SELECT":
-            opcode_long = opcode.to(dtype=torch.long)
-            read_opcodes = torch.isin(opcode_long, torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device))
-            if torch.any(read_opcodes & (opcode_long != OPCODE_IDS["ACCUM_W"])):
-                raise ValueError("SELECT is currently supported only for ACCUM_W")
         self.call_count += 1
         if state.ndim != 3 or state.shape[1] != SLOT_COUNT or state.shape[-1] != self.dimension:
             raise ValueError("state must have shape [B, 4, D]")
@@ -214,9 +209,24 @@ class SharedMemoryReader(nn.Module):
         if opcode.shape != (batch,) or source_slot.shape != (batch,):
             raise ValueError("opcode and source_slot must have shape [B]")
 
+        opcode_long = opcode.to(dtype=torch.long)
+        if isinstance(read_mode, str):
+            if read_mode not in {"BLEND", "SELECT"}:
+                raise ValueError("read_mode must be SELECT or BLEND")
+            mode_ids = torch.full((batch,), READ_MODE_SELECT if read_mode == "SELECT" else READ_MODE_BLEND, dtype=torch.long, device=opcode.device)
+        else:
+            if read_mode.shape != (batch,):
+                raise ValueError("read_mode tensor must have shape [B]")
+            mode_ids = read_mode.to(device=opcode.device, dtype=torch.long)
+            if torch.any((mode_ids != READ_MODE_BLEND) & (mode_ids != READ_MODE_SELECT)):
+                raise ValueError("read_mode values must be READ_MODE_BLEND or READ_MODE_SELECT")
+        read_opcodes = torch.isin(opcode_long, torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device))
+        if torch.any(read_opcodes & (mode_ids == READ_MODE_SELECT) & (opcode_long != OPCODE_IDS["ACCUM_W"])):
+            raise ValueError("SELECT is currently supported only for ACCUM_W")
+
         source_slot = source_slot.to(dtype=torch.long)
         source = state.gather(1, source_slot.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
-        opcode_vector = self._batch_vector(opcode.to(dtype=torch.long), dimension=self.dimension, embedding=self.opcode_embedding)
+        opcode_vector = self._batch_vector(opcode_long, dimension=self.dimension, embedding=self.opcode_embedding)
         immediate_vector = self._batch_vector(immediate, dimension=self.dimension, embedding=self.immediate_embedding)
         source_vector = self.source_slot_embedding(source_slot)
         condition = self.condition_projection(torch.cat((opcode_vector, immediate_vector, source_vector), dim=-1))
@@ -228,16 +238,15 @@ class SharedMemoryReader(nn.Module):
         logits = torch.einsum("bd,bmd->bm", query, keys)
         logits = logits * (self.attention_temperature / (self.dimension**0.5))
         legal = row_mask.to(dtype=torch.bool) & self._allowed_types(opcode.to(dtype=torch.long), memory_types)
-        valid = legal.any(dim=1) & torch.isin(opcode.to(dtype=torch.long), torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device))
+        valid = legal.any(dim=1) & read_opcodes
         safe_logits = logits.masked_fill(~legal, torch.finfo(logits.dtype).min)
         attention = torch.softmax(safe_logits, dim=-1)
         attention = torch.where(legal, attention, torch.zeros_like(attention))
         attention = torch.nan_to_num(attention)
         selected_index = safe_logits.argmax(dim=-1)
-        if read_mode == "SELECT":
-            payload = values.gather(1, selected_index.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
-        else:
-            payload = torch.einsum("bm,bmd->bd", attention, values)
+        payload_blend = torch.einsum("bm,bmd->bd", attention, values)
+        payload_select = values.gather(1, selected_index.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
+        payload = torch.where((mode_ids == READ_MODE_SELECT).unsqueeze(-1), payload_select, payload_blend)
         payload = torch.where(valid.unsqueeze(-1), payload, torch.zeros_like(payload))
         selected_index = torch.where(valid, selected_index, torch.full_like(selected_index, -1))
 
@@ -523,7 +532,7 @@ class UnifiedT1U0(nn.Module):
         source_slot: Tensor,
         destination_slot: Tensor,
         presence_mask: Tensor,
-        read_mode: str = "BLEND",
+        read_mode: str | Tensor = "BLEND",
     ) -> tuple[Tensor, CandidateState, ReadResult]:
         """Execute one auditable READ → COMPUTE → COMMIT round."""
 

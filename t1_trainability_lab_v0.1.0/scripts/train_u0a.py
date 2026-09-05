@@ -80,6 +80,7 @@ class CanonicalExample:
     target_id: int | None
     target_vector: Tensor | None
     hop_count: int
+    read_modes: tuple[int, ...] = ()
 
 
 class ExampleDataset(Dataset[CanonicalExample]):
@@ -445,6 +446,7 @@ def collate(rows: list[CanonicalExample]) -> dict[str, Any]:
     immediates = torch.full((batch, max_rounds), IMM_ZERO, dtype=torch.long)
     source_slots = torch.zeros((batch, max_rounds), dtype=torch.long)
     destination_slots = torch.zeros((batch, max_rounds), dtype=torch.long)
+    read_modes = torch.zeros((batch, max_rounds), dtype=torch.long)
     presence = torch.zeros((batch, SLOT_COUNT), dtype=torch.bool)
     hops = torch.zeros(batch, dtype=torch.long)
     target_ids = torch.full((batch,), -1, dtype=torch.long)
@@ -469,6 +471,8 @@ def collate(rows: list[CanonicalExample]) -> dict[str, Any]:
         immediates[index, :rounds] = torch.tensor(row.immediates)
         source_slots[index, :rounds] = torch.tensor(row.source_slots)
         destination_slots[index, :rounds] = torch.tensor(row.destination_slots)
+        if row.read_modes:
+            read_modes[index, :rounds] = torch.tensor(row.read_modes)
         presence[index] = torch.tensor(row.presence)
         hops[index] = row.hop_count
         if row.target_id is not None:
@@ -500,6 +504,7 @@ def collate(rows: list[CanonicalExample]) -> dict[str, Any]:
         "immediates": immediates,
         "source_slots": source_slots,
         "destination_slots": destination_slots,
+        "read_modes": read_modes,
         "presence": presence,
         "hops": hops,
         "target_ids": target_ids,
@@ -529,15 +534,12 @@ def immediate_vectors(model: UnifiedT1U0, immediate_ids: Tensor) -> Tensor:
     return torch.where((immediate_ids == IMM_ZERO).unsqueeze(-1), torch.zeros_like(vectors), vectors)
 
 
-def run_rounds(model: UnifiedT1U0, batch: dict[str, Any], rounds: int, *, read_mode: str = "BLEND") -> Tensor:
+def run_rounds(model: UnifiedT1U0, batch: dict[str, Any], rounds: int) -> Tensor:
     data = materialize(model, batch)
     state = data["state"]
     for round_index in range(rounds):
         round_immediate = immediate_vectors(model, data["immediates"][:, round_index])
         opcode = data["opcodes"][:, round_index]
-        read_opcodes = torch.isin(opcode, torch.tensor((OPCODE_IDS["READ_P"], OPCODE_IDS["READ_E"], OPCODE_IDS["ACCUM_W"])))
-        select_compatible = torch.all(~read_opcodes | (opcode == OPCODE_IDS["ACCUM_W"]))
-        round_mode = read_mode if read_mode == "BLEND" or select_compatible else "BLEND"
         state, _, _ = model.step(
             state,
             data["memory_keys"],
@@ -549,7 +551,7 @@ def run_rounds(model: UnifiedT1U0, batch: dict[str, Any], rounds: int, *, read_m
             data["source_slots"][:, round_index],
             data["destination_slots"][:, round_index],
             data["presence"],
-            read_mode=round_mode,
+            read_mode=data["read_modes"][:, round_index],
         )
     return state
 
@@ -624,12 +626,12 @@ def train_one_step(model: UnifiedT1U0, task: str, batch: dict[str, Any]) -> Tens
 
 
 @torch.no_grad()
-def evaluate_accuracy(model: UnifiedT1U0, task: str, examples: list[CanonicalExample], rounds: int, *, read_mode: str = "BLEND") -> float:
+def evaluate_accuracy(model: UnifiedT1U0, task: str, examples: list[CanonicalExample], rounds: int) -> float:
     loader = DataLoader(ExampleDataset(examples), batch_size=256, shuffle=False, collate_fn=collate)
     correct = 0
     count = 0
     for batch in loader:
-        state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]), read_mode=read_mode)
+        state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]))
         if task == "workspace_accumulation":
             error = torch.linalg.vector_norm(state[:, SLOT_W] - batch["target_vectors"], dim=-1)
             target_norm = torch.linalg.vector_norm(batch["target_vectors"], dim=-1).clamp_min(1e-8)
@@ -646,13 +648,13 @@ def evaluate_accuracy(model: UnifiedT1U0, task: str, examples: list[CanonicalExa
 
 
 @torch.no_grad()
-def evaluate_matrix(model: UnifiedT1U0, task: str, examples: list[CanonicalExample], rounds_values: tuple[int, ...], hop_values: tuple[int, ...], *, read_mode: str = "BLEND") -> dict[str, dict[str, float]]:
+def evaluate_matrix(model: UnifiedT1U0, task: str, examples: list[CanonicalExample], rounds_values: tuple[int, ...], hop_values: tuple[int, ...]) -> dict[str, dict[str, float]]:
     matrix = {str(hop): {str(rounds): 0.0 for rounds in rounds_values} for hop in hop_values}
     counts = {str(hop): {str(rounds): 0 for rounds in rounds_values} for hop in hop_values}
     loader = DataLoader(ExampleDataset(examples), batch_size=256, shuffle=False, collate_fn=collate)
     for batch in loader:
         for rounds in rounds_values:
-            state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]), read_mode=read_mode)
+            state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]))
             if task == "workspace_accumulation":
                 values = torch.linalg.vector_norm(state[:, SLOT_W] - batch["target_vectors"], dim=-1) / torch.linalg.vector_norm(batch["target_vectors"], dim=-1).clamp_min(1e-8)
                 hits = values < 1e-3
@@ -670,12 +672,12 @@ def evaluate_matrix(model: UnifiedT1U0, task: str, examples: list[CanonicalExamp
 
 
 @torch.no_grad()
-def evaluate_workspace_error(model: UnifiedT1U0, examples: list[CanonicalExample], *, read_mode: str = "BLEND") -> dict[str, dict[str, float]]:
+def evaluate_workspace_error(model: UnifiedT1U0, examples: list[CanonicalExample]) -> dict[str, dict[str, float]]:
     result: dict[str, dict[str, float]] = {str(hop): {} for hop in (2, 4, 6)}
     loader = DataLoader(ExampleDataset(examples), batch_size=256, shuffle=False, collate_fn=collate)
     for rounds in (1, 2, 4, 6):
         for batch in loader:
-            state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]), read_mode=read_mode)
+            state = run_rounds(model, batch, min(rounds, batch["opcodes"].shape[1]))
             error = torch.linalg.vector_norm(state[:, SLOT_W] - batch["target_vectors"], dim=-1) / torch.linalg.vector_norm(batch["target_vectors"], dim=-1).clamp_min(1e-8)
             for hop in (2, 4, 6):
                 selected = batch["hops"] == hop
@@ -683,14 +685,14 @@ def evaluate_workspace_error(model: UnifiedT1U0, examples: list[CanonicalExample
     return {hop: {rounds: float(sum(values) / len(values)) for rounds, values in rounds_map.items()} for hop, rounds_map in result.items()}
 
 
-def evaluate_all(model: UnifiedT1U0, datasets: dict[str, dict[str, list[CanonicalExample]]], split: str, *, read_mode: str = "BLEND") -> dict[str, object]:
+def evaluate_all(model: UnifiedT1U0, datasets: dict[str, dict[str, list[CanonicalExample]]], split: str) -> dict[str, object]:
     outputs: dict[str, object] = {}
-    outputs["pointer_chasing"] = evaluate_matrix(model, "pointer_chasing", datasets["pointer_chasing"][split], (1, 2, 4), (1, 2, 3, 4), read_mode=read_mode)
-    outputs["multi_hop"] = evaluate_matrix(model, "multi_hop", datasets["multi_hop"][split], (1, 2, 3, 4), (1, 2, 3, 4), read_mode=read_mode)
-    outputs["associative_recall"] = evaluate_matrix(model, "associative_recall", datasets["associative_recall"][split], (1, 2, 4), (1,), read_mode=read_mode)
-    outputs["variable_binding"] = evaluate_matrix(model, "variable_binding", datasets["variable_binding"][split], (1, 2, 4), (2,), read_mode=read_mode)
-    outputs["sequential_update"] = evaluate_matrix(model, "sequential_update", datasets["sequential_update"][split], (1, 2, 4, 6), (3, 4, 5, 6), read_mode=read_mode)
-    outputs["workspace_accumulation"] = evaluate_workspace_error(model, datasets["workspace_accumulation"][split], read_mode=read_mode)
+    outputs["pointer_chasing"] = evaluate_matrix(model, "pointer_chasing", datasets["pointer_chasing"][split], (1, 2, 4), (1, 2, 3, 4))
+    outputs["multi_hop"] = evaluate_matrix(model, "multi_hop", datasets["multi_hop"][split], (1, 2, 3, 4), (1, 2, 3, 4))
+    outputs["associative_recall"] = evaluate_matrix(model, "associative_recall", datasets["associative_recall"][split], (1, 2, 4), (1,))
+    outputs["variable_binding"] = evaluate_matrix(model, "variable_binding", datasets["variable_binding"][split], (1, 2, 4), (2,))
+    outputs["sequential_update"] = evaluate_matrix(model, "sequential_update", datasets["sequential_update"][split], (1, 2, 4, 6), (3, 4, 5, 6))
+    outputs["workspace_accumulation"] = evaluate_workspace_error(model, datasets["workspace_accumulation"][split])
     return outputs
 
 
