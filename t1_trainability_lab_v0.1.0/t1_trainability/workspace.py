@@ -64,3 +64,45 @@ class WorkspaceCore(nn.Module):
         if return_states:
             return workspace, tuple(states)
         return workspace
+
+
+class TransformCorrectionMLP(nn.Module):
+    """Shared full-width workspace correction conditioned by transform opcode."""
+
+    def __init__(self, dimension: int = 64, *, transform_count: int = 4, embedding_width: int = 16) -> None:
+        super().__init__()
+        if dimension < 1 or transform_count < 1 or embedding_width < 1:
+            raise ValueError("dimension, transform_count, and embedding_width must be positive")
+        self.dimension = dimension
+        self.transform_count = transform_count
+        self.embedding_width = embedding_width
+        self.transform_embedding = nn.Embedding(transform_count, embedding_width)
+        with torch.no_grad():
+            self.transform_embedding.weight.zero_()
+            self.transform_embedding.weight[:, :transform_count].copy_(torch.eye(transform_count))
+        # Multiplicative opcode gating gives one shared MLP direct access to a
+        # transform-conditioned payload basis without introducing per-transform
+        # heads.  Workspace context remains a separate input and stays in-graph.
+        self.network = nn.Sequential(
+            nn.Linear((transform_count + 1) * dimension + embedding_width, 4 * dimension),
+            nn.SiLU(),
+            nn.Linear(4 * dimension, dimension),
+        )
+        self.payload_basis = nn.Linear(transform_count * dimension, dimension)
+        # Preserve exact identity transport at initialization.
+        nn.init.zeros_(self.payload_basis.weight)
+        nn.init.zeros_(self.payload_basis.bias)
+        nn.init.zeros_(self.network[-1].weight)
+        nn.init.zeros_(self.network[-1].bias)
+
+    def forward(self, payload: Tensor, workspace: Tensor, transform_id: Tensor) -> Tensor:
+        if payload.ndim != 2 or payload.shape[-1] != self.dimension:
+            raise ValueError("payload must have shape [B, D]")
+        if workspace.shape != payload.shape:
+            raise ValueError("workspace must have shape [B, D]")
+        if transform_id.ndim != 1 or transform_id.shape[0] != payload.shape[0]:
+            raise ValueError("transform_id must have shape [B]")
+        normalized_workspace = workspace * torch.rsqrt(workspace.square().mean(dim=-1, keepdim=True) + 1e-6)
+        instruction = self.transform_embedding(transform_id.to(dtype=torch.long))
+        gated_payload = (payload.unsqueeze(-1) * instruction[:, : self.transform_count].unsqueeze(1)).flatten(start_dim=1)
+        return self.payload_basis(gated_payload) + self.network(torch.cat((gated_payload, normalized_workspace, instruction), dim=-1))
