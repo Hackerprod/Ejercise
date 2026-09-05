@@ -12,6 +12,7 @@ from t1_trainability.unified import (
     SLOT_P,
     SLOT_R,
     SLOT_W,
+    SLOT_COUNT,
     CandidateState,
     ReadResult,
     SharedMemoryReader,
@@ -135,6 +136,68 @@ def test_one_reader_call_per_read_round_and_none_for_alu_emit() -> None:
             presence,
         )
         assert model.memory_reader.call_count == expected_calls, name
+
+
+def test_emit_is_identity_after_each_task_round() -> None:
+    """Padding EMIT rounds must not mutate state for any U0 task."""
+    torch.manual_seed(29)
+    model = UnifiedT1U0(dimension=8).eval()
+    task_rounds = {
+        "pointer_chasing": ("READ_P", ROW_REL),
+        "multi_hop": ("READ_P", ROW_REL),
+        "associative_recall": ("READ_E", ROW_PAIR),
+        "variable_binding": ("READ_E", ROW_ATTR),
+        "sequential_update": ("ALU_ADD", ROW_REL),
+        "workspace_accumulation": ("ACCUM_W", ROW_VEC),
+    }
+    memory_keys = torch.eye(8)[:2]
+    memory_values = torch.roll(memory_keys, shifts=1, dims=-1)
+    row_mask = torch.ones(1, 2, dtype=torch.bool)
+    presence = torch.ones(1, SLOT_COUNT, dtype=torch.bool)
+    for task, (opcode_name, row_type) in task_rounds.items():
+        memory_types = torch.full((1, 2), row_type, dtype=torch.long)
+        state = torch.randn(1, SLOT_COUNT, 8)
+        active_state, _, _ = model.step(
+            state,
+            memory_keys.unsqueeze(0),
+            memory_values.unsqueeze(0),
+            memory_types,
+            row_mask,
+            torch.tensor([OPCODE_IDS[opcode_name]]),
+            torch.zeros(1, 8),
+            torch.tensor([SLOT_P]),
+            torch.tensor([SLOT_R if task == "sequential_update" else SLOT_W]),
+            presence,
+        )
+        emitted_state, _, _ = model.step(
+            active_state,
+            memory_keys.unsqueeze(0),
+            memory_values.unsqueeze(0),
+            memory_types,
+            row_mask,
+            torch.tensor([OPCODE_IDS["EMIT"]]),
+            torch.zeros(1, 8),
+            torch.tensor([SLOT_P]),
+            torch.tensor([SLOT_W]),
+            presence,
+        )
+        torch.testing.assert_close(emitted_state, active_state, msg=f"EMIT mutated {task} state")
+        for _ in range(2):
+            emitted_state, _, emit_result = model.step(
+                emitted_state,
+                memory_keys.unsqueeze(0),
+                memory_values.unsqueeze(0),
+                memory_types,
+                row_mask,
+                torch.tensor([OPCODE_IDS["EMIT"]]),
+                torch.zeros(1, 8),
+                torch.tensor([SLOT_P]),
+                torch.tensor([SLOT_W]),
+                presence,
+            )
+            torch.testing.assert_close(emitted_state, active_state, msg=f"EMIT padding mutated {task} state")
+            assert not emit_result.valid.any()
+            assert torch.count_nonzero(emit_result.payload) == 0
 
 
 def test_alu_adapter_is_inactive_for_retrieval_and_workspace_opcodes() -> None:
