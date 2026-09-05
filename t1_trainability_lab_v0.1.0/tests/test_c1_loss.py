@@ -4,10 +4,11 @@ from pathlib import Path
 import sys
 
 import torch
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from train_u0c_c1_joint import delta_loss_per_coordinate
+from train_u0c_c1_joint import delta_loss_per_coordinate, learning_rate_for_step
 
 
 def old_delta_loss(predicted: torch.Tensor, target_deltas: torch.Tensor, active: torch.Tensor) -> torch.Tensor:
@@ -87,3 +88,10 @@ def test_all_inactive_delta_loss_and_gradient_are_zero() -> None:
     gradient = torch.autograd.grad(loss, predicted)[0]
     assert loss.item() == 0.0
     assert torch.count_nonzero(gradient) == 0
+
+
+def test_cosine_schedule_matches_anneal_boundaries() -> None:
+    assert learning_rate_for_step(500, 12000, "cosine") == 3e-4
+    assert learning_rate_for_step(12000, 12000, "cosine") == 3e-6
+    assert learning_rate_for_step(6250, 12000, "cosine") == pytest.approx((3e-4 + 3e-6) / 2)
+    assert learning_rate_for_step(12000, 12000, "constant") == 3e-4

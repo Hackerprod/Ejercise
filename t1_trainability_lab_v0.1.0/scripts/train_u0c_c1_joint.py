@@ -59,6 +59,9 @@ C0_CHECKPOINT = ROOT / "campaign" / "u0c_c0_oracle_seed101_network_trainable" / 
 ORIGINAL_C1_STEP0 = ROOT / "campaign" / "u0c_c1_joint_seed101" / "step0.pt"
 ORIGINAL_C1_METRICS = ROOT / "campaign" / "u0c_c1_joint_seed101" / "metrics.jsonl"
 GRAD_CLIP_MAX_NORM = 1.0
+LR_INITIAL = 3e-4
+LR_MIN = 3e-6
+LR_ANNEAL_START = 500
 
 
 def save_json(path: Path, value: object) -> None:
@@ -126,7 +129,14 @@ def build_optimizer(model: C1JointModel) -> torch.optim.Optimizer:
             no_decay.append(parameter)
         else:
             decay.append(parameter)
-    return torch.optim.AdamW(({"params": decay, "weight_decay": 1e-4}, {"params": no_decay, "weight_decay": 0.0}), lr=3e-4)
+    return torch.optim.AdamW(({"params": decay, "weight_decay": 1e-4}, {"params": no_decay, "weight_decay": 0.0}), lr=LR_INITIAL)
+
+
+def learning_rate_for_step(step: int, total_steps: int, schedule: str) -> float:
+    if schedule == "constant" or step <= LR_ANNEAL_START:
+        return LR_INITIAL
+    progress = (step - LR_ANNEAL_START) / (total_steps - LR_ANNEAL_START)
+    return LR_MIN + (LR_INITIAL - LR_MIN) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 def make_transform_split(seed: int, samples_per_h: int = TRANSFORM_SAMPLES_PER_H) -> dict[str, Tensor]:
@@ -327,6 +337,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=12000)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c1_joint_seed101")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--lr-schedule", choices=("constant", "cosine"), default="constant")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     random.seed(args.seed)
@@ -352,7 +363,7 @@ def main() -> int:
         raise RuntimeError("new C1 initialization does not match original step0 state_dict")
     initial_parameters = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
     optimizer = build_optimizer(model)
-    config: dict[str, object] = {"phase": "T1-U0-C1 joint", "seed": args.seed, "steps": args.steps, "batch_size": BATCH_SIZE, "dimension": DIMENSION, "loss": "(six historical task losses + transformed loss) / 7", "reader": "one SharedMemoryReader; read_mode per instruction; historical workspace BLEND; transformed task SELECT", "transformed_query": "explicit P direction from sampled codebook key; no old Norm(W)+index route", "optimizer": "AdamW(lr=3e-4); weight_decay=1e-4 base decay, 0 corrector/typed; one step per superstep", "schedule": "sequential H1 replay 5:1 with composition; one batch each of six tasks plus transformed task", "initial_u0a": str(U0A_CHECKPOINT.relative_to(ROOT)), "initial_c0": str(C0_CHECKPOINT.relative_to(ROOT)), "train_manifests": transform_manifest(transform_train, TRAIN_TRANSFORM_SEED), "val_manifests": transform_manifest(transform_val, VAL_TRANSFORM_SEED), "test_manifests": transform_manifest(transform_test, TEST_TRANSFORM_SEED), "validation_steps": [0, 100, 500, 1000, "every 1000 thereafter"], "frozen_structural": ["core.workspace_correction"], "final_checkpoint": "final.pt", "best_checkpoint": "best.pt"}
+    config: dict[str, object] = {"phase": "T1-U0-C1 joint", "seed": args.seed, "steps": args.steps, "batch_size": BATCH_SIZE, "dimension": DIMENSION, "loss": "(six historical task losses + transformed loss) / 7", "reader": "one SharedMemoryReader; read_mode per instruction; historical workspace BLEND; transformed task SELECT", "transformed_query": "explicit P direction from sampled codebook key; no old Norm(W)+index route", "optimizer": "AdamW(lr=3e-4); weight_decay=1e-4 base decay, 0 corrector/typed; one step per superstep", "learning_rate_schedule": "constant 3e-4" if args.lr_schedule == "constant" else "constant 3e-4 through step 500, cosine to 3e-6 at final step", "schedule": "sequential H1 replay 5:1 with composition; one batch each of six tasks plus transformed task", "initial_u0a": str(U0A_CHECKPOINT.relative_to(ROOT)), "initial_c0": str(C0_CHECKPOINT.relative_to(ROOT)), "train_manifests": transform_manifest(transform_train, TRAIN_TRANSFORM_SEED), "val_manifests": transform_manifest(transform_val, VAL_TRANSFORM_SEED), "test_manifests": transform_manifest(transform_test, TEST_TRANSFORM_SEED), "validation_steps": [0, 100, 500, 1000, "every 1000 thereafter"], "frozen_structural": ["core.workspace_correction"], "final_checkpoint": "final.pt", "best_checkpoint": "best.pt"}
     save_json(args.output_dir / "config.json", config)
     metrics_path = args.output_dir / "metrics.jsonl"
     latest_path = args.output_dir / "latest.pt"
@@ -428,8 +439,11 @@ def main() -> int:
         if not torch.isfinite(torch.tensor(grad_norm)):
             raise FloatingPointError(f"non-finite gradient at step {step}")
         clip_factor = min(1.0, GRAD_CLIP_MAX_NORM / (grad_norm + 1e-6))
+        learning_rate = learning_rate_for_step(step, args.steps, args.lr_schedule)
+        for parameter_group in optimizer.param_groups:
+            parameter_group["lr"] = learning_rate
         optimizer.step()
-        metric: dict[str, object] = {"kind": "train", "step": step, "loss": float(sum(value.detach() for value in task_losses.values()) / 7.0 + transform_loss.detach() / 7.0), "task_loss": {task: float(value.detach()) for task, value in task_losses.items()}, "transformed_delta_loss": float(delta_loss.detach()), "transformed_final_loss": float(final_loss.detach()), "gradient_norm": grad_norm, "preclip_gradient_norm": grad_norm, "clip_factor": clip_factor}
+        metric: dict[str, object] = {"kind": "train", "step": step, "loss": float(sum(value.detach() for value in task_losses.values()) / 7.0 + transform_loss.detach() / 7.0), "task_loss": {task: float(value.detach()) for task, value in task_losses.items()}, "transformed_delta_loss": float(delta_loss.detach()), "transformed_final_loss": float(final_loss.detach()), "gradient_norm": grad_norm, "preclip_gradient_norm": grad_norm, "clip_factor": clip_factor, "learning_rate": learning_rate, "optimizer_learning_rates": [float(parameter_group["lr"]) for parameter_group in optimizer.param_groups]}
         if step in {100, 500, 1000} or step % 1000 == 0 or step == args.steps:
             metric["validation"] = validate(step)
             score = float(metric["validation"]["validation_score"])
