@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 import time
@@ -55,6 +56,9 @@ TEST_TRANSFORM_SEED = 50303
 TRANSFORM_SAMPLES_PER_H = 1024
 U0A_CHECKPOINT = ROOT / "campaign" / "u0a_iso_clean_seed101_12000" / "best.pt"
 C0_CHECKPOINT = ROOT / "campaign" / "u0c_c0_oracle_seed101_network_trainable" / "final.pt"
+ORIGINAL_C1_STEP0 = ROOT / "campaign" / "u0c_c1_joint_seed101" / "step0.pt"
+ORIGINAL_C1_METRICS = ROOT / "campaign" / "u0c_c1_joint_seed101" / "metrics.jsonl"
+GRAD_CLIP_MAX_NORM = 1.0
 
 
 def save_json(path: Path, value: object) -> None:
@@ -64,6 +68,33 @@ def save_json(path: Path, value: object) -> None:
 
 def tensor_sha256(value: Tensor) -> str:
     return hashlib.sha256(value.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
+
+
+def initial_state_matches_original(model: nn.Module) -> bool:
+    expected = torch.load(ORIGINAL_C1_STEP0, map_location="cpu", weights_only=False)["model"]
+    actual = model.state_dict()
+    return actual.keys() == expected.keys() and all(torch.equal(actual[name], expected[name]) for name in actual)
+
+
+def validation_matches_original(validation: dict[str, object]) -> tuple[bool, float]:
+    with ORIGINAL_C1_METRICS.open(encoding="utf-8") as stream:
+        expected = json.loads(stream.readline())
+    max_difference = 0.0
+
+    def compare(actual: object, reference: object) -> bool:
+        nonlocal max_difference
+        if isinstance(actual, float) and isinstance(reference, (float, int)):
+            difference = abs(actual - float(reference))
+            max_difference = max(max_difference, difference)
+            return math.isclose(actual, float(reference), rel_tol=0.0, abs_tol=1e-12)
+        if isinstance(actual, dict) and isinstance(reference, dict):
+            return actual.keys() == reference.keys() and all(compare(actual[key], reference[key]) for key in actual)
+        if isinstance(actual, list) and isinstance(reference, list):
+            return len(actual) == len(reference) and all(compare(left, right) for left, right in zip(actual, reference))
+        return actual == reference
+
+    fields = ("validation_score", "historical", "transformed_real", "transformed_oracle")
+    return all(compare(validation[field], expected[field]) for field in fields), max_difference
 
 
 class C1JointModel(UnifiedT1U0):
@@ -189,6 +220,16 @@ def run_transform_batch(model: C1JointModel, batch: dict[str, Tensor]) -> tuple[
     return state[:, SLOT_W, :], predicted_deltas, selected, payload_errors, batch["targets"]
 
 
+def delta_loss_per_coordinate(predicted: Tensor, target_deltas: Tensor, active: Tensor) -> Tensor:
+    """Average squared delta error over active transitions and coordinates."""
+
+    dimension = predicted.shape[-1]
+    return (
+        ((predicted - target_deltas) * active).square().sum()
+        / (active.sum().clamp_min(1) * dimension)
+    )
+
+
 @torch.no_grad()
 def evaluate_transformed(model: C1JointModel, payload: dict[str, Tensor], batch_size: int = BATCH_SIZE) -> dict[str, object]:
     dataset = TensorDataset(*(payload[key] for key in ("key_ids", "row_order", "values", "query_logical", "query_physical", "transform_ids", "lengths", "target_deltas", "targets")))
@@ -305,6 +346,9 @@ def main() -> int:
     transform_loader = DataLoader(TensorDataset(*(transform_train[key] for key in ("key_ids", "row_order", "values", "query_logical", "query_physical", "transform_ids", "lengths", "target_deltas", "targets"))), batch_size=BATCH_SIZE, shuffle=True, generator=torch.Generator().manual_seed(SEED + 10),)
     transform_iterator = iter(transform_loader)
     model = load_approved_model()
+    initial_state_match = initial_state_matches_original(model)
+    if not initial_state_match:
+        raise RuntimeError("new C1 initialization does not match original step0 state_dict")
     initial_parameters = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
     optimizer = build_optimizer(model)
     config: dict[str, object] = {"phase": "T1-U0-C1 joint", "seed": SEED, "steps": args.steps, "batch_size": BATCH_SIZE, "dimension": DIMENSION, "loss": "(six historical task losses + transformed loss) / 7", "reader": "one SharedMemoryReader; read_mode per instruction; historical workspace BLEND; transformed task SELECT", "transformed_query": "explicit P direction from sampled codebook key; no old Norm(W)+index route", "optimizer": "AdamW(lr=3e-4); weight_decay=1e-4 base decay, 0 corrector/typed; one step per superstep", "schedule": "sequential H1 replay 5:1 with composition; one batch each of six tasks plus transformed task", "initial_u0a": str(U0A_CHECKPOINT.relative_to(ROOT)), "initial_c0": str(C0_CHECKPOINT.relative_to(ROOT)), "train_manifests": transform_manifest(transform_train, TRAIN_TRANSFORM_SEED), "val_manifests": transform_manifest(transform_val, VAL_TRANSFORM_SEED), "test_manifests": transform_manifest(transform_test, TEST_TRANSFORM_SEED), "validation_steps": [0, 100, 500, 1000, "every 1000 thereafter"], "frozen_structural": ["core.workspace_correction"], "final_checkpoint": "final.pt", "best_checkpoint": "best.pt"}
@@ -335,6 +379,10 @@ def main() -> int:
         return {"step": step, "validation_score": score, "historical": historical, "transformed_real": transformed, "transformed_oracle": {key: value for key, value in oracle.items() if key != "predicted_deltas"}}
     if start_step == 0:
         initial_validation = validate(0)
+        validation_match, validation_difference = validation_matches_original(initial_validation)
+        if not validation_match:
+            raise RuntimeError(f"new C1 step 0 validation differs from original metrics (max difference {validation_difference})")
+        initial_validation["preflight"] = {"state_dict_matches_original_step0": initial_state_match, "validation_matches_original": validation_match, "max_validation_difference": validation_difference}
         initial_validation["kind"] = "validation"
         metrics_path.write_text(json.dumps(initial_validation, sort_keys=True) + "\n", encoding="utf-8")
         best_score = float(initial_validation["validation_score"])
@@ -369,17 +417,18 @@ def main() -> int:
         transform_batch = dict(zip(("key_ids", "row_order", "values", "query_logical", "query_physical", "transform_ids", "lengths", "target_deltas", "targets"), transform_tuple))
         output, predicted, _, _, targets = run_transform_batch(model, transform_batch)
         active = (torch.arange(MAX_H).view(1, -1) < transform_batch["lengths"].view(-1, 1)).unsqueeze(-1)
-        delta_loss = (((predicted - transform_batch["target_deltas"]) * active) ** 2).sum() / active.sum().clamp_min(1)
+        delta_loss = delta_loss_per_coordinate(predicted, transform_batch["target_deltas"], active)
         final_loss = (output - targets).square().mean()
         transform_loss = delta_loss + 0.25 * final_loss
         if not torch.isfinite(transform_loss):
             raise FloatingPointError(f"non-finite transformed loss at step {step}")
         (transform_loss / 7.0).backward()
-        grad_norm = float(nn.utils.clip_grad_norm_(model.parameters(), 1.0))
+        grad_norm = float(nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_MAX_NORM))
         if not torch.isfinite(torch.tensor(grad_norm)):
             raise FloatingPointError(f"non-finite gradient at step {step}")
+        clip_factor = min(1.0, GRAD_CLIP_MAX_NORM / (grad_norm + 1e-6))
         optimizer.step()
-        metric: dict[str, object] = {"kind": "train", "step": step, "loss": float(sum(value.detach() for value in task_losses.values()) / 7.0 + transform_loss.detach() / 7.0), "task_loss": {task: float(value.detach()) for task, value in task_losses.items()}, "transformed_delta_loss": float(delta_loss.detach()), "transformed_final_loss": float(final_loss.detach()), "gradient_norm": grad_norm}
+        metric: dict[str, object] = {"kind": "train", "step": step, "loss": float(sum(value.detach() for value in task_losses.values()) / 7.0 + transform_loss.detach() / 7.0), "task_loss": {task: float(value.detach()) for task, value in task_losses.items()}, "transformed_delta_loss": float(delta_loss.detach()), "transformed_final_loss": float(final_loss.detach()), "gradient_norm": grad_norm, "preclip_gradient_norm": grad_norm, "clip_factor": clip_factor}
         if step in {100, 500, 1000} or step % 1000 == 0 or step == args.steps:
             metric["validation"] = validate(step)
             score = float(metric["validation"]["validation_score"])
