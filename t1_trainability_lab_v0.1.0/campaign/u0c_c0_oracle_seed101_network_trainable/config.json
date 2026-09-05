@@ -66,7 +66,7 @@
   "seed": 101,
   "steps": 5000,
   "target": "generator-side transformed evidence sum; independent of model payload",
-  "trainable": "correction_mlp payload basis + new transform embedding only",
+  "trainable": "correction_mlp + new transform embedding only; residual network trainable from zero-initialized output",
   "transform_names": [
     "identity",
     "negation",
