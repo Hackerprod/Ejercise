@@ -252,7 +252,18 @@ def evaluate_oracle_transform(model: C1JointModel, payload: dict[str, Tensor]) -
     target = payload["targets"]
     errors = torch.linalg.vector_norm(workspace - target, dim=-1) / torch.linalg.vector_norm(target, dim=-1).clamp_min(1e-8)
     cosines = torch.nn.functional.cosine_similarity(workspace, target, dim=-1)
-    return {"min_final_cosine": float(cosines.min()), "max_final_relative_error": float(errors.max()), "passes_final_gate": float(cosines.min()) > 0.999 and float(errors.max()) <= 0.01, "predicted_deltas": predicted_deltas}
+    target_delta_error = torch.linalg.vector_norm(predicted_deltas - payload["target_deltas"], dim=-1) / torch.linalg.vector_norm(payload["target_deltas"], dim=-1).clamp_min(1e-8)
+    active = torch.arange(MAX_H).view(1, -1) < payload["lengths"].view(-1, 1)
+    by_h = {}
+    for h in H_VALUES:
+        mask = payload["lengths"] == h
+        by_h[str(h)] = {
+            "samples": int(mask.sum()),
+            "final_cosine": float(cosines[mask].mean()),
+            "final_relative_error": float(errors[mask].mean()),
+            "epsilon_delta_relative_by_round": {str(r + 1): float(target_delta_error[mask, r].mean()) for r in range(h)},
+        }
+    return {"by_h": by_h, "min_final_cosine": float(cosines.min()), "max_final_relative_error": float(errors.max()), "max_epsilon_delta_relative": float(target_delta_error[active].max()), "passes_final_gate": float(cosines.min()) > 0.999 and float(errors.max()) <= 0.01, "passes_delta_gate": float(target_delta_error[active].max()) <= 0.01, "predicted_deltas": predicted_deltas}
 
 
 def validation_score(historical: dict[str, object], transformed: dict[str, object]) -> float:
