@@ -49,6 +49,13 @@ def load_model(checkpoint: Path, ablated: bool) -> UnifiedT1U0:
     return model
 
 
+def b2_summary(metrics: dict[str, object]) -> dict[str, object]:
+    output = summary(metrics)
+    output["pointer_final_round4_by_hop"] = {hop: metrics["pointer_chasing"][hop]["4"] for hop in ("1", "2", "3", "4")}
+    output["multi_hop_final_round4_by_hop"] = {hop: metrics["multi_hop"][hop]["4"] for hop in ("1", "2", "3", "4")}
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=ROOT / "campaign" / "u0b_b2_pointer_frozen.json")
@@ -65,8 +72,8 @@ def main() -> int:
         baseline_metrics["sequential_update_h1_table"] = evaluate_accuracy(baseline_model, "sequential_update", build_sequential_h1_table(), rounds=1)
         ablated_metrics = evaluate_all(ablated_model, datasets, "test")
         ablated_metrics["sequential_update_h1_table"] = evaluate_accuracy(ablated_model, "sequential_update", build_sequential_h1_table(), rounds=1)
-        baseline = summary(baseline_metrics)
-        ablation = summary(ablated_metrics)
+        baseline = b2_summary(baseline_metrics)
+        ablation = b2_summary(ablated_metrics)
         runs[str(seed)] = {
             "training_performed": False,
             "optimizer_steps": 0,

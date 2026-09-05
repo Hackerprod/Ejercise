@@ -12,7 +12,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 0.0,
         "multi_hop_final_h4": 0.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "pointer_final_h4": 0.0,
+        "pointer_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -26,7 +38,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 1.0,
         "multi_hop_final_h4": 1.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "pointer_final_h4": 1.0,
+        "pointer_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -136,7 +160,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 0.0,
         "multi_hop_final_h4": 0.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "pointer_final_h4": 0.0,
+        "pointer_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -150,7 +186,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 1.0,
         "multi_hop_final_h4": 1.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "pointer_final_h4": 1.0,
+        "pointer_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -260,7 +308,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 0.0,
         "multi_hop_final_h4": 0.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "pointer_final_h4": 0.0,
+        "pointer_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -274,7 +334,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 1.0,
         "multi_hop_final_h4": 1.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "pointer_final_h4": 1.0,
+        "pointer_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -384,7 +456,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 0.0,
         "multi_hop_final_h4": 0.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "pointer_final_h4": 0.0,
+        "pointer_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -398,7 +482,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 1.0,
         "multi_hop_final_h4": 1.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "pointer_final_h4": 1.0,
+        "pointer_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -508,7 +604,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 0.0,
         "multi_hop_final_h4": 0.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "pointer_final_h4": 0.0,
+        "pointer_final_round4_by_hop": {
+          "1": 0.0,
+          "2": 0.0,
+          "3": 0.0,
+          "4": 0.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
@@ -522,7 +630,19 @@
         "associative_final": 1.0,
         "multi_hop_final_h3": 1.0,
         "multi_hop_final_h4": 1.0,
+        "multi_hop_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "pointer_final_h4": 1.0,
+        "pointer_final_round4_by_hop": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0
+        },
         "sequential_composition_final_round6": {
           "3": 1.0,
           "4": 1.0,
