@@ -95,15 +95,16 @@ class OracleReader:
 class C0OracleModel(nn.Module):
     """Frozen U0-A shell plus trainable transform-conditioned correction only."""
 
-    def __init__(self, dimension: int = DIMENSION) -> None:
+    def __init__(self, dimension: int = DIMENSION, *, train_residual_network: bool = False) -> None:
         super().__init__()
         self.frozen_base = UnifiedT1U0(dimension)
         for parameter in self.frozen_base.parameters():
             parameter.requires_grad_(False)
         self.frozen_base.eval()
         self.correction_mlp = TransformCorrectionMLP(dimension, transform_count=TRANSFORM_COUNT)
-        for parameter in self.correction_mlp.network.parameters():
-            parameter.requires_grad_(False)
+        if not train_residual_network:
+            for parameter in self.correction_mlp.network.parameters():
+                parameter.requires_grad_(False)
 
     def transition(self, payload: Tensor, workspace: Tensor, transform_id: Tensor) -> tuple[Tensor, Tensor]:
         correction = self.correction_mlp(payload, workspace, transform_id)
@@ -177,7 +178,7 @@ def evaluate(model: C0OracleModel, payload: dict[str, Tensor]) -> dict[str, obje
                 "cosine_to_full_target": float(torch.nn.functional.cosine_similarity(truncated, targets[h_mask], dim=-1).mean()),
                 "normalized_error_to_full_target": float(relative_error(truncated, targets[h_mask]).mean()),
             }
-    zero_model = C0OracleModel(DIMENSION)
+    zero_model = C0OracleModel(DIMENSION, train_residual_network=False)
     zero_model.correction_mlp.load_state_dict(model.correction_mlp.state_dict())
     with torch.no_grad():
         zero_model.correction_mlp.payload_basis.weight.zero_()
@@ -228,6 +229,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=5000)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--train-network", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c0_oracle_seed101")
     args = parser.parse_args()
     random.seed(SEED)
@@ -241,7 +243,7 @@ def main() -> int:
     val_payload = make_split(DATASET_SEEDS["val"])
     test_payload = make_split(DATASET_SEEDS["test"])
     manifests = {name: dataset_manifest(payload, DATASET_SEEDS[name]) for name, payload in (("train", train_payload), ("val", val_payload), ("test", test_payload))}
-    model = C0OracleModel(DIMENSION)
+    model = C0OracleModel(DIMENSION, train_residual_network=args.train_network)
     trainable = [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
     expected_prefixes = ("correction_mlp.",)
     if not trainable or not all(name.startswith(expected_prefixes) for name, _ in trainable):
@@ -292,7 +294,8 @@ def main() -> int:
         "transition": "W_next = W + Y + correction_mlp(Y, RMSNorm(W), transform_embedding)",
         "head": "Identity(W)",
         "frozen_base": "UnifiedT1U0 reader/core/ALU adapters/codebooks/decoders/existing embeddings requires_grad=False; base not in correction forward",
-        "trainable": "correction_mlp payload basis + new transform embedding only; residual MLP branch remains zero/frozen in C0",
+        "trainable": "correction_mlp payload basis + new transform embedding only" if args.train_network else "correction_mlp payload basis + new transform embedding only; residual MLP branch remains zero/frozen in C0",
+        "residual_network_trainable": args.train_network,
         "optimizer": f"AdamW(lr={args.lr:g}, weight_decay=0), one step per batch",
         "steps": args.steps,
         "sample_count_per_h": SAMPLES_PER_H,
