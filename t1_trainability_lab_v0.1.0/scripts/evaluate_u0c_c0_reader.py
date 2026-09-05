@@ -145,6 +145,7 @@ def audit_reader_provenance(reader: UnifiedT1U0) -> dict[str, object]:
         "checkpoint": str(READER_CHECKPOINT.relative_to(ROOT)),
         "strict_load": True,
         "compared_tensor_count": len(names),
+        "compared_tensor_names": names,
         "all_equal": not mismatches,
         "max_abs_diff": max_abs_diff,
         "mismatches": mismatches,

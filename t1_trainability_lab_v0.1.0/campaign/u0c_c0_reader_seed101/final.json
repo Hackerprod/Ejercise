@@ -2272,6 +2272,20 @@
       "token_embedding/codebook"
     ],
     "compared_tensor_count": 12,
+    "compared_tensor_names": [
+      "slot_type_embeddings",
+      "memory_reader.query.weight",
+      "memory_reader.condition_projection.weight",
+      "memory_reader.condition_projection.bias",
+      "memory_reader.opcode_embedding.weight",
+      "memory_reader.immediate_embedding.weight",
+      "memory_reader.source_slot_embedding.weight",
+      "memory_reader.row_type_embedding.weight",
+      "memory_reader.input_norm.weight",
+      "opcode_embedding.weight",
+      "immediate_embedding.weight",
+      "token_embedding.weight"
+    ],
     "max_abs_diff": 0.0,
     "mismatches": [],
     "strict_load": true
