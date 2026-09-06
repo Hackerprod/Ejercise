@@ -76,8 +76,8 @@ class InterleavedProgram:
 def make_chain_programs(per_length: int, seed: int) -> list[ChainProgram]:
     rng = random.Random(seed)
     patterns = {
-        2: (("ALU_SUB", "ALU_MUL"), ("ALU_ADD", "ALU_SUB"), ("ALU_MUL", "ALU_SUB"), ("ALU_SUB", "ALU_ADD")),
-        3: (("ALU_SUB", "ALU_MUL", "ALU_ADD"), ("ALU_ADD", "ALU_SUB", "ALU_MUL"), ("ALU_MUL", "ALU_SUB", "ALU_ADD"), ("ALU_SUB", "ALU_ADD", "ALU_MUL")),
+        2: (("ALU_SUB", "ALU_MUL"), ("ALU_MUL", "ALU_SUB"), ("ALU_ADD", "ALU_MUL"), ("ALU_MUL", "ALU_ADD")),
+        3: (("ALU_SUB", "ALU_MUL", "ALU_ADD"), ("ALU_MUL", "ALU_SUB", "ALU_ADD"), ("ALU_ADD", "ALU_MUL", "ALU_SUB"), ("ALU_MUL", "ALU_ADD", "ALU_SUB")),
     }
     programs: list[ChainProgram] = []
     index = 0
@@ -86,10 +86,16 @@ def make_chain_programs(per_length: int, seed: int) -> list[ChainProgram]:
             operations = patterns[length][item % len(patterns[length])]
             start_key, value_key, *distractors = rng.sample(range(256), 2 + 8)
             pair_value = rng.randrange(VALUE_COUNT)
-            operands = tuple(rng.randrange(1, VALUE_COUNT) for _ in operations)
             swapped = (operations[1], operations[0], *operations[2:])
-            while symbolic_chain(ChainProgram(-1, operations, operands, start_key, pair_value, pair_value, []))["target_value"] == symbolic_chain(ChainProgram(-1, swapped, operands, start_key, pair_value, pair_value, []))["target_value"]:
+            for _ in range(32):
                 operands = tuple(rng.randrange(1, VALUE_COUNT) for _ in operations)
+                normal_target = apply_chain(operations, operands, pair_value)
+                opcode_swap_target = apply_chain(swapped, operands, pair_value)
+                instruction_swap_target = apply_chain(swapped, (operands[1], operands[0], *operands[2:]), pair_value)
+                if normal_target != opcode_swap_target and normal_target != instruction_swap_target:
+                    break
+            else:
+                raise RuntimeError(f"could not generate non-commutative chain witness for pattern {operations}")
             alternate_value = (pair_value + 1) % VALUE_COUNT
             rows = [Row(ROW_REL, start_key, value_key), Row(ROW_PAIR, value_key, pair_value)]
             for key in distractors:
@@ -98,6 +104,24 @@ def make_chain_programs(per_length: int, seed: int) -> list[ChainProgram]:
             programs.append(ChainProgram(index, operations, operands, start_key, pair_value, alternate_value, rows))
             index += 1
     return programs
+
+
+def apply_chain(operations: tuple[str, ...], operands: tuple[int, ...], initial: int) -> int:
+    value = initial
+    for operation, operand in zip(operations, operands):
+        value = apply_operation(operation, value, operand)
+    return value
+
+
+def choose_intervention_value(program: ChainProgram, operations: tuple[str, ...], operands: tuple[int, ...], *, after_first_alu: bool) -> int:
+    baseline_target = apply_chain(operations, operands, program.pair_value)
+    suffix = operations[1:] if after_first_alu else operations
+    suffix_operands = operands[1:] if after_first_alu else operands
+    for offset in range(1, VALUE_COUNT):
+        candidate = (program.pair_value + offset) % VALUE_COUNT
+        if apply_chain(suffix, suffix_operands, candidate) != baseline_target:
+            return candidate
+    raise RuntimeError("could not generate intervention with changed target")
 
 
 def make_interleaved_programs(count: int, seed: int) -> list[InterleavedProgram]:
@@ -131,31 +155,55 @@ def materialize(model: C1JointModel, rows: list[Row]) -> tuple[Tensor, Tensor, T
     return keys, values, types, torch.ones_like(types, dtype=torch.bool)
 
 
-def symbolic_chain(program: ChainProgram, *, initial_value: int | None = None, operations: tuple[str, ...] | None = None) -> dict[str, Any]:
+def symbolic_chain(program: ChainProgram, *, initial_value: int | None = None, operations: tuple[str, ...] | None = None, operands: tuple[int, ...] | None = None, intervention_after: int | None = None, intervention_value: int | None = None) -> dict[str, Any]:
     value = program.pair_value if initial_value is None else initial_value
     ops = operations or program.operations
+    args = operands or program.operands
     states = [value]
-    for operation, operand in zip(ops, program.operands):
+    interventions: list[dict[str, int]] = []
+    for index, (operation, operand) in enumerate(zip(ops, args)):
         value = apply_operation(operation, value, operand)
         states.append(value)
-    return {"target_value": value, "states": states}
+        if intervention_after == index:
+            if intervention_value is None:
+                raise ValueError("intervention_value required when intervention_after is set")
+            value = intervention_value
+            states.append(value)
+            interventions.append({"after_operation": index, "value": value})
+    return {"target_value": value, "states": states, "interventions": interventions}
 
 
 def symbolic_interleaved(program: InterleavedProgram, *, interleaved_order: bool = False) -> dict[str, Any]:
-    value = program.pair_value
+    relation_rows = {row.key: (row_i, int(row.value)) for row_i, row in enumerate(program.rows) if row.kind == ROW_REL}
+    pair_rows = {row.key: (row_i, int(row.value)) for row_i, row in enumerate(program.rows) if row.kind == ROW_PAIR}
+    vector_rows = {row.key: (row_i, row.value) for row_i, row in enumerate(program.rows) if row.kind == ROW_VEC}
     workspace = torch.zeros(DIMENSION)
-    state = {"P": program.start_key, "E": program.pair_value, "R": value, "W": workspace}
+    state: dict[str, Any] = {"P": program.start_key, "E": None, "R": None, "W": workspace}
     trace: list[dict[str, Any]] = []
-    instructions = [("ALU", 0), ("ACCUM", 0), ("READ_P", 0), ("ACCUM", 1), ("ALU", 1)] if not interleaved_order else [("ALU", 0), ("ALU", 1), ("ACCUM", 0), ("READ_P", 0), ("ACCUM", 1)]
+    instructions = [("READ_P", None), ("READ_E", None), ("COPY", None), ("ALU", 0), ("ACCUM", 0), ("READ_P", None), ("ACCUM", 1), ("ALU", 1), ("EMIT", None)] if not interleaved_order else [("READ_P", None), ("READ_E", None), ("COPY", None), ("ALU", 0), ("ALU", 1), ("ACCUM", 0), ("READ_P", None), ("ACCUM", 1), ("EMIT", None)]
     for kind, index in instructions:
         before = snapshot_symbolic_state(state)
-        if kind == "ALU":
+        selected_row = None
+        payload: Any = None
+        if kind == "READ_P":
+            selected_row, next_pointer = relation_rows[int(state["P"])]
+            state["P"] = next_pointer
+            payload = next_pointer
+        elif kind == "READ_E":
+            selected_row, pair_value = pair_rows[int(state["P"])]
+            state["E"] = pair_value
+            payload = pair_value
+        elif kind == "COPY":
+            state["R"] = state["E"]
+        elif kind == "ALU":
+            if state["R"] is None:
+                raise ValueError("symbolic ALU executed before COPY")
             state["R"] = apply_operation(program.operations[index], int(state["R"]), program.operands[index])
         elif kind == "ACCUM":
-            state["W"] = state["W"] + apply_transform(program.evidence[index], program.transforms[index])
-        elif kind == "READ_P":
-            state["P"] = program.rows[next(row_i for row_i, row in enumerate(program.rows) if row.kind == ROW_REL and row.key == state["P"])].value
-        trace.append({"instruction": kind, "index": index, "before": before, "after": snapshot_symbolic_state(state)})
+            selected_row, evidence = vector_rows[int(state["P"])]
+            payload = evidence
+            state["W"] = state["W"] + apply_transform(evidence, program.transforms[index])
+        trace.append({"instruction": kind, "index": index, "selected_row": selected_row, "payload": payload.tolist() if isinstance(payload, Tensor) else payload, "before": before, "after": snapshot_symbolic_state(state)})
     return {"target_value": int(state["R"]), "target_workspace": state["W"].tolist(), "trace": trace}
 
 
@@ -188,9 +236,18 @@ def run_chain(model: C1JointModel, program: ChainProgram, *, mode: str = "baseli
     state[:, SLOT_P] = model.token_embedding(torch.tensor([program.start_key]))
     immediate_zero = torch.tensor([511])
     trace: list[dict[str, Any]] = []
-    intervention_value = (program.pair_value + 3) % VALUE_COUNT
-    operations = program.operations if mode != "swap_ops" else (program.operations[1], program.operations[0], *program.operations[2:])
-    symbolic = symbolic_chain(program, initial_value=intervention_value if mode == "intervene_r" else None, operations=operations)
+    if mode in {"swap_opcodes_keep_operands", "swap_instructions"}:
+        operations = (program.operations[1], program.operations[0], *program.operations[2:])
+    else:
+        operations = program.operations
+    operands = (program.operands[1], program.operands[0], *program.operands[2:]) if mode == "swap_instructions" else program.operands
+    intervention_value = choose_intervention_value(program, operations, operands, after_first_alu=mode == "intervene_r_after_first_alu")
+    if mode == "intervene_r_after_copy":
+        symbolic = symbolic_chain(program, initial_value=intervention_value, operations=operations, operands=operands)
+    elif mode == "intervene_r_after_first_alu":
+        symbolic = symbolic_chain(program, operations=operations, operands=operands, intervention_after=0, intervention_value=intervention_value)
+    else:
+        symbolic = symbolic_chain(program, operations=operations, operands=operands)
     instructions: list[tuple[str, int | None]] = [("READ_P", None), ("READ_E", None), ("COPY", None)]
     instructions.extend((operation, index) for index, operation in enumerate(operations))
     instructions.append(("EMIT", None))
@@ -201,7 +258,7 @@ def run_chain(model: C1JointModel, program: ChainProgram, *, mode: str = "baseli
         head_logits = None
         if instruction == "COPY":
             state[:, SLOT_R] = state[:, SLOT_E].clone()
-            if mode == "intervene_r":
+            if mode == "intervene_r_after_copy":
                 state[:, SLOT_R] = model.token_embedding(torch.tensor([VALUE_BASE + intervention_value]))
             elif mode == "e_after_copy":
                 state[:, SLOT_E] = model.token_embedding(torch.tensor([VALUE_BASE + ((program.pair_value + 5) % VALUE_COUNT)]))
@@ -213,9 +270,11 @@ def run_chain(model: C1JointModel, program: ChainProgram, *, mode: str = "baseli
             payload = result.payload
         elif instruction in TRANSFORM_OPS:
             opcode = torch.tensor([OPCODE_IDS[instruction]])
-            operand = immediate_vectors(model, torch.tensor([VALUE_BASE + program.operands[int(op_index)]], dtype=torch.long))
+            operand = immediate_vectors(model, torch.tensor([VALUE_BASE + operands[int(op_index)]], dtype=torch.long))
             state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, opcode, operand, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]), read_set="explicit")
             head_logits = candidates.alu_logits.squeeze(0)
+            if mode == "intervene_r_after_first_alu" and int(op_index) == 0:
+                state[:, SLOT_R] = model.token_embedding(torch.tensor([VALUE_BASE + intervention_value]))
         else:
             opcode = torch.tensor([OPCODE_IDS["EMIT"]])
             state, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, opcode, immediate_zero, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]), read_set="explicit")
@@ -276,10 +335,12 @@ def run_interleaved(model: C1JointModel, program: InterleavedProgram, *, moved: 
         trace.append(record)
     predicted, decoder_logits = decode_r(model, state)
     symbolic = symbolic_interleaved(program, interleaved_order=moved)
+    actual_read_rows = [item["selected_row"] for item in trace if item["instruction"] in {"READ_P", "READ_E", "ACCUM_W"}]
+    symbolic_read_rows = [item["selected_row"] for item in symbolic["trace"] if item["selected_row"] is not None]
     workspace = state[:, SLOT_W].squeeze(0)
     target_value = VALUE_BASE + symbolic["target_value"]
     target_workspace = torch.tensor(symbolic["target_workspace"])
-    return {"target_id": target_value, "predicted_id": predicted, "exact_hit": predicted == target_value, "workspace_cosine": float(F.cosine_similarity(workspace.view(1, -1), target_workspace.view(1, -1)).item()), "workspace_relative_error": float((workspace - target_workspace).norm().div(target_workspace.norm().clamp_min(1e-8)).item()), "trace": trace, "symbolic": symbolic, "decoder_logits": decoder_logits.tolist()}
+    return {"target_id": target_value, "predicted_id": predicted, "exact_hit": predicted == target_value, "workspace_cosine": float(F.cosine_similarity(workspace.view(1, -1), target_workspace.view(1, -1)).item()), "workspace_relative_error": float((workspace - target_workspace).norm().div(target_workspace.norm().clamp_min(1e-8)).item()), "symbolic_read_rows_aligned": actual_read_rows == symbolic_read_rows, "trace": trace, "symbolic": symbolic, "decoder_logits": decoder_logits.tolist()}
 
 
 def aggregate_chain(results: list[dict[str, Any]], programs: list[ChainProgram]) -> dict[str, Any]:
@@ -299,16 +360,18 @@ def main() -> None:
     chains = make_chain_programs(args.per_length, args.seed)
     interleaved = make_interleaved_programs(args.per_length * 2, args.seed)
     chain_baseline = [run_chain(model, program) for program in chains]
-    chain_intervention = [run_chain(model, program, mode="intervene_r") for program in chains]
+    chain_intervention = [run_chain(model, program, mode="intervene_r_after_copy") for program in chains]
+    chain_mid_intervention = [run_chain(model, program, mode="intervene_r_after_first_alu") for program in chains]
     chain_e_after_copy = [run_chain(model, program, mode="e_after_copy") for program in chains]
-    chain_swapped = [run_chain(model, program, mode="swap_ops") for program in chains]
+    chain_opcode_swapped = [run_chain(model, program, mode="swap_opcodes_keep_operands") for program in chains]
+    chain_instruction_swapped = [run_chain(model, program, mode="swap_instructions") for program in chains]
     interleaved_baseline = [run_interleaved(model, program) for program in interleaved]
     interleaved_moved = [run_interleaved(model, program, moved=True) for program in interleaved]
-    summary = {"status": "completed", "checkpoint": str(args.checkpoint), "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), "read_set": "explicit", "chain": {"baseline": aggregate_chain(chain_baseline, chains), "intervene_r": aggregate_chain(chain_intervention, chains), "e_after_copy": aggregate_chain(chain_e_after_copy, chains), "swap_ops": aggregate_chain(chain_swapped, chains), "r_intervention_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_intervention)), "e_after_copy_output_unchanged": sum(a["predicted_id"] == b["predicted_id"] for a, b in zip(chain_baseline, chain_e_after_copy)), "swap_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_swapped))}, "interleaved": {"baseline_exact": sum(item["exact_hit"] for item in interleaved_baseline), "moved_exact": sum(item["exact_hit"] for item in interleaved_moved), "baseline_workspace_gate": sum(item["workspace_cosine"] > 0.999 and item["workspace_relative_error"] <= 0.01 for item in interleaved_baseline), "moved_workspace_gate": sum(item["workspace_cosine"] > 0.999 and item["workspace_relative_error"] <= 0.01 for item in interleaved_moved), "samples": len(interleaved), "r_order_invariant": sum(a["predicted_id"] == b["predicted_id"] for a, b in zip(interleaved_baseline, interleaved_moved))}, "target_source": "independent symbolic interpreter; no target/state reinjection"}
+    summary = {"status": "completed", "checkpoint": str(args.checkpoint), "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), "read_set": "explicit", "chain": {"baseline": aggregate_chain(chain_baseline, chains), "intervene_r_after_copy": aggregate_chain(chain_intervention, chains), "intervene_r_after_first_alu": aggregate_chain(chain_mid_intervention, chains), "e_after_copy": aggregate_chain(chain_e_after_copy, chains), "swap_opcodes_keep_operands": aggregate_chain(chain_opcode_swapped, chains), "swap_instructions": aggregate_chain(chain_instruction_swapped, chains), "r_intervention_after_copy_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_intervention)), "r_intervention_after_first_alu_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_mid_intervention)), "e_after_copy_output_unchanged": sum(a["predicted_id"] == b["predicted_id"] for a, b in zip(chain_baseline, chain_e_after_copy)), "opcode_swap_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_opcode_swapped)), "instruction_swap_target_changed": sum(a["target_id"] != b["target_id"] for a, b in zip(chain_baseline, chain_instruction_swapped))}, "interleaved": {"baseline_exact": sum(item["exact_hit"] for item in interleaved_baseline), "moved_exact": sum(item["exact_hit"] for item in interleaved_moved), "baseline_workspace_gate": sum(item["workspace_cosine"] > 0.999 and item["workspace_relative_error"] <= 0.01 for item in interleaved_baseline), "moved_workspace_gate": sum(item["workspace_cosine"] > 0.999 and item["workspace_relative_error"] <= 0.01 for item in interleaved_moved), "baseline_symbolic_read_rows_aligned": sum(item["symbolic_read_rows_aligned"] for item in interleaved_baseline), "moved_symbolic_read_rows_aligned": sum(item["symbolic_read_rows_aligned"] for item in interleaved_moved), "samples": len(interleaved), "r_order_invariant": sum(a["predicted_id"] == b["predicted_id"] for a, b in zip(interleaved_baseline, interleaved_moved))}, "target_source": "independent symbolic interpreter; no target/state reinjection"}
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "results.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with (args.output_dir / "traces.jsonl").open("w", encoding="utf-8") as stream:
-        for name, programs, results in (("chain_baseline", chains, chain_baseline), ("chain_intervene_r", chains, chain_intervention), ("chain_e_after_copy", chains, chain_e_after_copy), ("chain_swapped", chains, chain_swapped), ("interleaved_baseline", interleaved, interleaved_baseline), ("interleaved_moved", interleaved, interleaved_moved)):
+        for name, programs, results in (("chain_baseline", chains, chain_baseline), ("chain_intervene_r_after_copy", chains, chain_intervention), ("chain_intervene_r_after_first_alu", chains, chain_mid_intervention), ("chain_e_after_copy", chains, chain_e_after_copy), ("chain_swap_opcodes_keep_operands", chains, chain_opcode_swapped), ("chain_swap_instructions", chains, chain_instruction_swapped), ("interleaved_baseline", interleaved, interleaved_baseline), ("interleaved_moved", interleaved, interleaved_moved)):
             for program, result in zip(programs, results):
                 stream.write(json.dumps({"run": name, "program": program.index, "operations": list(program.operations), "operands": list(program.operands), **result}, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
