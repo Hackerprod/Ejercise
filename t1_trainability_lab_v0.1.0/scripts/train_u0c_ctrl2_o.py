@@ -40,6 +40,13 @@ def action_from_difference(difference: Tensor, tau: Tensor) -> Tensor:
     return torch.where(difference > tau, torch.full_like(difference, INCREASE, dtype=torch.long), torch.where(difference < -tau, torch.full_like(difference, DECREASE, dtype=torch.long), torch.full_like(difference, KEEP, dtype=torch.long)))
 
 
+def equality_consistency_loss(difference: Tensor, tau: Tensor, labels: Tensor) -> Tensor:
+    keep_mask = labels == KEEP
+    if not bool(keep_mask.any()):
+        raise RuntimeError("El batch balanceado debe contener ejemplos KEEP")
+    return (difference[keep_mask] / tau.detach()).square().mean()
+
+
 class OrdinalSharedScorer(nn.Module):
     """One scorer object for R and b, with one global learned equality band."""
 
@@ -302,16 +309,39 @@ def contextual_evaluation(model: Any, controller: OrdinalSharedScorer, manifest:
     return aggregate_contextual(records), records, epsilon_records, table
 
 
-def evaluate_checkpoint(model: Any, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]], train_pairs: set[tuple[int, int]], checkpoint: Path) -> dict[str, Any]:
+def epsilon_summary(epsilon_records: list[dict[str, Any]]) -> dict[str, Any]:
+    values = sorted(item["epsilon_R"] for item in epsilon_records)
+    if not values:
+        return {"samples": 0}
+    def percentile(fraction: float) -> float:
+        position = fraction * (len(values) - 1)
+        lower = int(position)
+        upper = min(lower + 1, len(values) - 1)
+        weight = position - lower
+        return values[lower] * (1.0 - weight) + values[upper] * weight
+    return {"samples": len(values), "min": values[0], "p50": percentile(0.50), "p90": percentile(0.90), "p95": percentile(0.95), "p99": percentile(0.99), "p999": percentile(0.999), "max": values[-1], "mean": sum(values) / len(values)}
+
+
+def build_evaluation_gate(canonical: dict[str, Any], original_pilot: dict[str, Any], contextual: dict[str, Any], pair_table: list[dict[str, Any]]) -> dict[str, Any]:
+    original_global = original_pilot["correct_count"] == original_pilot["samples"]
+    original_by_action = all(item["correct_count"] == item["samples"] for item in original_pilot["by_action"].values())
+    original_by_distance = all(item["final_success_count"] == item["samples"] for item in original_pilot["by_distance"].values())
+    contextual_by_action = all(item["samples"] == 0 or item["decision_correct"] / item["samples"] >= 0.999 and item["final_success"] / item["samples"] >= 0.999 and item["trace_success"] / item["samples"] >= 0.999 for item in contextual["by_action"].values())
+    contextual_by_distance = all(item["samples"] == 0 or item["decision_correct"] / item["samples"] >= 0.999 and item["final_success"] / item["samples"] >= 0.999 and item["trace_success"] / item["samples"] >= 0.999 for item in contextual["by_distance"].values())
+    return {"canonical_exact": canonical["exact"], "original_pilot_global": original_global, "original_pilot_by_action": original_by_action, "original_pilot_by_distance": original_by_distance, "original_pilot": original_global and original_by_action and original_by_distance, "contextual_decision": contextual["decision_accuracy"] >= 0.999, "contextual_final": contextual["final_success_rate"] >= 0.999, "contextual_trace": contextual["trace_success_rate"] >= 0.999, "contextual_by_action": contextual_by_action, "contextual_by_distance": contextual_by_distance, "all_contextual_pairs": all(item["samples"] == item["decision_correct"] == item["oracle_final_success"] == item["final_success"] == item["trace_success"] for item in pair_table), "executor_oracle": contextual["oracle_final_success"] == contextual["samples"], "pass": canonical["exact"] and original_global and original_by_action and original_by_distance and contextual["decision_accuracy"] >= 0.999 and contextual["final_success_rate"] >= 0.999 and contextual["trace_success_rate"] >= 0.999 and contextual_by_action and contextual_by_distance and all(item["samples"] == item["decision_correct"] == item["oracle_final_success"] == item["final_success"] == item["trace_success"] for item in pair_table) and contextual["oracle_final_success"] == contextual["samples"]}
+
+
+def evaluate_checkpoint(model: Any, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]], train_pairs: set[tuple[int, int]], checkpoint: Path, *, data_root: Path = PILOT_ROOT) -> dict[str, Any]:
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     controller = OrdinalSharedScorer()
     controller.load_state_dict(payload["controller"], strict=True)
     controller.eval()
     canonical_summary, canonical_records, ordinal_metrics = canonical_evaluation(model, controller, train_pairs)
     contextual_summary, contextual_records, epsilon_records, pair_table = contextual_evaluation(model, controller, manifest, runtime, canonical_records)
-    canonical_classification = classification_metrics(controller, load_dataset(PILOT_ROOT, "test")[0], load_dataset(PILOT_ROOT, "test")[1])
-    gate = {"decision": contextual_summary["decision_accuracy"] >= 0.999, "oracle_final": contextual_summary["oracle_final_success_rate"] >= 0.999, "final": contextual_summary["final_success_rate"] >= 0.999, "trace": contextual_summary["trace_success_rate"] >= 0.999, "all_contextual_pairs": all(item["samples"] == item["decision_correct"] == item["oracle_final_success"] == item["final_success"] == item["trace_success"] for item in pair_table), "canonical_exact": canonical_summary["exact"]}
-    return {"checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}, "tau": float(controller.tau().item()), "canonical": canonical_summary, "canonical_records": canonical_records, "ordinal_metrics": ordinal_metrics, "classification_on_original_pilot_test": canonical_classification, "contextual": contextual_summary, "contextual_pair_table": pair_table, "epsilon_R": epsilon_records, "contextual_records": contextual_records, "gate": gate}
+    test_observations, test_labels = load_dataset(data_root, "test")
+    canonical_classification = classification_metrics(controller, test_observations, test_labels)
+    gate = build_evaluation_gate(canonical_summary, canonical_classification, contextual_summary, pair_table)
+    return {"checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}, "tau": float(controller.tau().item()), "canonical": canonical_summary, "canonical_records": canonical_records, "ordinal_metrics": ordinal_metrics, "classification_on_original_pilot_test": canonical_classification, "contextual": contextual_summary, "contextual_pair_table": pair_table, "epsilon_R": epsilon_records, "epsilon_R_summary": epsilon_summary(epsilon_records), "contextual_records": contextual_records, "gate": gate}
 
 
 def main() -> None:

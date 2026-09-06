@@ -8,7 +8,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from ctrl2_common import load_executor
-from train_u0c_ctrl2_o import DIMENSION, DECREASE, INCREASE, KEEP, OrdinalSharedScorer, action_from_difference, codebook_distinctness, parameter_count
+from train_u0c_ctrl2_o import DIMENSION, DECREASE, INCREASE, KEEP, OrdinalSharedScorer, action_from_difference, codebook_distinctness, equality_consistency_loss, parameter_count
 
 
 def test_parameter_count_is_exactly_4225() -> None:
@@ -73,3 +73,38 @@ def test_frozen_executor_value_codebook_rows_are_distinct() -> None:
     result = codebook_distinctness(load_executor())
     assert result["all_distinct"]
     assert result["min_pairwise_l2"] > 0.0
+
+
+def test_equality_loss_reaches_shared_scorer_from_both_roles() -> None:
+    torch.manual_seed(5)
+    scorer = OrdinalSharedScorer()
+    register = torch.randn(6, DIMENSION, requires_grad=True)
+    reference = torch.randn(6, DIMENSION, requires_grad=True)
+    labels = torch.full((6,), KEEP, dtype=torch.long)
+    equality_consistency_loss(scorer.difference(register, reference), scorer.tau(), labels).backward()
+    assert scorer.network[0].weight.grad is not None
+    assert torch.count_nonzero(scorer.network[0].weight.grad).item() > 0
+    assert torch.count_nonzero(register.grad).item() > 0
+    assert torch.count_nonzero(reference.grad).item() > 0
+
+
+def test_equality_loss_requires_keep_in_batch() -> None:
+    scorer = OrdinalSharedScorer()
+    difference = torch.zeros(4)
+    labels = torch.full((4,), INCREASE, dtype=torch.long)
+    try:
+        equality_consistency_loss(difference, scorer.tau(), labels)
+    except RuntimeError as error:
+        assert str(error) == "El batch balanceado debe contener ejemplos KEEP"
+    else:
+        raise AssertionError("missing KEEP must raise RuntimeError")
+
+
+def test_equality_loss_detaches_tau_gradient() -> None:
+    torch.manual_seed(6)
+    scorer = OrdinalSharedScorer()
+    difference = torch.randn(4, requires_grad=True)
+    labels = torch.full((4,), KEEP, dtype=torch.long)
+    equality_consistency_loss(difference, scorer.tau(), labels).backward()
+    assert scorer.rho.grad is None or torch.count_nonzero(scorer.rho.grad).item() == 0
+    assert torch.count_nonzero(difference.grad).item() > 0
