@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from train_u0c_ctrl1 import ADVANCE, COLLECT, update_causal_accounting, trace_success
 from train_u0c_ctrl2 import reference_intervention_pass
+from evaluate_u0c_ctrl2_g import comparison_category, diagnostic_counts
 
 
 def test_forced_wrong_read_is_execution_error_not_controller_error() -> None:
@@ -42,3 +43,19 @@ def test_reference_intervention_rejects_permutation_of_three_present_classes() -
         {"expected_action": "INCREASE", "predicted_action": "KEEP"},
     ]
     assert not reference_intervention_pass(entries)
+
+
+def test_contextual_regression_counts_when_canonical_is_correct() -> None:
+    records = [{"canonical_correct": True, "decision_correct": False, "final_success": True}]
+    assert comparison_category(True, False) == "contextual_regression"
+    counts = diagnostic_counts(records)
+    assert counts["contextual_regression_count"] == 1
+    assert counts["decision_error_count"] == counts["shared_error_count"] + counts["contextual_regression_count"]
+
+
+def test_execution_failure_does_not_count_as_comparator_sensitivity() -> None:
+    records = [{"canonical_correct": True, "decision_correct": True, "final_success": False}]
+    assert comparison_category(True, True) == "agreement_correct"
+    counts = diagnostic_counts(records)
+    assert counts["contextual_regression_count"] == 0
+    assert counts["executor_or_transport_count"] == 1

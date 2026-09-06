@@ -21,8 +21,8 @@ PILOT_ROOT = ROOT / "campaign" / "u0c_ctrl2_pilot_seed2201_frozen"
 OUTPUT_ROOT = ROOT / "campaign" / "u0c_ctrl2_g_coverage_frozen"
 
 
-def load_ctrl2() -> AdjustmentMLP:
-    payload = torch.load(PILOT_ROOT / "final.pt", map_location="cpu", weights_only=False)
+def load_ctrl2(checkpoint: Path = PILOT_ROOT / "final.pt") -> AdjustmentMLP:
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     controller = AdjustmentMLP()
     controller.load_state_dict(payload["controller"], strict=True)
     controller.eval()
@@ -51,6 +51,26 @@ def confusion_matrix(records: list[dict[str, Any]]) -> list[list[int]]:
     for record in records:
         matrix[record["expected_action"]][record["predicted_action"]] += 1
     return matrix
+
+
+def comparison_category(canonical_correct: bool, decision_correct: bool) -> str:
+    if canonical_correct and decision_correct:
+        return "agreement_correct"
+    if not canonical_correct and not decision_correct:
+        return "shared_error"
+    if canonical_correct and not decision_correct:
+        return "contextual_regression"
+    return "contextual_recovery"
+
+
+def diagnostic_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    decision_error_count = sum(not record["decision_correct"] for record in records)
+    shared_error_count = sum(not record["canonical_correct"] and not record["decision_correct"] for record in records)
+    contextual_regression_count = sum(record["canonical_correct"] and not record["decision_correct"] for record in records)
+    contextual_recovery_count = sum(not record["canonical_correct"] and record["decision_correct"] for record in records)
+    executor_or_transport_count = sum(record["decision_correct"] and not record["final_success"] for record in records)
+    assert decision_error_count == shared_error_count + contextual_regression_count
+    return {"decision_error_count": decision_error_count, "shared_error_count": shared_error_count, "contextual_regression_count": contextual_regression_count, "contextual_recovery_count": contextual_recovery_count, "executor_or_transport_count": executor_or_transport_count}
 
 
 def layer_a(model: Any, controller: AdjustmentMLP, train_pairs: set[tuple[int, int]]) -> dict[str, Any]:
@@ -88,7 +108,7 @@ def aggregate_contextual(records: list[dict[str, Any]], *, action_key: str = "ex
     return {"samples": len(records), "decision_correct": sum(record["decision_correct"] for record in records), "oracle_final_success": sum(record["oracle_final_success"] for record in records), "final_success": sum(record["final_success"] for record in records), "trace_success": sum(record["trace_success"] for record in records), "decision_accuracy": sum(record["decision_correct"] for record in records) / total, "oracle_final_success_rate": sum(record["oracle_final_success"] for record in records) / total, "final_success_rate": sum(record["final_success"] for record in records) / total, "trace_success_rate": sum(record["trace_success"] for record in records) / total, "by_distance": by_distance, "by_action": by_action, "by_extreme_x": by_extreme}
 
 
-def layer_b(model: Any, controller: AdjustmentMLP, ctrl1: Any, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]], canonical_records: dict[tuple[int, int], dict[str, Any]]) -> list[dict[str, Any]]:
+def layer_b(model: Any, controller: AdjustmentMLP, ctrl1: Any, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]], canonical_records: dict[tuple[int, int], dict[str, Any]], *, capture_logits: bool = False) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for episode in manifest["episodes"]:
         navigation = runtime[episode["episode"]]
@@ -100,11 +120,15 @@ def layer_b(model: Any, controller: AdjustmentMLP, ctrl1: Any, manifest: dict[st
             oracle_predicted = None
             predicted_action = None
             predicted = None
+            controller_logits = None
             if navigation["collected"]:
                 base_state = navigation["state"].clone()
                 oracle_state, oracle_operation = dispatch_adjustment(model, navigation["memory_keys"], navigation["memory_values"], navigation["memory_types"], navigation["row_mask"], base_state.clone(), navigation["presence"], expected)
                 oracle_predicted = decode_value(model, oracle_state)
-                predicted_action = int(controller(navigation["state"][:, SLOT_R], model.token_embedding(torch.tensor([VALUE_BASE + reference]))).argmax(-1).item())
+                logits = controller(navigation["state"][:, SLOT_R], model.token_embedding(torch.tensor([VALUE_BASE + reference])))
+                predicted_action = int(logits.argmax(-1).item())
+                if capture_logits:
+                    controller_logits = logits.squeeze(0).tolist()
                 predicted_state, predicted_operation = dispatch_adjustment(model, navigation["memory_keys"], navigation["memory_values"], navigation["memory_types"], navigation["row_mask"], base_state.clone(), navigation["presence"], predicted_action)
                 predicted = decode_value(model, predicted_state)
             oracle_final_success = oracle_predicted == target
@@ -116,7 +140,11 @@ def layer_b(model: Any, controller: AdjustmentMLP, ctrl1: Any, manifest: dict[st
                 first_control_error = {"stage": "CTRL-2", "reference": reference, "expected_action": expected, "predicted_action": predicted_action}
             elif navigation["aligned"] and decision_correct and not final_success:
                 first_execution_error = {"stage": "CTRL-2", "reference": reference, "instruction": "adjustment_dispatch"}
-            records.append({"episode": episode["episode"], "graph": episode["graph"], "distance": episode["distance"], "x": x, "reference": reference, "expected_action": expected, "predicted_action": predicted_action, "target_value": target, "oracle_predicted_value": oracle_predicted, "predicted_value": predicted, "oracle_final_success": oracle_final_success, "decision_correct": decision_correct, "final_success": final_success, "trace_success": trace_success(final_success, navigation["timeout"], first_control_error, first_execution_error), "timeout": navigation["timeout"], "first_control_error": first_control_error, "first_execution_error": first_execution_error, "canonical_correct": canonical_x_records[(x, reference)]["expected_action"] == canonical_x_records[(x, reference)]["predicted_action"], "diagnostic_representation_sensitivity": canonical_x_records[(x, reference)]["expected_action"] == canonical_x_records[(x, reference)]["predicted_action"] and not oracle_final_success, "diagnostic_comparator_generalization": canonical_x_records[(x, reference)]["expected_action"] != canonical_x_records[(x, reference)]["predicted_action"] and not decision_correct, "diagnostic_executor_or_transport": decision_correct and not final_success})
+            canonical_correct = canonical_x_records[(x, reference)]["expected_action"] == canonical_x_records[(x, reference)]["predicted_action"]
+            record = {"episode": episode["episode"], "graph": episode["graph"], "distance": episode["distance"], "x": x, "reference": reference, "expected_action": expected, "predicted_action": predicted_action, "target_value": target, "oracle_predicted_value": oracle_predicted, "predicted_value": predicted, "oracle_final_success": oracle_final_success, "decision_correct": decision_correct, "final_success": final_success, "trace_success": trace_success(final_success, navigation["timeout"], first_control_error, first_execution_error), "timeout": navigation["timeout"], "first_control_error": first_control_error, "first_execution_error": first_execution_error, "canonical_correct": canonical_correct, "comparison_category": comparison_category(canonical_correct, decision_correct), "diagnostic_representation_sensitivity": canonical_correct and not decision_correct, "diagnostic_comparator_generalization": not canonical_correct and not decision_correct, "diagnostic_executor_or_transport": decision_correct and not final_success}
+            if capture_logits and controller_logits is not None:
+                record["controller_logits"] = controller_logits
+            records.append(record)
     return records
 
 
@@ -132,6 +160,7 @@ def pair_table(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
+    parser.add_argument("--ctrl2-checkpoint", type=Path, default=PILOT_ROOT / "final.pt")
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     manifests = load_base_manifests()
@@ -146,16 +175,17 @@ def main() -> None:
     correction_path.write_text(json.dumps(metadata_correction, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     model = load_executor()
     ctrl1 = load_ctrl1()
-    ctrl2 = load_ctrl2()
+    ctrl2 = load_ctrl2(args.ctrl2_checkpoint)
     test_observations, _, runtime = generate_dataset(model, ctrl1, manifests["test"], keep_runtime=True)
     canonical = layer_a(model, ctrl2, train_pair_set)
     canonical_records = {(record["x"], record["reference"]): record for record in canonical["records"]}
     contextual_records = layer_b(model, ctrl2, ctrl1, manifests["test"], runtime, canonical_records)
     contextual_summary = aggregate_contextual(contextual_records)
-    diagnostics = {"representation_sensitivity_count": sum(record["diagnostic_representation_sensitivity"] for record in contextual_records), "comparator_generalization_count": sum(record["diagnostic_comparator_generalization"] for record in contextual_records), "executor_or_transport_count": sum(record["diagnostic_executor_or_transport"] for record in contextual_records)}
+    diagnostics = diagnostic_counts(contextual_records)
+    diagnostics.update({"representation_sensitivity_count": diagnostics["contextual_regression_count"], "comparator_generalization_count": diagnostics["shared_error_count"], "executor_or_transport_count": diagnostics["executor_or_transport_count"]})
     table = pair_table(contextual_records)
     gate = {"decision": contextual_summary["decision_accuracy"] >= 0.999, "oracle_final": contextual_summary["oracle_final_success_rate"] >= 0.999, "final": contextual_summary["final_success_rate"] >= 0.999, "trace": contextual_summary["trace_success_rate"] >= 0.999, "by_action": all(item["samples"] == 0 or item["decision_correct"] / item["samples"] >= 0.999 and item["final_success"] / item["samples"] >= 0.999 and item["trace_success"] / item["samples"] >= 0.999 for item in contextual_summary["by_action"].values()), "by_distance": all(item["samples"] == 0 or item["decision_correct"] / item["samples"] >= 0.999 and item["final_success"] / item["samples"] >= 0.999 and item["trace_success"] / item["samples"] >= 0.999 for item in contextual_summary["by_distance"].values()), "all_contextual_pairs": all(item["samples"] == item["decision_correct"] == item["oracle_final_success"] == item["final_success"] == item["trace_success"] for item in table)}
-    output = {"status": "completed", "task": "T1-CTRL-2-G", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": hashlib.sha256(BASE_CHECKPOINT.read_bytes()).hexdigest()}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": hashlib.sha256(CTRL1_CHECKPOINT.read_bytes()).hexdigest()}, "checkpoint_ctrl2": {"path": str(PILOT_ROOT / "final.pt"), "sha256": hashlib.sha256((PILOT_ROOT / "final.pt").read_bytes()).hexdigest()}, "manifest": {"path": str(manifest_path), "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(), "canonical_pairs": 1024, "contextual_cases": 64000, "contextual_base_episodes": 2000, "references_per_episode": 32}, "source_metadata_correction": {"path": str(correction_path), "sha256": hashlib.sha256(correction_path.read_bytes()).hexdigest()}, "train_pair_partition": {"from_labels_count": len(train_pair_set), "formula_count": len(formula_pair_set), "label_formula_match": train_pair_set == formula_pair_set, "seen": sum(record["seen_in_train_labels"] for record in canonical["records"]), "unseen": sum(not record["seen_in_train_labels"] for record in canonical["records"]), "expected_formula_seen": 270, "expected_formula_unseen": 754}, "layer_a_canonical": {key: value for key, value in canonical.items() if key != "records"}, "layer_a_records": canonical["records"], "layer_b_contextual": contextual_summary, "layer_b_pair_table": table, "diagnostics": diagnostics, "gate": gate, "policy_inputs": ["real_register_state_after_COPY", "direct_numeric_reference_embedding"], "policy_excluded": ["x", "reference_relation", "target_value", "action_label", "distance", "memory", "symbolic_pointer", "trace"], "protocol": {"executor_frozen": True, "ctrl1_frozen": True, "ctrl2_frozen": True, "fine_tuning": False, "new_weights": False, "read_set": "explicit", "diagnostic_read_e_select": False}}
+    output = {"status": "completed", "task": "T1-CTRL-2-G", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": hashlib.sha256(BASE_CHECKPOINT.read_bytes()).hexdigest()}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": hashlib.sha256(CTRL1_CHECKPOINT.read_bytes()).hexdigest()}, "checkpoint_ctrl2": {"path": str(args.ctrl2_checkpoint), "sha256": hashlib.sha256(args.ctrl2_checkpoint.read_bytes()).hexdigest()}, "manifest": {"path": str(manifest_path), "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(), "canonical_pairs": 1024, "contextual_cases": 64000, "contextual_base_episodes": 2000, "references_per_episode": 32}, "source_metadata_correction": {"path": str(correction_path), "sha256": hashlib.sha256(correction_path.read_bytes()).hexdigest()}, "train_pair_partition": {"from_labels_count": len(train_pair_set), "formula_count": len(formula_pair_set), "label_formula_match": train_pair_set == formula_pair_set, "seen": sum(record["seen_in_train_labels"] for record in canonical["records"]), "unseen": sum(not record["seen_in_train_labels"] for record in canonical["records"]), "expected_formula_seen": 270, "expected_formula_unseen": 754}, "layer_a_canonical": {key: value for key, value in canonical.items() if key != "records"}, "layer_a_records": canonical["records"], "layer_b_contextual": contextual_summary, "layer_b_pair_table": table, "diagnostics": diagnostics, "gate": gate, "policy_inputs": ["real_register_state_after_COPY", "direct_numeric_reference_embedding"], "policy_excluded": ["x", "reference_relation", "target_value", "action_label", "distance", "memory", "symbolic_pointer", "trace"], "protocol": {"executor_frozen": True, "ctrl1_frozen": True, "ctrl2_frozen": True, "fine_tuning": False, "new_weights": False, "read_set": "explicit", "diagnostic_read_e_select": False}}
     result_path = args.output_root / "results.json"
     result_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(output, indent=2, sort_keys=True))
