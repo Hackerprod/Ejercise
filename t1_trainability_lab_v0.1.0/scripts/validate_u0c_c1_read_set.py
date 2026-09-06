@@ -224,7 +224,7 @@ def mixed_batch_check(model: C1JointModel) -> dict[str, Any]:
     memory_values = model.token_embedding(torch.tensor([2])).expand(4, 1, -1)
     memory_types = torch.full((4, 1), ROW_REL, dtype=torch.long)
     row_mask = torch.ones((4, 1), dtype=torch.bool)
-    immediate_ids = torch.tensor([3, IMM_ZERO, 5, IMM_ZERO])
+    immediate_ids = torch.tensor([VALUE_BASE + 3, IMM_ZERO, VALUE_BASE + 5, IMM_ZERO])
     immediate = immediate_vectors(model, immediate_ids)
     sources = torch.tensor([SLOT_R, SLOT_P, SLOT_R, SLOT_R])
     destinations = torch.tensor([SLOT_R, SLOT_P, SLOT_R, SLOT_R])
@@ -237,7 +237,7 @@ def mixed_batch_check(model: C1JointModel) -> dict[str, Any]:
     separate = torch.stack(separate_states)
     mixed_predictions = decode(model, mixed_state)[1]
     separate_predictions = decode(model, separate)[1]
-    return {"opcodes": ["ALU_ADD", "READ_P", "ALU_SUB", "EMIT"], "max_state_abs_batch_vs_separate": max_abs(mixed_state, separate), "batch_allclose_separate": bool(torch.allclose(mixed_state, separate, rtol=1e-5, atol=1e-5)), "batch_matches_separate_bitwise": bool(torch.equal(mixed_state, separate)), "predictions_match": bool(torch.equal(mixed_predictions, separate_predictions))}
+    return {"opcodes": ["ALU_ADD", "READ_P", "ALU_SUB", "EMIT"], "expected_values": {"ALU_ADD": 6, "ALU_SUB": 0}, "batch_allclose_separate": bool(torch.allclose(mixed_state, separate, rtol=1e-5, atol=1e-5)), "batch_matches_separate_bitwise": bool(torch.equal(mixed_state, separate)), "predictions_match": bool(torch.equal(mixed_predictions, separate_predictions)), "alu_add_prediction_id": int(decode(model, mixed_state[0:1])[1].item()), "alu_sub_prediction_id": int(decode(model, mixed_state[2:3])[1].item())}
 
 
 def main() -> None:

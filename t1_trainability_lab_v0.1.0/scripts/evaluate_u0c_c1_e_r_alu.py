@@ -157,7 +157,7 @@ def value_logits(model: C1JointModel, state: Tensor) -> tuple[Tensor, int, float
 
 
 @torch.no_grad()
-def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline", operand_mode: str = "historical_vector", read_set: str = "legacy") -> dict[str, Any]:
+def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline", operand_mode: str = "historical_vector", read_set: str = "explicit") -> dict[str, Any]:
     rows = list(program.rows)
     if mode == "pair_intervention":
         pair_row = next(index for index, row in enumerate(rows) if row.kind == ROW_PAIR and row.key == next(item.value for item in rows if item.kind == ROW_REL and item.key == program.start_key))

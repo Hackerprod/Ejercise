@@ -1,0 +1,76 @@
+{
+  "chain": {
+    "baseline": {
+      "by_length": {
+        "2": {
+          "exact_count": 16,
+          "samples": 16
+        },
+        "3": {
+          "exact_count": 16,
+          "samples": 16
+        }
+      },
+      "exact_count": 32,
+      "samples": 32
+    },
+    "e_after_copy": {
+      "by_length": {
+        "2": {
+          "exact_count": 16,
+          "samples": 16
+        },
+        "3": {
+          "exact_count": 16,
+          "samples": 16
+        }
+      },
+      "exact_count": 32,
+      "samples": 32
+    },
+    "e_after_copy_output_unchanged": 32,
+    "intervene_r": {
+      "by_length": {
+        "2": {
+          "exact_count": 16,
+          "samples": 16
+        },
+        "3": {
+          "exact_count": 16,
+          "samples": 16
+        }
+      },
+      "exact_count": 32,
+      "samples": 32
+    },
+    "r_intervention_target_changed": 32,
+    "swap_ops": {
+      "by_length": {
+        "2": {
+          "exact_count": 16,
+          "samples": 16
+        },
+        "3": {
+          "exact_count": 16,
+          "samples": 16
+        }
+      },
+      "exact_count": 32,
+      "samples": 32
+    },
+    "swap_target_changed": 32
+  },
+  "checkpoint": "campaign\\u0c_c1_lossnorm_anneal_seed303_12000\\final.pt",
+  "checkpoint_sha256": "4f02df0e1c02532712c4ff4df1e79c199df9f7d09321872d0561352f12c59f64",
+  "interleaved": {
+    "baseline_exact": 32,
+    "baseline_workspace_gate": 32,
+    "moved_exact": 32,
+    "moved_workspace_gate": 32,
+    "r_order_invariant": 32,
+    "samples": 32
+  },
+  "read_set": "explicit",
+  "status": "completed",
+  "target_source": "independent symbolic interpreter; no target/state reinjection"
+}

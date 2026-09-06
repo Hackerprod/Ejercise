@@ -582,7 +582,7 @@ class UnifiedT1U0(nn.Module):
         transform_id: Tensor | None = None,
         correction_module: nn.Module | None = None,
         slot_read_mask: Tensor | None = None,
-        read_set: str = "legacy",
+        read_set: str = "explicit",
     ) -> tuple[Tensor, CandidateState, ReadResult]:
         """Execute one auditable READ → COMPUTE → COMMIT round."""
 

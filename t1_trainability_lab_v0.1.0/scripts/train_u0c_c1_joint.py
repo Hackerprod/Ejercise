@@ -222,6 +222,7 @@ def run_transform_batch(model: C1JointModel, batch: dict[str, Tensor]) -> tuple[
             read_mode=read_modes,
             transform_id=batch["transform_ids"][:, round_index],
             correction_module=model.correction_mlp,
+            read_set="legacy",
         )
         predicted_deltas[:, round_index] = state[:, SLOT_W, :] - before
         selected[:, round_index] = result.selected_index

@@ -552,6 +552,7 @@ def run_rounds(model: UnifiedT1U0, batch: dict[str, Any], rounds: int) -> Tensor
             data["destination_slots"][:, round_index],
             data["presence"],
             read_mode=data["read_modes"][:, round_index],
+            read_set="legacy",
         )
     return state
 
@@ -573,6 +574,7 @@ def run_rounds_with_trace(model: UnifiedT1U0, batch: dict[str, Any], rounds: int
             data["source_slots"][:, round_index],
             data["destination_slots"][:, round_index],
             data["presence"],
+            read_set="legacy",
         )
         logits_trace.append(candidates.alu_logits if candidates.alu_logits is not None else torch.zeros(state.shape[0], 32, device=state.device, dtype=state.dtype))
     return state, logits_trace

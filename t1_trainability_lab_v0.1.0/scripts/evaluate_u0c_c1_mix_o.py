@@ -169,7 +169,7 @@ def run_program(
     *,
     mode: str = "baseline",
     extra_emit: bool = False,
-    read_set: str = "legacy",
+    read_set: str = "explicit",
 ) -> tuple[Tensor, dict[str, Any]]:
     memory_keys, memory_values = build_model_memory(model, program)
     memory_types = program.memory_types.clone().unsqueeze(0)
@@ -304,7 +304,7 @@ def run_program(
     }
 
 
-def summarize_runs(model: C1JointModel, programs: list[Program], *, controls: bool = True, read_set: str = "legacy") -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def summarize_runs(model: C1JointModel, programs: list[Program], *, controls: bool = True, read_set: str = "explicit") -> tuple[dict[str, Any], list[dict[str, Any]]]:
     mode_names = ("baseline", "pointer_intervention", "memory_intervention", "freeze_p", "replace_w") if controls else ("baseline",)
     runs: dict[str, list[dict[str, Any]]] = {name: [] for name in mode_names}
     traces: list[dict[str, Any]] = []
@@ -353,7 +353,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c1_mix_o_seed101_frozen")
     parser.add_argument("--samples", type=int, default=32, help="Total programs; half length 4-update, half length 6-update")
     parser.add_argument("--baseline-only", action="store_true", help="Run baseline only, for larger regression sampling")
-    parser.add_argument("--read-set", choices=("legacy", "explicit"), default="legacy")
+    parser.add_argument("--read-set", choices=("legacy", "explicit"), default="explicit")
     parser.add_argument("--seed", type=int, default=101)
     args = parser.parse_args()
     if args.samples < 2 or args.samples % 2:
