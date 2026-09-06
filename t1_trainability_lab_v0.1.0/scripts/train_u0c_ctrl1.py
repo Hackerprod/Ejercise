@@ -159,6 +159,32 @@ def freeze_executor(model: nn.Module) -> tuple[int, int]:
     return before, after
 
 
+def update_causal_accounting(
+    accounting: dict[str, Any],
+    *,
+    decision: int,
+    action: int,
+    expected_action: int,
+    execution_ok: bool | None,
+) -> dict[str, Any]:
+    """Record only first causal divergence while trajectory remains aligned."""
+    aligned_before = bool(accounting["aligned"])
+    action_correct = action == expected_action
+    control_error = aligned_before and not action_correct
+    execution_error = aligned_before and action_correct and execution_ok is False
+    if control_error and accounting["first_control_error"] is None:
+        accounting["first_control_error"] = {"decision": decision, "predicted": ACTION_NAMES[action], "expected": ACTION_NAMES[expected_action]}
+        accounting["aligned"] = False
+    elif execution_error and accounting["first_execution_error"] is None:
+        accounting["first_execution_error"] = {"decision": decision, "instruction": "executor_step"}
+        accounting["aligned"] = False
+    return {"aligned_before": aligned_before, "action_correct": action_correct if aligned_before else None, "control_error": control_error, "execution_error": execution_error if aligned_before else False}
+
+
+def trace_success(final_success: bool, timeout: bool, first_control_error: Any, first_execution_error: Any) -> bool:
+    return bool(final_success and not timeout and first_control_error is None and first_execution_error is None)
+
+
 def save_tensor_pair(output: Path, observations: dict[str, Tensor], labels: dict[str, Tensor]) -> None:
     torch.save({key: value for key, value in observations.items()}, output / "observations.pt")
     torch.save({key: value for key, value in labels.items()}, output / "labels.pt")
@@ -284,26 +310,30 @@ def free_execution(model: C1JointModel, controller: Ctrl1MLP, manifest: dict[str
         symbolic_pointer = episode["start_key"]
         first_control_error: dict[str, Any] | None = None
         first_execution_error: dict[str, Any] | None = None
+        accounting: dict[str, Any] = {"aligned": True, "first_control_error": None, "first_execution_error": None}
         trace: list[dict[str, Any]] = []
         collected = False
         for decision in range(DECISION_LIMIT):
             logits = controller(state[:, SLOT_P], goal)
             action = int(logits.argmax(-1).item())
             expected_action = COLLECT if symbolic_pointer == episode["goal_key"] else ADVANCE
-            action_correct = action == expected_action
-            if not action_correct and first_control_error is None:
-                first_control_error = {"decision": decision, "predicted": ACTION_NAMES[action], "expected": ACTION_NAMES[expected_action]}
-            entry: dict[str, Any] = {"decision": decision, "predicted_action": ACTION_NAMES[action], "expected_action": ACTION_NAMES[expected_action], "action_correct": action_correct, "pointer_decoder_id": int(pointer_decoder_id(model, state).item()), "goal_key": int(episode["goal_key"])}
+            accounting_event = update_causal_accounting(accounting, decision=decision, action=action, expected_action=expected_action, execution_ok=None)
+            first_control_error = accounting["first_control_error"]
+            first_execution_error = accounting["first_execution_error"]
+            entry: dict[str, Any] = {"decision": decision, "predicted_action": ACTION_NAMES[action], "expected_action": ACTION_NAMES[expected_action], "action_correct": accounting_event["action_correct"], "pointer_decoder_id": int(pointer_decoder_id(model, state).item()), "goal_key": int(episode["goal_key"])}
             if action == ADVANCE:
                 expected_row = next(index for index, row in enumerate(graph["rows"]) if row["kind"] == ROW_REL and row["key"] == symbolic_pointer)
                 state, _, read = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), zero, torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode="BLEND", read_set="explicit")
                 selected = int(read.selected_index.item())
                 row_ok = selected == expected_row
                 pointer_ok = int(pointer_decoder_id(model, state).item()) == graph["rows"][expected_row]["value"]
-                execution_error = action_correct and not (row_ok and pointer_ok)
-                if execution_error and first_execution_error is None:
-                    first_execution_error = {"decision": decision, "instruction": "READ_P", "selected_row": selected, "expected_row": expected_row, "pointer_decoder_id": int(pointer_decoder_id(model, state).item()), "expected_pointer": graph["rows"][expected_row]["value"]}
-                entry.update({"instruction": "READ_P", "selected_row": selected, "expected_row": expected_row, "row_match": row_ok, "pointer_decoder_id_after": int(pointer_decoder_id(model, state).item()), "expected_pointer": graph["rows"][expected_row]["value"], "execution_error": execution_error})
+                execution_ok = row_ok and pointer_ok
+                accounting_event = update_causal_accounting(accounting, decision=decision, action=action, expected_action=expected_action, execution_ok=execution_ok)
+                first_control_error = accounting["first_control_error"]
+                first_execution_error = accounting["first_execution_error"]
+                if first_execution_error is not None and first_execution_error.get("decision") == decision:
+                    first_execution_error.update({"instruction": "READ_P", "selected_row": selected, "expected_row": expected_row, "pointer_decoder_id": int(pointer_decoder_id(model, state).item()), "expected_pointer": graph["rows"][expected_row]["value"]})
+                entry.update({"instruction": "READ_P", "selected_row": selected, "expected_row": expected_row, "row_match": row_ok, "pointer_decoder_id_after": int(pointer_decoder_id(model, state).item()), "expected_pointer": graph["rows"][expected_row]["value"], "action_correct": accounting_event["action_correct"], "execution_error": accounting_event["execution_error"], "trajectory_aligned_after": accounting["aligned"]})
                 symbolic_pointer = graph["rows"][expected_row]["value"]
             else:
                 expected_row = next(index for index, row in enumerate(graph["rows"]) if row["kind"] == ROW_PAIR and row["key"] == episode["goal_key"])
@@ -315,17 +345,21 @@ def free_execution(model: C1JointModel, controller: Ctrl1MLP, manifest: dict[str
                 predicted = int((VALUE_BASE + model.register_decoder(state[:, SLOT_R], model.token_embedding(torch.arange(VALUE_BASE, VALUE_BASE + VALUE_COUNT))).argmax(-1)).item())
                 final_exact = predicted == episode["target_id"]
                 row_ok = selected == expected_row
-                execution_error = action_correct and not (row_ok and final_exact)
-                if execution_error and first_execution_error is None:
-                    first_execution_error = {"decision": decision, "instruction": "READ_E_OR_SUFFIX", "selected_row": selected, "expected_row": expected_row, "predicted_id": predicted, "target_id": episode["target_id"]}
-                entry.update({"instruction": "READ_E→COPY→ALU_ADD→EMIT", "selected_row": selected, "expected_row": expected_row, "row_match": row_ok, "predicted_id": predicted, "target_id": episode["target_id"], "execution_error": execution_error})
+                execution_ok = row_ok and final_exact
+                accounting_event = update_causal_accounting(accounting, decision=decision, action=action, expected_action=expected_action, execution_ok=execution_ok)
+                first_control_error = accounting["first_control_error"]
+                first_execution_error = accounting["first_execution_error"]
+                if first_execution_error is not None and first_execution_error.get("decision") == decision:
+                    first_execution_error.update({"instruction": "READ_E_OR_SUFFIX", "selected_row": selected, "expected_row": expected_row, "predicted_id": predicted, "target_id": episode["target_id"]})
+                entry.update({"instruction": "READ_E→COPY→ALU_ADD→EMIT", "selected_row": selected, "expected_row": expected_row, "row_match": row_ok, "predicted_id": predicted, "target_id": episode["target_id"], "action_correct": accounting_event["action_correct"], "execution_error": accounting_event["execution_error"], "trajectory_aligned_after": accounting["aligned"]})
                 trace.append(entry)
                 collected = True
                 break
             trace.append(entry)
         timeout = not collected
         final_predicted = trace[-1].get("predicted_id") if collected else None
-        results.append({"episode": int(episode["episode"]), "graph": int(episode["graph"]), "distance": int(episode["distance"]), "target_id": int(episode["target_id"]), "predicted_id": final_predicted, "final_exact": final_predicted == episode["target_id"], "episode_success": bool(collected and final_predicted == episode["target_id"]), "timeout": timeout, "first_control_error": first_control_error, "first_execution_error": first_execution_error, "trace": trace})
+        final_success = final_predicted == episode["target_id"]
+        results.append({"episode": int(episode["episode"]), "graph": int(episode["graph"]), "distance": int(episode["distance"]), "target_id": int(episode["target_id"]), "predicted_id": final_predicted, "final_exact": final_success, "final_success": final_success, "trace_success": trace_success(final_success, timeout, first_control_error, first_execution_error), "episode_success": trace_success(final_success, timeout, first_control_error, first_execution_error), "timeout": timeout, "first_control_error": first_control_error, "first_execution_error": first_execution_error, "trace": trace})
     return results
 
 
@@ -333,8 +367,8 @@ def summarize_episodes(results: list[dict[str, Any]]) -> dict[str, Any]:
     by_distance: dict[str, Any] = {}
     for distance in DISTANCES:
         selected = [result for result in results if result["distance"] == distance]
-        by_distance[str(distance)] = {"samples": len(selected), "episode_success_count": sum(result["episode_success"] for result in selected), "final_exact_count": sum(result["final_exact"] for result in selected), "timeouts": sum(result["timeout"] for result in selected), "first_control_error_count": sum(result["first_control_error"] is not None for result in selected), "first_execution_error_count": sum(result["first_execution_error"] is not None for result in selected)}
-    return {"samples": len(results), "episode_success_count": sum(result["episode_success"] for result in results), "final_exact_count": sum(result["final_exact"] for result in results), "timeouts": sum(result["timeout"] for result in results), "by_distance": by_distance}
+        by_distance[str(distance)] = {"samples": len(selected), "trace_success_count": sum(result.get("trace_success", result["episode_success"]) for result in selected), "final_success_count": sum(result.get("final_success", result["final_exact"]) for result in selected), "episode_success_count": sum(result.get("trace_success", result["episode_success"]) for result in selected), "final_exact_count": sum(result["final_exact"] for result in selected), "timeouts": sum(result["timeout"] for result in selected), "first_control_error_count": sum(result["first_control_error"] is not None for result in selected), "first_execution_error_count": sum(result["first_execution_error"] is not None for result in selected)}
+    return {"samples": len(results), "trace_success_count": sum(result.get("trace_success", result["episode_success"]) for result in results), "final_success_count": sum(result.get("final_success", result["final_exact"]) for result in results), "episode_success_count": sum(result.get("trace_success", result["episode_success"]) for result in results), "final_exact_count": sum(result["final_exact"] for result in results), "timeouts": sum(result["timeout"] for result in results), "by_distance": by_distance}
 
 
 def main() -> None:
@@ -344,6 +378,7 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=1101)
     parser.add_argument("--val-seed", type=int, default=1201)
     parser.add_argument("--test-seed", type=int, default=1301)
+    parser.add_argument("--controller-seed", type=int, default=2101)
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     manifests = {"train": graph_manifest(2000, args.train_seed, "train"), "val": graph_manifest(200, args.val_seed, "validation"), "test": graph_manifest(400, args.test_seed, "test")}
@@ -365,7 +400,9 @@ def main() -> None:
         save_tensor_pair(split_output, observations, labels)
         observation_hashes[split] = {name: hashlib.sha256((split_output / f"{name}.pt").read_bytes()).hexdigest() for name in ("observations", "labels")}
         datasets[split] = (observations, labels)
+    torch.manual_seed(args.controller_seed)
     controller = Ctrl1MLP()
+    torch.save({"controller": copy.deepcopy(controller.state_dict()), "controller_seed": args.controller_seed}, args.output_root / "initial.pt")
     training = train_controller(controller, datasets["train"][0], datasets["train"][1], datasets["val"][0], datasets["val"][1], args.output_root)
     selected_payload = torch.load(args.output_root / "selected.pt", map_location="cpu", weights_only=False)
     final_payload = torch.load(args.output_root / "final.pt", map_location="cpu", weights_only=False)
