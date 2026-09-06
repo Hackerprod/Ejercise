@@ -210,6 +210,7 @@ class SharedMemoryReader(nn.Module):
         immediate: Tensor,
         source_slot: Tensor,
         read_mode: str | Tensor = "BLEND",
+        diagnostic_read_e_select: bool = False,
     ) -> ReadResult:
         self.call_count += 1
         if state.ndim != 3 or state.shape[1] != SLOT_COUNT or state.shape[-1] != self.dimension:
@@ -240,8 +241,13 @@ class SharedMemoryReader(nn.Module):
             if torch.any((mode_ids != READ_MODE_BLEND) & (mode_ids != READ_MODE_SELECT)):
                 raise ValueError("read_mode values must be READ_MODE_BLEND or READ_MODE_SELECT")
         read_opcodes = torch.isin(opcode_long, torch.tensor(tuple(READ_OPCODE_IDS), device=opcode.device))
-        if torch.any(read_opcodes & (mode_ids == READ_MODE_SELECT) & (opcode_long != OPCODE_IDS["ACCUM_W"])):
-            raise ValueError("SELECT is currently supported only for ACCUM_W")
+        # Narrow diagnostic escape hatch: READ_E may use SELECT only when the
+        # caller explicitly labels this intervention. Normal policy remains
+        # BLEND for READ_E, and SELECT remains unchanged for ACCUM_W.
+        unsupported_select = read_opcodes & (mode_ids == READ_MODE_SELECT) & (opcode_long != OPCODE_IDS["ACCUM_W"])
+        allowed_diagnostic_read_e = diagnostic_read_e_select & (opcode_long == OPCODE_IDS["READ_E"])
+        if torch.any(unsupported_select & ~allowed_diagnostic_read_e):
+            raise ValueError("SELECT is currently supported only for ACCUM_W or diagnostic READ_E")
 
         source_slot = source_slot.to(dtype=torch.long)
         source = state.gather(1, source_slot.view(batch, 1, 1).expand(-1, 1, self.dimension)).squeeze(1)
@@ -579,6 +585,7 @@ class UnifiedT1U0(nn.Module):
         destination_slot: Tensor,
         presence_mask: Tensor,
         read_mode: str | Tensor = "BLEND",
+        diagnostic_read_e_select: bool = False,
         transform_id: Tensor | None = None,
         correction_module: nn.Module | None = None,
         slot_read_mask: Tensor | None = None,
@@ -601,6 +608,7 @@ class UnifiedT1U0(nn.Module):
                 immediate,
                 source_slot,
                 read_mode=read_mode,
+                diagnostic_read_e_select=diagnostic_read_e_select,
             )
         else:
             if immediate.ndim == 2:

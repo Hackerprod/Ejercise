@@ -28,6 +28,7 @@ from evaluate_u0c_c1_e_r_alu import (  # noqa: E402
 )
 from t1_trainability.unified import (  # noqa: E402
     OPCODE_IDS,
+    READ_MODE_SELECT,
     ROW_PAIR,
     ROW_REL,
     SLOT_COUNT,
@@ -155,7 +156,7 @@ def relative_error(actual: Tensor, expected: Tensor) -> Tensor:
 
 
 @torch.no_grad()
-def execute_size(model: C1JointModel, programs: list[dict[str, Any]], size: int) -> list[dict[str, Any]]:
+def execute_size(model: C1JointModel, programs: list[dict[str, Any]], size: int, *, read_e_select: bool = False) -> list[dict[str, Any]]:
     memory_keys, memory_values, memory_types, row_mask, rel_expected, pair_expected = materialize_batch(model, programs, size)
     batch_size = len(programs)
     state = torch.zeros((batch_size, SLOT_COUNT, DIMENSION))
@@ -169,7 +170,8 @@ def execute_size(model: C1JointModel, programs: list[dict[str, Any]], size: int)
     destination_e = torch.full((batch_size,), SLOT_E, dtype=torch.long)
     state, _, read_p = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.full((batch_size,), OPCODE_IDS["READ_P"], dtype=torch.long), zero, source_p, destination_p, presence, read_mode=read_mode, read_set="explicit")
     after_read_p = state.clone()
-    state, _, read_e = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.full((batch_size,), OPCODE_IDS["READ_E"], dtype=torch.long), zero, source_p, destination_e, presence, read_mode=read_mode, read_set="explicit")
+    read_e_mode = torch.full((batch_size,), READ_MODE_SELECT if read_e_select else 0, dtype=torch.long)
+    state, _, read_e = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.full((batch_size,), OPCODE_IDS["READ_E"], dtype=torch.long), zero, source_p, destination_e, presence, read_mode=read_e_mode, read_set="explicit", diagnostic_read_e_select=read_e_select)
     after_read_e = state.clone()
     state[:, SLOT_R] = state[:, SLOT_E].clone()
     copy_equal = torch.equal(state[:, SLOT_R], state[:, SLOT_E])
