@@ -340,6 +340,7 @@ class SharedRecurrentCore(nn.Module):
         slot_type_embeddings: Tensor,
         presence_mask: Tensor,
         opcode: Tensor | None = None,
+        slot_read_mask: Tensor | None = None,
     ) -> CandidateState:
         if normalized_state.ndim != 3 or normalized_state.shape[1] != SLOT_COUNT or normalized_state.shape[-1] != self.dimension:
             raise ValueError("normalized_state must have shape [B, 4, D]")
@@ -382,7 +383,16 @@ class SharedRecurrentCore(nn.Module):
         key = self.key(conditioned)
         value = self.value(conditioned)
         scores = torch.matmul(query, key.transpose(-2, -1)) * self.scale
-        scores = scores.masked_fill(~presence_mask.unsqueeze(1), torch.finfo(scores.dtype).min)
+        if slot_read_mask is None:
+            legal_slots = presence_mask.unsqueeze(1).expand(-1, SLOT_COUNT, -1)
+        else:
+            if slot_read_mask.shape != (batch, SLOT_COUNT, SLOT_COUNT):
+                raise ValueError("slot_read_mask must have shape [B, 4, 4]")
+            legal_slots = presence_mask.unsqueeze(1) & slot_read_mask.to(dtype=torch.bool)
+            active_rows = presence_mask.to(dtype=torch.bool)
+            if torch.any(active_rows & ~legal_slots.any(dim=-1)):
+                raise ValueError("active attention row has no legal source slot")
+        scores = scores.masked_fill(~legal_slots, torch.finfo(scores.dtype).min)
         attention = torch.softmax(scores, dim=-1)
         attention = torch.nan_to_num(attention)
         mixed = self.output(torch.matmul(attention, value)) * present
@@ -544,6 +554,18 @@ class UnifiedT1U0(nn.Module):
         scale = torch.rsqrt(state.square().mean(dim=-1, keepdim=True) + 1e-6)
         return state * scale * present
 
+    @staticmethod
+    def slot_read_mask_for_opcode(opcode: Tensor) -> Tensor:
+        """Materialize explicit internal read-set policy per instruction/sample."""
+        if opcode.ndim != 1:
+            raise ValueError("opcode must have shape [B]")
+        batch = opcode.shape[0]
+        mask = torch.ones((batch, SLOT_COUNT, SLOT_COUNT), dtype=torch.bool, device=opcode.device)
+        is_alu = torch.isin(opcode.to(dtype=torch.long), torch.tensor((OPCODE_IDS["ALU_ADD"], OPCODE_IDS["ALU_SUB"], OPCODE_IDS["ALU_MUL"]), device=opcode.device))
+        mask[is_alu, SLOT_R, :] = False
+        mask[is_alu, SLOT_R, SLOT_R] = True
+        return mask
+
     def step(
         self,
         state: Tensor,
@@ -559,6 +581,8 @@ class UnifiedT1U0(nn.Module):
         read_mode: str | Tensor = "BLEND",
         transform_id: Tensor | None = None,
         correction_module: nn.Module | None = None,
+        slot_read_mask: Tensor | None = None,
+        read_set: str = "legacy",
     ) -> tuple[Tensor, CandidateState, ReadResult]:
         """Execute one auditable READ → COMPUTE → COMMIT round."""
 
@@ -593,6 +617,12 @@ class UnifiedT1U0(nn.Module):
             )
         if (transform_id is None) != (correction_module is None):
             raise ValueError("transform_id and correction_module must be provided together")
+        if read_set not in {"legacy", "explicit"}:
+            raise ValueError("read_set must be legacy or explicit")
+        if read_set == "explicit":
+            if slot_read_mask is not None:
+                raise ValueError("slot_read_mask is materialized by explicit read_set")
+            slot_read_mask = self.slot_read_mask_for_opcode(opcode)
         workspace_correction = None
         if transform_id is not None and correction_module is not None:
             if transform_id.shape != (batch,):
@@ -613,6 +643,7 @@ class UnifiedT1U0(nn.Module):
             self.slot_type_embeddings,
             presence_mask,
             opcode=opcode,
+            slot_read_mask=slot_read_mask,
         )
         alu_logits = self.commit.select_alu_logits(candidates.values[:, SLOT_R, :], opcode)
         register_codebook = self.token_embedding(torch.arange(288, 320, device=state.device))

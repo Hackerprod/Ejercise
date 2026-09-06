@@ -157,7 +157,7 @@ def value_logits(model: C1JointModel, state: Tensor) -> tuple[Tensor, int, float
 
 
 @torch.no_grad()
-def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline", operand_mode: str = "historical_vector") -> dict[str, Any]:
+def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline", operand_mode: str = "historical_vector", read_set: str = "legacy") -> dict[str, Any]:
     rows = list(program.rows)
     if mode == "pair_intervention":
         pair_row = next(index for index, row in enumerate(rows) if row.kind == ROW_PAIR and row.key == next(item.value for item in rows if item.kind == ROW_REL and item.key == program.start_key))
@@ -197,14 +197,14 @@ def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline"
         trace.append(entry)
 
     before = state.clone()
-    state, _, result = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), immediate_zero, torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode=torch.tensor([0]))
+    state, _, result = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), immediate_zero, torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode=torch.tensor([0]), read_set=read_set)
     expected_read_p = symbolic["trace"][0]["expected_row"]
     record("READ_P", before, state, selected=int(result.selected_index.item()), payload=result.payload)
     trace[-1]["expected_row"] = expected_read_p
     trace[-1]["row_hit"] = int(result.selected_index.item()) == expected_read_p
 
     before = state.clone()
-    state, _, result = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_E"]]), immediate_zero, torch.tensor([SLOT_P]), torch.tensor([SLOT_E]), presence, read_mode=torch.tensor([0]))
+    state, _, result = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_E"]]), immediate_zero, torch.tensor([SLOT_P]), torch.tensor([SLOT_E]), presence, read_mode=torch.tensor([0]), read_set=read_set)
     expected_read_e = symbolic["trace"][1]["expected_row"]
     record("READ_E", before, state, selected=int(result.selected_index.item()), payload=result.payload)
     trace[-1]["expected_row"] = expected_read_e
@@ -229,7 +229,7 @@ def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline"
     operation = ("ALU_ADD" if program.operation != "ALU_ADD" else "ALU_SUB") if mode == "swap_operation" else program.operation
     operand_ids = torch.tensor([VALUE_BASE + program.operand], dtype=torch.long, device=state.device)
     operand = operand_ids if operand_mode == "integer_id" else immediate_vectors(model, operand_ids)
-    state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS[operation]]), operand, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]))
+    state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS[operation]]), operand, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]), read_set=read_set)
     decoder_logits, decoded_id, decoded_score = value_logits(model, state)
     head_logits = candidates.alu_logits.squeeze(0)
     record(operation, before, state, logits=head_logits)
@@ -240,7 +240,7 @@ def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline"
     trace[-1]["expected_value_id"] = VALUE_BASE + target_value
 
     before = state.clone()
-    state, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["EMIT"]]), immediate_zero, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]))
+    state, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["EMIT"]]), immediate_zero, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]), read_set=read_set)
     record("EMIT", before, state)
     trace[-1]["emit_preserves_r"] = bool(torch.equal(before[:, SLOT_R], state[:, SLOT_R]))
     final_logits, final_id, final_score = value_logits(model, state)

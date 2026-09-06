@@ -169,6 +169,7 @@ def run_program(
     *,
     mode: str = "baseline",
     extra_emit: bool = False,
+    read_set: str = "legacy",
 ) -> tuple[Tensor, dict[str, Any]]:
     memory_keys, memory_values = build_model_memory(model, program)
     memory_types = program.memory_types.clone().unsqueeze(0)
@@ -229,6 +230,7 @@ def run_program(
             read_mode=read_mode,
             transform_id=(torch.tensor([program.transforms[instruction_index // 2]]) if is_accum else None),
             correction_module=(model.correction_mlp if is_accum else None),
+            read_set=read_set,
         )
         if mode == "freeze_p" and is_read_p:
             state[:, SLOT_P] = previous_pointer
@@ -302,18 +304,18 @@ def run_program(
     }
 
 
-def summarize_runs(model: C1JointModel, programs: list[Program], *, controls: bool = True) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def summarize_runs(model: C1JointModel, programs: list[Program], *, controls: bool = True, read_set: str = "legacy") -> tuple[dict[str, Any], list[dict[str, Any]]]:
     mode_names = ("baseline", "pointer_intervention", "memory_intervention", "freeze_p", "replace_w") if controls else ("baseline",)
     runs: dict[str, list[dict[str, Any]]] = {name: [] for name in mode_names}
     traces: list[dict[str, Any]] = []
     for program_index, program in enumerate(programs):
         for mode in mode_names:
-            output, result = run_program(model, program, mode=mode)
+            output, result = run_program(model, program, mode=mode, read_set=read_set)
             runs[mode].append(result)
             traces.append({"program": program_index, "length": program.length, "keys": list(program.keys), "transforms": list(program.transforms), "mode": mode, **result})
         if controls:
-            baseline_output, _ = run_program(model, program)
-            emit_output, emit_result = run_program(model, program, extra_emit=True)
+            baseline_output, _ = run_program(model, program, read_set=read_set)
+            emit_output, emit_result = run_program(model, program, extra_emit=True, read_set=read_set)
             runs.setdefault("extra_emit", []).append(emit_result)
             traces.append({"program": program_index, "length": program.length, "keys": list(program.keys), "transforms": list(program.transforms), "mode": "extra_emit", **emit_result})
             if not torch.equal(baseline_output, emit_output):
@@ -351,6 +353,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c1_mix_o_seed101_frozen")
     parser.add_argument("--samples", type=int, default=32, help="Total programs; half length 4-update, half length 6-update")
     parser.add_argument("--baseline-only", action="store_true", help="Run baseline only, for larger regression sampling")
+    parser.add_argument("--read-set", choices=("legacy", "explicit"), default="legacy")
     parser.add_argument("--seed", type=int, default=101)
     args = parser.parse_args()
     if args.samples < 2 or args.samples % 2:
@@ -361,9 +364,9 @@ def main() -> None:
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval()
     programs = make_programs(args.samples, args.seed)
-    summary, traces = summarize_runs(model, programs, controls=not args.baseline_only)
+    summary, traces = summarize_runs(model, programs, controls=not args.baseline_only, read_set=args.read_set)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    summary.update({"status": "completed", "seed": args.seed, "checkpoint": str(args.checkpoint), "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), "samples": args.samples, "program_updates": {"4": args.samples // 2, "6": args.samples // 2}, "target_source": "independent symbolic interpreter; model never receives target, expected pointer, physical row, or transformed vector", "memory_manifest": [{"program": index, "length": program.length, "memory_rows": int(program.memory_types.shape[0]), "keys": list(program.keys), "transforms": list(program.transforms), "memory_types_sha256": tensor_sha256(program.memory_types)} for index, program in enumerate(programs)]})
+    summary.update({"status": "completed", "seed": args.seed, "checkpoint": str(args.checkpoint), "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), "read_set": args.read_set, "samples": args.samples, "program_updates": {"4": args.samples // 2, "6": args.samples // 2}, "target_source": "independent symbolic interpreter; model never receives target, expected pointer, physical row, or transformed vector", "memory_manifest": [{"program": index, "length": program.length, "memory_rows": int(program.memory_types.shape[0]), "keys": list(program.keys), "transforms": list(program.transforms), "memory_types_sha256": tensor_sha256(program.memory_types)} for index, program in enumerate(programs)]})
     (args.output_dir / "results.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with (args.output_dir / "traces.jsonl").open("w", encoding="utf-8") as stream:
         for trace in traces:
