@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 import torch
@@ -234,6 +235,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
     parser.add_argument("--controller-seed", type=int, default=2201)
+    parser.add_argument("--source-pilot-root", type=Path, default=None)
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     base_manifests = load_base_manifests()
@@ -249,10 +251,24 @@ def main() -> None:
     runtimes: dict[str, dict[int, dict[str, Any]]] = {}
     observation_hashes: dict[str, dict[str, str]] = {}
     for split, manifest in base_manifests.items():
-        observations, labels, runtime = generate_dataset(executor, ctrl1, manifest, keep_runtime=split == "test")
-        datasets[split] = (observations, labels)
-        runtimes[split] = runtime
-        observation_hashes[split] = save_dataset(args.output_root / split, observations, labels)
+        if args.source_pilot_root is None:
+            observations, labels, runtime = generate_dataset(executor, ctrl1, manifest, keep_runtime=split == "test")
+            datasets[split] = (observations, labels)
+            runtimes[split] = runtime
+            observation_hashes[split] = save_dataset(args.output_root / split, observations, labels)
+        else:
+            source_split = args.source_pilot_root / split
+            output_split = args.output_root / split
+            output_split.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_split / "observations.pt", output_split / "observations.pt")
+            shutil.copyfile(source_split / "labels.pt", output_split / "labels.pt")
+            observations = torch.load(source_split / "observations.pt", map_location="cpu", weights_only=False)
+            labels = torch.load(source_split / "labels.pt", map_location="cpu", weights_only=False)
+            datasets[split] = (observations, labels)
+            observation_hashes[split] = {name: hashlib.sha256((output_split / f"{name}.pt").read_bytes()).hexdigest() for name in ("observations", "labels")}
+            if split == "test":
+                _, _, runtime = generate_dataset(executor, ctrl1, manifest, keep_runtime=True)
+                runtimes[split] = runtime
     torch.manual_seed(args.controller_seed)
     controller = AdjustmentMLP()
     torch.save({"controller": copy.deepcopy(controller.state_dict()), "controller_seed": args.controller_seed}, args.output_root / "initial.pt")
