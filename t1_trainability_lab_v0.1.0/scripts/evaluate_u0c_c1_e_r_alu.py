@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from train_u0c_c1_joint import C1JointModel, load_approved_model  # noqa: E402
+from train_u0a import immediate_vectors  # noqa: E402
 from t1_trainability.unified import (  # noqa: E402
     OPCODE_IDS,
     ROW_PAIR,
@@ -156,7 +157,7 @@ def value_logits(model: C1JointModel, state: Tensor) -> tuple[Tensor, int, float
 
 
 @torch.no_grad()
-def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline") -> dict[str, Any]:
+def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline", operand_mode: str = "historical_vector") -> dict[str, Any]:
     rows = list(program.rows)
     if mode == "pair_intervention":
         pair_row = next(index for index, row in enumerate(rows) if row.kind == ROW_PAIR and row.key == next(item.value for item in rows if item.kind == ROW_REL and item.key == program.start_key))
@@ -226,7 +227,9 @@ def run_program(model: C1JointModel, program: Program, *, mode: str = "baseline"
 
     before = state.clone()
     operation = ("ALU_ADD" if program.operation != "ALU_ADD" else "ALU_SUB") if mode == "swap_operation" else program.operation
-    state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS[operation]]), torch.tensor([VALUE_BASE + program.operand]), torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]))
+    operand_ids = torch.tensor([VALUE_BASE + program.operand], dtype=torch.long, device=state.device)
+    operand = operand_ids if operand_mode == "integer_id" else immediate_vectors(model, operand_ids)
+    state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS[operation]]), operand, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]))
     decoder_logits, decoded_id, decoded_score = value_logits(model, state)
     head_logits = candidates.alu_logits.squeeze(0)
     record(operation, before, state, logits=head_logits)
@@ -268,6 +271,54 @@ def aggregate(results: list[dict[str, Any]], programs: list[Program]) -> dict[st
     return {"samples": len(results), "exact_count": sum(result["exact_hit"] for result in results), "exact_rate": sum(result["exact_hit"] for result in results) / max(1, len(results)), "row_hit_rate": sum(trace["row_hit"] for trace in row_decisions) / max(1, len(row_decisions)), "copy_equal_direct_rate": sum(trace.get("copy_equal_direct", False) for trace in copy_decisions) / max(1, len(copy_decisions)), "by_operation": by_operation}
 
 
+@torch.no_grad()
+def run_matrix_case(model: C1JointModel, program: Program, *, operand_mode: str, presence_mode: str) -> dict[str, Any]:
+    """Run diagnostic ALU with canonical R, varying only operand route/presence."""
+    memory_keys, memory_values, memory_types, row_mask = materialize_memory(model, program.rows)
+    presence = torch.tensor([[False, True, False, False]]) if presence_mode == "only_r" else torch.tensor([[True, True, True, False]])
+    state = torch.zeros((1, SLOT_COUNT, DIMENSION))
+    state[:, SLOT_R] = model.token_embedding(torch.tensor([VALUE_BASE + program.pair_value]))
+    pre_alu: dict[str, Any] = {"p": state[:, SLOT_P].squeeze(0).tolist(), "e": state[:, SLOT_E].squeeze(0).tolist()}
+    if presence_mode == "p_e_r":
+        state[:, SLOT_P] = model.token_embedding(torch.tensor([program.start_key + KEY_BASE]))
+        state, _, read_p = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), torch.tensor([IMM_ZERO]), torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode=torch.tensor([0]))
+        state, _, read_e = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_E"]]), torch.tensor([IMM_ZERO]), torch.tensor([SLOT_P]), torch.tensor([SLOT_E]), presence, read_mode=torch.tensor([0]))
+        pre_alu = {"p": state[:, SLOT_P].squeeze(0).tolist(), "e": state[:, SLOT_E].squeeze(0).tolist(), "read_p_row": int(read_p.selected_index.item()), "read_e_row": int(read_e.selected_index.item())}
+        state[:, SLOT_R] = model.token_embedding(torch.tensor([VALUE_BASE + program.pair_value]))
+    operand_ids = torch.tensor([VALUE_BASE + program.operand], dtype=torch.long, device=state.device)
+    operand = operand_ids if operand_mode == "integer_id" else immediate_vectors(model, operand_ids)
+    before = state.clone()
+    state, candidates, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS[program.operation]]), operand, torch.tensor([SLOT_R]), torch.tensor([SLOT_R]), presence, read_mode=torch.tensor([0]))
+    decoder_logits, decoded_id, decoded_score = value_logits(model, state)
+    head_logits = candidates.alu_logits.squeeze(0)
+    target_id = VALUE_BASE + program.target_value
+    return {
+        "program": program.index,
+        "operation": program.operation,
+        "pair_value": program.pair_value,
+        "operand": program.operand,
+        "target_id": target_id,
+        "predicted_id": decoded_id,
+        "exact_hit": decoded_id == target_id,
+        "operand_mode": operand_mode,
+        "presence_mode": presence_mode,
+        "presence": presence.squeeze(0).tolist(),
+        "pre_alu": pre_alu,
+        "r_before": before[:, SLOT_R].squeeze(0).tolist(),
+        "r_after": state[:, SLOT_R].squeeze(0).tolist(),
+        "alu_head_logits": head_logits.tolist(),
+        "register_decoder_logits": decoder_logits.tolist(),
+        "decoded_score": decoded_score,
+    }
+
+
+def matrix_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for case in cases:
+        grouped.setdefault(f"{case['operand_mode']}__{case['presence_mode']}", []).append(case)
+    return {name: {"samples": len(items), "exact_count": sum(item["exact_hit"] for item in items), "exact_rate": sum(item["exact_hit"] for item in items) / max(1, len(items)), "by_operation": {operation: {"samples": sum(item["operation"] == operation for item in items), "exact_count": sum(item["operation"] == operation and item["exact_hit"] for item in items)} for operation in TRANSFORM_OPS}} for name, items in grouped.items()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "campaign" / "u0c_c1_lossnorm_anneal_seed101_12000" / "final.pt")
@@ -289,6 +340,13 @@ def main() -> None:
             result = run_program(model, program, mode=mode)
             runs[mode].append(result)
             traces.append({"program": program.index, "mode": mode, "start_key": program.start_key, "rows": [row.__dict__ for row in program.rows], **result})
+
+    matrix_cases = [
+        run_matrix_case(model, program, operand_mode=operand_mode, presence_mode=presence_mode)
+        for operand_mode in ("integer_id", "historical_vector")
+        for presence_mode in ("only_r", "p_e_r")
+        for program in programs
+    ]
 
     # Diagnostics are authorized only when baseline fails: preserve same P/E/R presence.
     diagnostics: dict[str, Any] = {}
@@ -314,6 +372,7 @@ def main() -> None:
         "presence": [True, True, True, False],
         "target_source": "independent symbolic interpreter over serialized rows; executor receives no target/value oracle",
         "runs": {mode: aggregate(results, programs) for mode, results in runs.items()},
+        "matrix_2x2": matrix_summary(matrix_cases),
         "diagnostics": diagnostics,
         "causal_comparisons": {
             mode: {
@@ -328,6 +387,9 @@ def main() -> None:
     with (args.output_dir / "traces.jsonl").open("w", encoding="utf-8") as stream:
         for trace in traces:
             stream.write(json.dumps(trace, sort_keys=True) + "\n")
+    with (args.output_dir / "matrix_predictions.jsonl").open("w", encoding="utf-8") as stream:
+        for case in matrix_cases:
+            stream.write(json.dumps(case, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
