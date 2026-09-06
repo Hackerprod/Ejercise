@@ -1,0 +1,212 @@
+{
+  "causal_comparisons": {
+    "disable_copy": {
+      "model_predicted_value_changed": 80,
+      "symbolic_target_changed": 93
+    },
+    "e_intervention": {
+      "model_predicted_value_changed": 88,
+      "symbolic_target_changed": 96
+    },
+    "pair_intervention": {
+      "model_predicted_value_changed": 91,
+      "symbolic_target_changed": 96
+    },
+    "swap_operation": {
+      "model_predicted_value_changed": 83,
+      "symbolic_target_changed": 96
+    }
+  },
+  "checkpoint": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\u0c_c1_lossnorm_anneal_seed101_12000\\final.pt",
+  "checkpoint_sha256": "15cac5c033d6a365d8363bc48ed1292d6e612613a8278ad758affc3f0dd40d2d",
+  "coverage": {
+    "ALU_ADD": 32,
+    "ALU_MUL": 32,
+    "ALU_SUB": 32
+  },
+  "diagnostics": {
+    "diagnostic_actual_e": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 1.0,
+      "exact_count": 4,
+      "exact_rate": 0.041666666666666664,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    },
+    "diagnostic_oracle_r": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 0.0,
+      "exact_count": 4,
+      "exact_rate": 0.041666666666666664,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    }
+  },
+  "key_namespace": "KEY_BASE shared by REL and PAIR addressing",
+  "numeric_codebook": "VALUE_BASE=288..319 for PAIR values, immediates, and R decode",
+  "presence": [
+    true,
+    true,
+    true,
+    false
+  ],
+  "program": "READ_P(BLEND) -> READ_E(BLEND) -> COPY_E_TO_R -> one ALU -> EMIT(R)",
+  "programs": 96,
+  "runs": {
+    "baseline": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 1.0,
+      "exact_count": 4,
+      "exact_rate": 0.041666666666666664,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    },
+    "disable_copy": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 0,
+          "exact_rate": 0.0,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 0,
+          "exact_rate": 0.0,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 0,
+          "exact_rate": 0.0,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 0.0,
+      "exact_count": 0,
+      "exact_rate": 0.0,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    },
+    "e_intervention": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 0,
+          "exact_rate": 0.0,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 1.0,
+      "exact_count": 3,
+      "exact_rate": 0.03125,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    },
+    "pair_intervention": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 3,
+          "exact_rate": 0.09375,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 0,
+          "exact_rate": 0.0,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 1.0,
+      "exact_count": 4,
+      "exact_rate": 0.041666666666666664,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    },
+    "swap_operation": {
+      "by_operation": {
+        "ALU_ADD": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_MUL": {
+          "exact_count": 2,
+          "exact_rate": 0.0625,
+          "samples": 32
+        },
+        "ALU_SUB": {
+          "exact_count": 1,
+          "exact_rate": 0.03125,
+          "samples": 32
+        }
+      },
+      "copy_equal_direct_rate": 1.0,
+      "exact_count": 5,
+      "exact_rate": 0.052083333333333336,
+      "row_hit_rate": 1.0,
+      "samples": 96
+    }
+  },
+  "seed": 101,
+  "status": "completed",
+  "target_source": "independent symbolic interpreter over serialized rows; executor receives no target/value oracle"
+}

@@ -302,20 +302,22 @@ def run_program(
     }
 
 
-def summarize_runs(model: C1JointModel, programs: list[Program]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    runs: dict[str, list[dict[str, Any]]] = {"baseline": [], "pointer_intervention": [], "memory_intervention": [], "freeze_p": [], "replace_w": [], "extra_emit": []}
+def summarize_runs(model: C1JointModel, programs: list[Program], *, controls: bool = True) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    mode_names = ("baseline", "pointer_intervention", "memory_intervention", "freeze_p", "replace_w") if controls else ("baseline",)
+    runs: dict[str, list[dict[str, Any]]] = {name: [] for name in mode_names}
     traces: list[dict[str, Any]] = []
     for program_index, program in enumerate(programs):
-        for mode in ("baseline", "pointer_intervention", "memory_intervention", "freeze_p", "replace_w"):
+        for mode in mode_names:
             output, result = run_program(model, program, mode=mode)
             runs[mode].append(result)
             traces.append({"program": program_index, "length": program.length, "keys": list(program.keys), "transforms": list(program.transforms), "mode": mode, **result})
-        baseline_output, _ = run_program(model, program)
-        emit_output, emit_result = run_program(model, program, extra_emit=True)
-        runs["extra_emit"].append(emit_result)
-        traces.append({"program": program_index, "length": program.length, "keys": list(program.keys), "transforms": list(program.transforms), "mode": "extra_emit", **emit_result})
-        if not torch.equal(baseline_output, emit_output):
-            raise AssertionError("EMIT changed workspace state")
+        if controls:
+            baseline_output, _ = run_program(model, program)
+            emit_output, emit_result = run_program(model, program, extra_emit=True)
+            runs.setdefault("extra_emit", []).append(emit_result)
+            traces.append({"program": program_index, "length": program.length, "keys": list(program.keys), "transforms": list(program.transforms), "mode": "extra_emit", **emit_result})
+            if not torch.equal(baseline_output, emit_output):
+                raise AssertionError("EMIT changed workspace state")
 
     def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         errors = [item["relative_error"] for item in results]
@@ -339,7 +341,7 @@ def summarize_runs(model: C1JointModel, programs: list[Program]) -> tuple[dict[s
             "by_length": by_length,
         }
 
-    summary = {"gate": {"cosine_gt": 0.999, "relative_error_lte": 0.01}, "runs": {name: aggregate(values) for name, values in runs.items()}, "state_conservation": {"freeze_p": "must fail chain advancement", "replace_w": "must lose prior contributions", "extra_emit": "must preserve output"}}
+    summary = {"gate": {"cosine_gt": 0.999, "relative_error_lte": 0.01}, "runs": {name: aggregate(values) for name, values in runs.items()}, "state_conservation": {"freeze_p": "must fail chain advancement", "replace_w": "must lose prior contributions", "extra_emit": "must preserve output"} if controls else {}}
     return summary, traces
 
 
@@ -348,6 +350,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "campaign" / "u0c_c1_lossnorm_anneal_seed101_12000" / "final.pt")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "campaign" / "u0c_c1_mix_o_seed101_frozen")
     parser.add_argument("--samples", type=int, default=32, help="Total programs; half length 4-update, half length 6-update")
+    parser.add_argument("--baseline-only", action="store_true", help="Run baseline only, for larger regression sampling")
     parser.add_argument("--seed", type=int, default=101)
     args = parser.parse_args()
     if args.samples < 2 or args.samples % 2:
@@ -358,7 +361,7 @@ def main() -> None:
     model.load_state_dict(checkpoint["model"], strict=True)
     model.eval()
     programs = make_programs(args.samples, args.seed)
-    summary, traces = summarize_runs(model, programs)
+    summary, traces = summarize_runs(model, programs, controls=not args.baseline_only)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary.update({"status": "completed", "seed": args.seed, "checkpoint": str(args.checkpoint), "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(), "samples": args.samples, "program_updates": {"4": args.samples // 2, "6": args.samples // 2}, "target_source": "independent symbolic interpreter; model never receives target, expected pointer, physical row, or transformed vector", "memory_manifest": [{"program": index, "length": program.length, "memory_rows": int(program.memory_types.shape[0]), "keys": list(program.keys), "transforms": list(program.transforms), "memory_types_sha256": tensor_sha256(program.memory_types)} for index, program in enumerate(programs)]})
     (args.output_dir / "results.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
