@@ -10,7 +10,7 @@ from typing import Any
 
 import torch
 
-from ctrl2_common import ADJUSTMENT_NAMES, CTRL1_CHECKPOINT, CTRL1_PILOT, build_examples, decode_value, dispatch_adjustment, load_ctrl1, load_executor, load_base_manifests, navigate_collect, trace_success
+from ctrl2_common import ADJUSTMENT_NAMES, CTRL1_CHECKPOINT, CTRL1_PILOT, augment_manifest, decode_value, dispatch_adjustment, load_ctrl1, load_executor, load_base_manifests, navigate_collect, trace_success
 from train_u0c_ctrl1 import DISTANCES
 
 
@@ -38,7 +38,7 @@ def run_preflight(output_root: Path) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
     manifests = load_base_manifests()
     test_manifest = manifests["test"]
-    augmented = {**test_manifest, "ctrl2_examples": build_examples(test_manifest), "ctrl2_reference_policy": "references={0,31,x,x-1 if valid,x+1 if valid}; all valid examples retained"}
+    augmented = augment_manifest(test_manifest)
     manifest_path = output_root / "test_manifest.json"
     manifest_path.write_text(json.dumps(augmented, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     executor = load_executor()

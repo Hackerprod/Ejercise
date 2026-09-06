@@ -81,6 +81,10 @@ def reference_values(x: int) -> list[int]:
     return sorted(values)
 
 
+def reference_curriculum_metadata() -> dict[str, Any]:
+    return {"anchors": [0, 8, 16, 20, 24, 31], "include_current_x": True, "include_adjacent_valid": True, "admitted_pair_count": sum(len(reference_values(x)) for x in range(VALUE_COUNT)), "admitted_pairs": [{"x": x, "references": reference_values(x)} for x in range(VALUE_COUNT)]}
+
+
 def build_examples(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     examples: list[dict[str, Any]] = []
     example_id = 0
@@ -96,7 +100,7 @@ def build_examples(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def augment_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     augmented = copy.deepcopy(manifest)
     augmented["ctrl2_examples"] = build_examples(manifest)
-    augmented["ctrl2_reference_policy"] = "references={0,31,x,x-1 if valid,x+1 if valid}; all valid examples retained"
+    augmented["reference_curriculum"] = reference_curriculum_metadata()
     return augmented
 
 

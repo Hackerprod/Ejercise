@@ -135,6 +135,10 @@ def action_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {"samples": len(results), "final_success_count": sum(result["final_success"] for result in results), "trace_success_count": sum(result["trace_success"] for result in results), "final_success_rate": sum(result["final_success"] for result in results) / max(1, len(results)), "trace_success_rate": sum(result["trace_success"] for result in results) / max(1, len(results)), "by_distance": by_distance, "by_action": by_action, "by_extreme_x": by_extreme}
 
 
+def reference_intervention_pass(entries: list[dict[str, Any]]) -> bool:
+    return len(entries) == 3 and all(entry["predicted_action"] == entry["expected_action"] for entry in entries)
+
+
 def run_baseline(model: C1JointModel, manifest: dict[str, Any], ctrl1: nn.Module, runtime: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for example in build_examples(manifest):
@@ -201,7 +205,7 @@ def causal_controls(model: C1JointModel, controller: AdjustmentMLP, manifest: di
         for reference in (5, 20, 28):
             predicted = int(controller(r, model.token_embedding(torch.tensor([VALUE_BASE + reference]))).argmax(-1).item())
             intervention_b.append({"fixed_x": 20, "reference": reference, "expected_action": ADJUSTMENT_NAMES[adjustment_action(20, reference)], "predicted_action": ADJUSTMENT_NAMES[predicted]})
-    intervention_b_pass = len(intervention_b) == 3 and {entry["predicted_action"] for entry in intervention_b} == set(ADJUSTMENT_NAMES)
+    intervention_b_pass = reference_intervention_pass(intervention_b)
     intervention_reference = 13
     intervention_xs = (10, 25)
     ood_checks = {str(x): {"reference": intervention_reference, "reference_values_for_x": reference_values(x), "absent_from_policy": intervention_reference not in reference_values(x)} for x in intervention_xs}
@@ -233,7 +237,7 @@ def main() -> None:
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     base_manifests = load_base_manifests()
-    manifests = {split: {**manifest, "ctrl2_examples": build_examples(manifest), "ctrl2_reference_policy": "references={0,31,x,x-1 if valid,x+1 if valid}; all valid examples retained"} for split, manifest in base_manifests.items()}
+    manifests = {split: {**manifest, "ctrl2_examples": build_examples(manifest), "reference_curriculum": {"anchors": [0, 8, 16, 20, 24, 31], "include_current_x": True, "include_adjacent_valid": True, "admitted_pair_count": sum(len(reference_values(x)) for x in range(VALUE_COUNT)), "admitted_pairs": [{"x": x, "references": reference_values(x)} for x in range(VALUE_COUNT)]}} for split, manifest in base_manifests.items()}
     manifest_hashes: dict[str, str] = {}
     for split, manifest in manifests.items():
         path = args.output_root / f"{split}_manifest.json"

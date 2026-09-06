@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from train_u0c_ctrl1 import ADVANCE, COLLECT, update_causal_accounting, trace_success
+from train_u0c_ctrl2 import reference_intervention_pass
 
 
 def test_forced_wrong_read_is_execution_error_not_controller_error() -> None:
@@ -32,3 +33,12 @@ def test_trace_success_requires_final_success_and_no_first_divergence() -> None:
     assert not trace_success(True, False, None, {"decision": 1})
     assert not trace_success(True, True, None, None)
     assert not trace_success(False, False, None, None)
+
+
+def test_reference_intervention_rejects_permutation_of_three_present_classes() -> None:
+    entries = [
+        {"expected_action": "DECREASE", "predicted_action": "INCREASE"},
+        {"expected_action": "KEEP", "predicted_action": "DECREASE"},
+        {"expected_action": "INCREASE", "predicted_action": "KEEP"},
+    ]
+    assert not reference_intervention_pass(entries)
