@@ -111,15 +111,37 @@ def run_learned(model: Any, ctrl1: Any, scorer: OrdinalSharedScorer, supervisor:
     return {"episode": episode["episode"], "graph": episode["graph"], "hops": episode["distance"], "reference": reference, "events": events, "decisions": len(events), "timeout": not emitted and not stop_after_first_alu, "emitted": emitted, "final_value": final_value, "final_success": final_value == reference, "trajectory_success": emitted and first_bad is None and final_value == reference and events[-1]["action"] == EMIT, "first_bad": first_bad, "state": state, "flags": (v_e, v_r), "symbolic_pointer": symbolic_pointer, "symbolic_x": symbolic_x, "read_e_done": read_e_done, "copied": copied}
 
 
-def trace_metrics(root: Path) -> dict[str, Any]:
+def trace_metrics(root: Path, supervisor_checkpoint: Path) -> dict[str, Any]:
     observations = torch.load(root / "test" / "observations.pt", weights_only=False)
     labels = torch.load(root / "test" / "labels.pt", weights_only=False)
-    model = SupervisorMLP(); payload = torch.load(root / "final.pt", weights_only=False); model.load_state_dict(payload["supervisor"], strict=True); model.eval()
+    model = SupervisorMLP(); payload = torch.load(supervisor_checkpoint, weights_only=False); model.load_state_dict(payload["supervisor"], strict=True); model.eval()
     with torch.no_grad():
         predictions = model(observations["features"]).argmax(-1)
     correct = predictions == labels["action"]
     per_action = {ACTION_NAMES[action]: {"samples": int((labels["action"] == action).sum()), "correct": int(correct[labels["action"] == action].sum()), "accuracy": float(correct[labels["action"] == action].float().mean())} for action in range(6)}
     return {"samples": len(labels["action"]), "correct": int(correct.sum()), "accuracy": float(correct.float().mean()), "per_action": per_action}
+
+
+def run_controls(model: Any, ctrl1: Any, scorer: OrdinalSharedScorer, supervisor: SupervisorMLP, manifest: dict[str, Any], episode_by_x: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    first_episode = episode_by_x[10]
+    switch_prefix = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, stop_after_first_alu=True)
+    switch_cont = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 5, initial_state=switch_prefix["state"], initial_flags=switch_prefix["flags"], initial_pointer=switch_prefix["symbolic_pointer"], initial_symbolic_x=switch_prefix["symbolic_x"], initial_read_e_done=switch_prefix["read_e_done"], initial_copied=switch_prefix["copied"])
+    controls: dict[str, Any] = {"reference_switch_mid_adjustment": {"prefix": {key: value for key, value in switch_prefix.items() if key != "state"}, "continuation": {key: value for key, value in switch_cont.items() if key != "state"}, "pass": switch_prefix["first_bad"] is None and switch_cont["trajectory_success"]}}
+    graph = manifest["graphs"][first_episode["graph"]]
+    memory_keys, memory_values, memory_types, row_mask = materialize_graph_batch(model, [graph])
+    state = torch.zeros((1, SLOT_COUNT, DIMENSION)); state[:, SLOT_P] = model.token_embedding(torch.tensor([first_episode["start_key"] + KEY_BASE])); presence = torch.ones((1, SLOT_COUNT), dtype=torch.bool)
+    symbolic_pointer = first_episode["start_key"]
+    for _ in range(first_episode["distance"]):
+        row = expected_row(graph, symbolic_pointer, READ_P, first_episode["goal_key"])
+        state, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), immediate_vectors(model, torch.tensor([511])), torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode="BLEND", read_set="explicit")
+        symbolic_pointer = graph["rows"][row]["value"]
+    state_after_read_e, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_E"]]), immediate_vectors(model, torch.tensor([511])), torch.tensor([SLOT_P]), torch.tensor([SLOT_E]), presence, read_mode="BLEND", read_set="explicit", diagnostic_read_e_select=False)
+    read_e = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, initial_state=state_after_read_e, initial_flags=(True, False), initial_pointer=first_episode["goal_key"], initial_symbolic_x=pair_value(manifest, first_episode), initial_read_e_done=True, initial_copied=False)
+    state_after_copy = state_after_read_e.clone(); state_after_copy[:, SLOT_R] = state_after_copy[:, SLOT_E].clone()
+    copy = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, initial_state=state_after_copy, initial_flags=(True, True), initial_pointer=first_episode["goal_key"], initial_symbolic_x=pair_value(manifest, first_episode), initial_read_e_done=True, initial_copied=True)
+    controls["snapshot_after_read_e"] = {**{key: value for key, value in read_e.items() if key != "state"}, "pass": read_e["trajectory_success"]}
+    controls["snapshot_after_copy"] = {**{key: value for key, value in copy.items() if key != "state"}, "pass": copy["trajectory_success"]}
+    return controls
 
 
 def main() -> None:
@@ -143,27 +165,8 @@ def main() -> None:
     serializable = [{key: value for key, value in trajectory.items() if key not in ("state",)} for trajectory in trajectories]
     oracle_preflight_path = CAMPAIGN_ROOT / "u0c_ctrl4_preflight_seed2201" / "results.json"
     oracle_summary = json.loads(oracle_preflight_path.read_text(encoding="utf-8"))["summary"]
-    first_episode = episode_by_x[10]
-    switch_prefix = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, stop_after_first_alu=True)
-    switch_cont = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 5, initial_state=switch_prefix["state"], initial_flags=switch_prefix["flags"], initial_pointer=switch_prefix["symbolic_pointer"], initial_symbolic_x=switch_prefix["symbolic_x"], initial_read_e_done=switch_prefix["read_e_done"], initial_copied=switch_prefix["copied"])
-    controls = {"reference_switch_mid_adjustment": {"prefix": {key: value for key, value in switch_prefix.items() if key not in ("state",)}, "continuation": {key: value for key, value in switch_cont.items() if key not in ("state",)}, "pass": switch_prefix["first_bad"] is None and switch_cont["trajectory_success"]}, "snapshot_after_read_e": {}, "snapshot_after_copy": {}}
-    # Snapshot controls use the frozen oracle only to reach the named real snapshots; learned supervisor owns every suffix decision.
-    from evaluate_u0c_ctrl4_preflight import run_preflight
-    pre_snapshot = run_preflight(model, scorer, manifest, first_episode, 12)
-    # Build snapshots by replaying the exact real prefix directly, then run learned suffix.
-    # The preflight trace proves these prefixes; no ideal R is injected.
-    nav_graph = manifest["graphs"][first_episode["graph"]]
-    memory_keys, memory_values, memory_types, row_mask = materialize_graph_batch(model, [nav_graph]); state = torch.zeros((1, SLOT_COUNT, DIMENSION)); state[:, SLOT_P] = model.token_embedding(torch.tensor([first_episode["start_key"] + KEY_BASE])); presence = torch.ones((1, SLOT_COUNT), dtype=torch.bool); zero = torch.zeros((1, SLOT_COUNT, DIMENSION))
-    symbolic_pointer = first_episode["start_key"]
-    for _ in range(first_episode["distance"]):
-        row = expected_row(nav_graph, symbolic_pointer, READ_P, first_episode["goal_key"]); state, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_P"]]), immediate_vectors(model, torch.tensor([511])), torch.tensor([SLOT_P]), torch.tensor([SLOT_P]), presence, read_mode="BLEND", read_set="explicit"); symbolic_pointer = nav_graph["rows"][row]["value"]
-    state_after_read_e, _, _ = model.step(state, memory_keys, memory_values, memory_types, row_mask, torch.tensor([OPCODE_IDS["READ_E"]]), immediate_vectors(model, torch.tensor([511])), torch.tensor([SLOT_P]), torch.tensor([SLOT_E]), presence, read_mode="BLEND", read_set="explicit", diagnostic_read_e_select=False)
-    read_nav = {"state": state_after_read_e, "memory_keys": memory_keys, "memory_values": memory_values, "memory_types": memory_types, "row_mask": row_mask, "presence": presence}
-    controls["snapshot_after_read_e"] = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, initial_state=state_after_read_e, initial_flags=(True, False), initial_pointer=first_episode["goal_key"], initial_symbolic_x=pair_value(manifest, first_episode), initial_read_e_done=True, initial_copied=False)
-    state_after_copy = state_after_read_e.clone(); state_after_copy[:, SLOT_R] = state_after_copy[:, SLOT_E].clone()
-    controls["snapshot_after_copy"] = run_learned(model, ctrl1, scorer, supervisor, manifest, first_episode, 12, initial_state=state_after_copy, initial_flags=(True, True), initial_pointer=first_episode["goal_key"], initial_symbolic_x=pair_value(manifest, first_episode), initial_read_e_done=True, initial_copied=True)
-    controls["snapshot_after_read_e"] = {key: value for key, value in controls["snapshot_after_read_e"].items() if key != "state"}; controls["snapshot_after_copy"] = {key: value for key, value in controls["snapshot_after_copy"].items() if key != "state"}
-    result = {"status": "completed", "task": "T1-CTRL-4", "training": False, "checkpoint_supervisor": {"path": str(args.supervisor_checkpoint), "sha256": sha256(args.supervisor_checkpoint), "seed": supervisor_payload.get("seed")}, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint)}, "manifest": {"path": str(args.manifest), "sha256": sha256(args.manifest), "reused_existing": True}, "measurements": {"oracle_supervisor_executor": oracle_summary, "learned_on_reference_traces": trace_metrics(args.supervisor_checkpoint.parent), "learned_free_execution": {"samples": len(trajectories), "trajectory_success": sum(t["trajectory_success"] for t in trajectories), "final_success": sum(t["final_success"] for t in trajectories), "timeouts": sum(t["timeout"] for t in trajectories), "first_bad_count": sum(t["first_bad"] is not None for t in trajectories), "max_decisions": max(t["decisions"] for t in trajectories)}}, "controls": controls, "trajectories": serializable}
+    controls = run_controls(model, ctrl1, scorer, supervisor, manifest, episode_by_x)
+    result = {"status": "completed", "task": "T1-CTRL-4", "training": False, "checkpoint_supervisor": {"path": str(args.supervisor_checkpoint), "sha256": sha256(args.supervisor_checkpoint), "seed": supervisor_payload.get("seed")}, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint)}, "manifest": {"path": str(args.manifest), "sha256": sha256(args.manifest), "reused_existing": True}, "measurements": {"oracle_supervisor_executor": oracle_summary, "learned_on_reference_traces": trace_metrics(args.supervisor_checkpoint.parent, args.supervisor_checkpoint), "learned_free_execution": {"samples": len(trajectories), "trajectory_success": sum(t["trajectory_success"] for t in trajectories), "final_success": sum(t["final_success"] for t in trajectories), "timeouts": sum(t["timeout"] for t in trajectories), "first_bad_count": sum(t["first_bad"] is not None for t in trajectories), "max_decisions": max(t["decisions"] for t in trajectories)}}, "controls": controls, "trajectories": serializable}
     output = args.output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": sha256(output), "measurements": result["measurements"], "controls": {key: value.get("pass", value.get("trajectory_success")) for key, value in controls.items()}}, indent=2, sort_keys=True))
 
 

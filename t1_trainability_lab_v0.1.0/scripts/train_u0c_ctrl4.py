@@ -142,8 +142,6 @@ def prepare_data(root: Path, manifests: dict[str, dict[str, Any]], model: Any, c
 
 
 def train_supervisor(model: SupervisorMLP, train: tuple[dict[str, Tensor], dict[str, Tensor]], val: tuple[dict[str, Tensor], dict[str, Tensor]], root: Path, seed: int) -> dict[str, Any]:
-    torch.manual_seed(seed)
-    random.seed(seed)
     observations, labels = train
     val_observations, val_labels = val
     buckets = [torch.where(labels["action"] == action)[0] for action in range(ACTION_COUNT)]
@@ -195,11 +193,15 @@ def main() -> None:
     payload = torch.load(args.scorer_checkpoint, map_location="cpu", weights_only=False)
     scorer = OrdinalSharedScorer(); scorer.load_state_dict(payload["controller"], strict=True); scorer.eval()
     data = prepare_data(args.output_root, manifests, model, ctrl1, scorer)
-    result: dict[str, Any] = {"status": "prepared", "task": "T1-CTRL-4", "seed": args.seed, "supervisor_parameters": parameter_count(SupervisorMLP()), "data": data, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint), "training_seed": payload.get("controller_seed")}, "training": False}
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    supervisor = SupervisorMLP()
+    torch.save({"supervisor": copy.deepcopy(supervisor.state_dict()), "seed": args.seed, "initialization": "seed set before construction", "trainable_parameters": parameter_count(supervisor)}, args.output_root / "initial.pt")
+    result: dict[str, Any] = {"status": "prepared", "task": "T1-CTRL-4", "seed": args.seed, "supervisor_parameters": parameter_count(supervisor), "data": data, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint), "training_seed": payload.get("controller_seed")}, "training": False}
     if not args.prepare_only:
         train = (torch.load(args.output_root / "train" / "observations.pt", weights_only=False), torch.load(args.output_root / "train" / "labels.pt", weights_only=False))
         val = (torch.load(args.output_root / "val" / "observations.pt", weights_only=False), torch.load(args.output_root / "val" / "labels.pt", weights_only=False))
-        result["training"] = train_supervisor(SupervisorMLP(), train, val, args.output_root, args.seed)
+        result["training"] = train_supervisor(supervisor, train, val, args.output_root, args.seed)
     output = args.output_root / ("prepare_results.json" if args.prepare_only else "results.json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True))
