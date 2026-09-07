@@ -50,6 +50,22 @@ def scorer_detail(scorer: OrdinalSharedScorer, register: torch.Tensor, reference
     return {"scores": {"s_R": float(scorer.score(register).item()), "s_b": float(scorer.score(reference).item())}, "difference": float(difference.item()), "tau": float(tau.item()), "logits": values, "d_order": values[0] - values[2], "d_keep": values[1] - max(values[0], values[2]), "predicted_action": action, "predicted_action_name": ADJUSTMENT_NAMES[action], "expected_action": expected, "expected_action_name": ADJUSTMENT_NAMES[expected], "action_correct": action == expected}
 
 
+def validate_transition(*, x_before: int, x_after: int, reference: int, selected_action: int, expected_action: int, emitted: bool, raw_before_sha256: str, raw_after_sha256: str) -> dict[str, Any]:
+    """Strict evaluator-only transition contract; dispatcher remains policy-driven."""
+    action_correct = selected_action == expected_action
+    if selected_action == INCREASE:
+        expected_value = (x_before + 1) % VALUE_COUNT
+        exact_operation = x_after == expected_value and not emitted
+    elif selected_action == DECREASE:
+        expected_value = (x_before - 1) % VALUE_COUNT
+        exact_operation = x_after == expected_value and not emitted
+    else:
+        expected_value = x_before
+        exact_operation = x_after == expected_value and emitted and raw_before_sha256 == raw_after_sha256
+    distance_decreased = x_before == reference or abs(x_after - reference) == abs(x_before - reference) - 1
+    return {"action_correct": action_correct, "expected_value": expected_value, "exact_operation": exact_operation, "distance_decreased": distance_decreased, "valid": action_correct and exact_operation and distance_decreased}
+
+
 def canonical_trajectory(model: Any, scorer: OrdinalSharedScorer, base_navigation: dict[str, Any], x: int, reference: int) -> dict[str, Any]:
     class_ids = torch.arange(VALUE_BASE, VALUE_BASE + VALUE_COUNT)
     codebook = model.token_embedding(class_ids)
@@ -69,11 +85,11 @@ def canonical_trajectory(model: Any, scorer: OrdinalSharedScorer, base_navigatio
         next_state, operation, emitted = dispatch_adjustment_iterative(model, base_navigation["memory_keys"], base_navigation["memory_values"], base_navigation["memory_types"], base_navigation["row_mask"], state, base_navigation["presence"], detail["predicted_action"])
         _, after_index = canonical_value_view(model, next_state[:, SLOT_R])
         decoded_after = int(after_index.item())
-        distance_decreased = None if decoded_before == reference or decoded_after is None else abs(decoded_after - reference) == abs(decoded_before - reference) - 1
-        terminal_ok = (decoded_before == reference and detail["predicted_action"] == KEEP and emitted) or (decoded_before != reference and detail["predicted_action"] != KEEP and distance_decreased is True)
+        transition = validate_transition(x_before=decoded_before, x_after=decoded_after, reference=reference, selected_action=detail["predicted_action"], expected_action=expected, emitted=emitted, raw_before_sha256=hashlib.sha256(raw.numpy().tobytes()).hexdigest(), raw_after_sha256=hashlib.sha256(next_state[:, SLOT_R].numpy().tobytes()).hexdigest())
+        terminal_ok = transition["valid"]
         if not terminal_ok and first_bad_transition is None:
-            first_bad_transition = {"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "predicted_action": detail["predicted_action_name"], "expected_action": detail["expected_action_name"], "distance_decreased": distance_decreased, "emitted": emitted}
-        events.append({"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "raw_r_sha256": hashlib.sha256(raw.numpy().tobytes()).hexdigest(), "q_r_value": int(q_index.item()), "q_reference_value": int(b_index.item()), "operation": operation, "emitted": emitted, **detail})
+            first_bad_transition = {"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "predicted_action": detail["predicted_action_name"], "expected_action": detail["expected_action_name"], **transition, "emitted": emitted}
+        events.append({"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "raw_r_sha256": hashlib.sha256(raw.numpy().tobytes()).hexdigest(), "q_r_value": int(q_index.item()), "q_reference_value": int(b_index.item()), "operation": operation, "emitted": emitted, **transition, **detail})
         state = next_state
         if emitted:
             break

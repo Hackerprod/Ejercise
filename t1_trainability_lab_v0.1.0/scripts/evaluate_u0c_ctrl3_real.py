@@ -10,10 +10,10 @@ from typing import Any, Callable
 
 import torch
 
-from ctrl2_common import ADJUSTMENT_NAMES, BASE_CHECKPOINT, CTRL1_CHECKPOINT, adjustment_action, load_base_manifests, load_ctrl1, load_executor, navigate_collect
+from ctrl2_common import ADJUSTMENT_NAMES, BASE_CHECKPOINT, CTRL1_CHECKPOINT, DECREASE, INCREASE, KEEP, adjustment_action, load_base_manifests, load_ctrl1, load_executor, navigate_collect
 from evaluate_u0c_c1_e_r_alu import VALUE_BASE, VALUE_COUNT
 from evaluate_u0c_ctrl2_o_canon import canonical_value_view
-from evaluate_u0c_ctrl3 import MAX_ADJUSTMENT_DECISIONS, dispatch_adjustment_iterative, scorer_detail
+from evaluate_u0c_ctrl3 import MAX_ADJUSTMENT_DECISIONS, dispatch_adjustment_iterative, scorer_detail, validate_transition
 from train_u0c_ctrl1 import SLOT_R
 from train_u0c_ctrl2 import generate_dataset
 from train_u0c_ctrl2_o import OrdinalSharedScorer, sha256
@@ -30,26 +30,17 @@ def raw_hash(state: torch.Tensor) -> str:
     return hashlib.sha256(state.detach().cpu().numpy().tobytes()).hexdigest()
 
 
-def choose_real_manifest(manifest: dict[str, Any], runtime: dict[int, dict[str, Any]]) -> dict[str, Any]:
-    by_x: dict[int, dict[str, Any]] = {}
-    for episode in manifest["episodes"]:
-        navigation = runtime[episode["episode"]]
-        if navigation["collected"]:
-            by_x.setdefault(int(navigation["symbolic_x"]), {"episode": int(episode["episode"]), "graph": int(episode["graph"]), "distance": int(episode["distance"]), "start_key": int(episode["start_key"]), "goal_key": int(episode["goal_key"]), "x": int(navigation["symbolic_x"]), "raw_r_sha256": raw_hash(navigation["state"][:, SLOT_R])})
-    if set(by_x) != set(range(VALUE_COUNT)):
-        raise RuntimeError(f"real-R manifest missing recovered values: {sorted(set(range(VALUE_COUNT)) - set(by_x))}")
-    entries: list[dict[str, Any]] = []
-    distances = (0, 1, 2, 8, 16, 31)
-    for x in range(VALUE_COUNT):
-        references = {x}
-        for distance in distances[1:]:
-            if x - distance >= 0:
-                references.add(x - distance)
-            if x + distance < VALUE_COUNT:
-                references.add(x + distance)
-        for reference in sorted(references):
-            entries.append({"pair": len(entries), "episode": by_x[x]["episode"], "graph": by_x[x]["graph"], "x": x, "reference": reference, "distance": abs(x - reference), "raw_r_sha256": by_x[x]["raw_r_sha256"]})
-    return {"task": "T1-CTRL-3", "phase": "real_r_manifest", "source_split": "test", "runtime_recovered": True, "embedding_ideal_not_used_for_R": True, "selection": "first collected test episode per recovered symbolic x; fixed references at equality, short, and long distances", "entries": entries}
+def load_fixed_manifest(path: Path, expected_sha256: str) -> dict[str, Any]:
+    """Load, never regenerate, the approved real-R manifest."""
+    actual = sha256(path)
+    if actual != expected_sha256:
+        raise RuntimeError(f"fixed real-R manifest hash mismatch: expected {expected_sha256}, got {actual}")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if len(manifest.get("entries", [])) != 236:
+        raise RuntimeError("fixed real-R manifest must contain exactly 236 entries")
+    if not manifest.get("runtime_recovered") or not manifest.get("embedding_ideal_not_used_for_R"):
+        raise RuntimeError("fixed manifest is not marked as recovered real-R data")
+    return manifest
 
 
 @torch.no_grad()
@@ -70,17 +61,37 @@ def run_loop(model: Any, scorer: OrdinalSharedScorer, navigation: dict[str, Any]
         next_state, operation, emitted = dispatch_adjustment_iterative(model, navigation["memory_keys"], navigation["memory_values"], navigation["memory_types"], navigation["row_mask"], state, navigation["presence"], selected)
         _, after_index = canonical_value_view(model, next_state[:, SLOT_R])
         decoded_after = int(after_index.item())
-        distance_decreased = None if decoded_before == reference else abs(decoded_after - reference) == abs(decoded_before - reference) - 1
-        transition_ok = (decoded_before == reference and selected == 1 and emitted) or (decoded_before != reference and selected != 1 and distance_decreased is True)
+        transition = validate_transition(x_before=decoded_before, x_after=decoded_after, reference=reference, selected_action=selected, expected_action=expected, emitted=emitted, raw_before_sha256=raw_hash(before), raw_after_sha256=raw_hash(next_state[:, SLOT_R]))
+        transition_ok = transition["valid"]
         if not transition_ok and first_bad is None:
-            first_bad = {"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "predicted_action": ADJUSTMENT_NAMES[selected], "expected_action": ADJUSTMENT_NAMES[expected], "distance_decreased": distance_decreased, "emitted": emitted}
-        events.append({"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "raw_r_sha256": raw_hash(before), "raw_after_sha256": raw_hash(next_state[:, SLOT_R]), "q_r_value": int(q_index.item()), "q_reference_value": int(b_index.item()), "selected_action": selected, "selected_action_name": ADJUSTMENT_NAMES[selected], "operation": operation, "emitted": emitted, "distance_decreased": distance_decreased, "transition_ok": transition_ok, **detail})
+            first_bad = {"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "predicted_action": ADJUSTMENT_NAMES[selected], "expected_action": ADJUSTMENT_NAMES[expected], **transition, "emitted": emitted}
+        events.append({"decision": decision, "decoded_before": decoded_before, "decoded_after": decoded_after, "reference": reference, "raw_r_sha256": raw_hash(before), "raw_after_sha256": raw_hash(next_state[:, SLOT_R]), "q_r_value": int(q_index.item()), "q_reference_value": int(b_index.item()), "selected_action": selected, "selected_action_name": ADJUSTMENT_NAMES[selected], "operation": operation, "emitted": emitted, **transition, "transition_ok": transition_ok, **detail})
         state = next_state
         if emitted:
             break
     _, final_index = canonical_value_view(model, state[:, SLOT_R])
     final_value = int(final_index.item())
     return {"events": events, "decisions": len(events), "timeout": not emitted, "emitted": emitted, "final_value": final_value, "final_success": final_value == reference, "trajectory_success": emitted and first_bad is None and final_value == reference and events[-1]["selected_action"] == 1, "first_bad_transition": first_bad}
+
+
+@torch.no_grad()
+def policy_prefix_step(model: Any, scorer: OrdinalSharedScorer, navigation: dict[str, Any], reference: int) -> tuple[dict[str, Any], torch.Tensor]:
+    """Execute one prefix decision selected by the scorer, returning its state and receipt."""
+    state = navigation["state"].clone()
+    before = state[:, SLOT_R].clone()
+    q_r, q_index = canonical_value_view(model, before)
+    reference_raw = model.token_embedding(torch.tensor([VALUE_BASE + reference]))
+    q_b, b_index = canonical_value_view(model, reference_raw)
+    expected = adjustment_action(int(q_index.item()), reference)
+    detail = scorer_detail(scorer, q_r, q_b, expected)
+    selected = detail["predicted_action"]
+    next_state, operation, emitted = dispatch_adjustment_iterative(model, navigation["memory_keys"], navigation["memory_values"], navigation["memory_types"], navigation["row_mask"], state, navigation["presence"], selected)
+    _, after_index = canonical_value_view(model, next_state[:, SLOT_R])
+    before_value = int(q_index.item())
+    after_value = int(after_index.item())
+    transition = validate_transition(x_before=before_value, x_after=after_value, reference=reference, selected_action=selected, expected_action=expected, emitted=emitted, raw_before_sha256=raw_hash(before), raw_after_sha256=raw_hash(next_state[:, SLOT_R]))
+    event = {"decision": 0, "decoded_before": before_value, "decoded_after": after_value, "reference": reference, "selected_action": selected, "selected_action_name": ADJUSTMENT_NAMES[selected], "operation": operation, "emitted": emitted, **transition, **detail}
+    return event, next_state
 
 
 def real_r_evaluation(model: Any, scorer: OrdinalSharedScorer, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]], fixed: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -102,44 +113,51 @@ def causal_controls(model: Any, scorer: OrdinalSharedScorer, runtime: dict[int, 
     donor = next(entry for entry in fixed["entries"] if entry["x"] == 13 and entry["reference"] == 13)
     base_nav = runtime[base["episode"]]
     donor_nav = runtime[donor["episode"]]
-    first_state, _, _ = dispatch_adjustment_iterative(model, base_nav["memory_keys"], base_nav["memory_values"], base_nav["memory_types"], base_nav["row_mask"], base_nav["state"].clone(), base_nav["presence"], adjustment_action(10, 12))
+    prefix_event, first_state = policy_prefix_step(model, scorer, base_nav, 12)
     intervened = first_state.clone()
     intervened[:, SLOT_R] = donor_nav["state"][:, SLOT_R].clone()
     intervention_navigation = {**base_nav, "state": intervened}
-    intervention = run_loop(model, scorer, intervention_navigation, 12, max_decisions=1)
+    intervention = run_loop(model, scorer, intervention_navigation, 12)
     intervention_event = intervention["events"][0]
-    direction_control = {"base_x": 10, "reference": 12, "post_alu_raw_r_sha256": raw_hash(first_state[:, SLOT_R]), "intervention_source_x": 13, "intervened_raw_r_sha256": raw_hash(intervened[:, SLOT_R]), "expected_after_intervention": "DECREASE", "observed_action": intervention_event["selected_action_name"], "action_inverted": intervention_event["selected_action"] == 2, "trajectory": intervention}
+    direction_control = {"base_x": 10, "reference": 12, "prefix": prefix_event, "post_alu_raw_r_sha256": raw_hash(first_state[:, SLOT_R]), "intervention_source_x": 13, "intervened_raw_r_sha256": raw_hash(intervened[:, SLOT_R]), "expected_after_intervention": "DECREASE", "observed_action": intervention_event["selected_action_name"], "action_inverted": intervention_event["selected_action"] == DECREASE, "trajectory": intervention, "pass": prefix_event["valid"] and intervention_event["selected_action"] == DECREASE and intervention["trajectory_success"]}
 
     switch_base = next(entry for entry in fixed["entries"] if entry["x"] == 10 and entry["reference"] == 12)
     switch_nav = runtime[switch_base["episode"]]
-    state_after_first, _, _ = dispatch_adjustment_iterative(model, switch_nav["memory_keys"], switch_nav["memory_values"], switch_nav["memory_types"], switch_nav["row_mask"], switch_nav["state"].clone(), switch_nav["presence"], adjustment_action(10, 12))
+    switch_prefix_event, state_after_first = policy_prefix_step(model, scorer, switch_nav, 12)
     switched_nav = {**switch_nav, "state": state_after_first}
     switched = run_loop(model, scorer, switched_nav, 5)
     switch_event = switched["events"][0]
-    reference_control = {"initial_x": 10, "old_reference": 12, "new_reference": 5, "state_after_old_reference_step_decoded": int(canonical_value_view(model, state_after_first[:, SLOT_R])[1].item()), "observed_action_after_switch": switch_event["selected_action_name"], "expected_action_after_switch": "DECREASE", "followed_new_reference": switch_event["selected_action"] == 2, "trajectory": switched}
-    return {"r_post_alu_crosses_reference": direction_control, "reference_switch_mid_trajectory": reference_control}
+    reference_control = {"initial_x": 10, "old_reference": 12, "new_reference": 5, "prefix": switch_prefix_event, "state_after_old_reference_step_decoded": int(canonical_value_view(model, state_after_first[:, SLOT_R])[1].item()), "observed_action_after_switch": switch_event["selected_action_name"], "expected_action_after_switch": "DECREASE", "followed_new_reference": switch_event["selected_action"] == DECREASE, "trajectory": switched, "pass": switch_prefix_event["valid"] and switch_event["selected_action"] == DECREASE and switched["trajectory_success"]}
+
+    local_first_state, _, _ = dispatch_adjustment_iterative(model, base_nav["memory_keys"], base_nav["memory_values"], base_nav["memory_types"], base_nav["row_mask"], base_nav["state"].clone(), base_nav["presence"], adjustment_action(10, 12))
+    local_intervened = local_first_state.clone(); local_intervened[:, SLOT_R] = donor_nav["state"][:, SLOT_R].clone()
+    local_direction = run_loop(model, scorer, {**base_nav, "state": local_intervened}, 12, max_decisions=1)
+    local_switch_state, _, _ = dispatch_adjustment_iterative(model, base_nav["memory_keys"], base_nav["memory_values"], base_nav["memory_types"], base_nav["row_mask"], base_nav["state"].clone(), base_nav["presence"], adjustment_action(10, 12))
+    local_switch = run_loop(model, scorer, {**base_nav, "state": local_switch_state}, 5)
+    return {"r_post_alu_crosses_reference": direction_control, "reference_switch_mid_trajectory": reference_control, "controls_local_oracle_prefix": {"label": "local-only; oracle-directed prefix retained for historical comparison", "r_post_alu_crosses_reference": local_direction, "reference_switch_mid_trajectory": local_switch}}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
     parser.add_argument("--scorer-checkpoint", type=Path, default=SCORER_CHECKPOINT)
+    parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
+    parser.add_argument("--manifest-sha256", default="d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3")
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     manifests = load_base_manifests()
     model = load_executor()
     ctrl1 = load_ctrl1()
     _, _, runtime = generate_dataset(model, ctrl1, manifests["test"], keep_runtime=True)
-    fixed = choose_real_manifest(manifests["test"], runtime)
-    MANIFEST_PATH.write_text(json.dumps(fixed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fixed = load_fixed_manifest(args.manifest, args.manifest_sha256)
     payload = torch.load(args.scorer_checkpoint, map_location="cpu", weights_only=False)
     scorer = OrdinalSharedScorer(); scorer.load_state_dict(payload["controller"], strict=True); scorer.eval()
     summary, records = real_r_evaluation(model, scorer, manifests["test"], runtime, fixed)
     controls = causal_controls(model, scorer, runtime, fixed)
-    result = {"status": "completed", "task": "T1-CTRL-3", "phase": "real_r_and_causal_controls", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint), "training_seed": payload.get("controller_seed")}, "manifest": {"path": str(MANIFEST_PATH), "sha256": sha256(MANIFEST_PATH), "samples": len(fixed["entries"])}, "protocol": {"max_adjustment_decisions": MAX_ADJUSTMENT_DECISIONS, "q_for_scorer_only": True, "raw_r_for_alu": True, "reference_not_reinjected": True, "distance_not_used_to_direct_execution": True, "decoded_integers_used_for_evaluation_only": True, "oracle_uses_same_initial_real_state": True, "oracle_repairs_state": False, "dispatch_adjustment_unchanged": True}, "summary": summary, "controls": controls, "records": records}
+    result = {"status": "completed", "task": "T1-CTRL-3", "phase": "real_r_and_causal_controls", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint), "training_seed": payload.get("controller_seed")}, "manifest": {"path": str(args.manifest), "sha256": sha256(args.manifest), "samples": len(fixed["entries"]), "reused_existing": True}, "protocol": {"max_adjustment_decisions": MAX_ADJUSTMENT_DECISIONS, "q_for_scorer_only": True, "raw_r_for_alu": True, "reference_not_reinjected": True, "distance_not_used_to_direct_execution": True, "decoded_integers_used_for_evaluation_only": True, "oracle_uses_same_initial_real_state": True, "oracle_repairs_state": False, "dispatch_adjustment_unchanged": True}, "summary": summary, "controls": controls, "records": records}
     output = args.output_root / "results.json"
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"path": str(output), "sha256": sha256(output), "manifest_sha256": sha256(MANIFEST_PATH), "summary": summary, "controls": {key: {name: value for name, value in control.items() if name not in ("trajectory",)} for key, control in controls.items()}}, indent=2, sort_keys=True))
+    print(json.dumps({"path": str(output), "sha256": sha256(output), "manifest_sha256": sha256(args.manifest), "summary": summary, "controls": {key: {name: value for name, value in control.items() if name not in ("trajectory",)} for key, control in controls.items()}}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
