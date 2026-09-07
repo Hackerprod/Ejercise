@@ -68,6 +68,18 @@ def simple_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"samples": len(records), "action_correct": sum(record["action_correct"] for record in records), "final_success": sum(record["final_success"] for record in records), "trace_success": sum(record["trace_success"] for record in records), "action_accuracy": sum(record["action_correct"] for record in records) / max(1, len(records)), "final_success_rate": sum(record["final_success"] for record in records) / max(1, len(records)), "trace_success_rate": sum(record["trace_success"] for record in records) / max(1, len(records)), "by_action": by_action, "by_distance": by_distance}
 
 
+def propagate_ctrl2_accounting(navigation: dict[str, Any], *, action_correct: bool, final_success: bool, expected_action: int, predicted_action: int | None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Preserve pre-existing trajectory errors and add at most one CTRL-2 cause."""
+    first_control_error = navigation["first_control_error"]
+    first_execution_error = navigation["first_execution_error"]
+    if navigation["aligned"]:
+        if not action_correct and first_control_error is None:
+            first_control_error = {"stage": "CTRL-2-O-CANON", "expected_action": expected_action, "predicted_action": predicted_action}
+        elif action_correct and not final_success and first_execution_error is None:
+            first_execution_error = {"stage": "CTRL-2-O-CANON", "instruction": "adjustment_dispatch"}
+    return first_control_error, first_execution_error
+
+
 def prototype_check(executor: Any) -> dict[str, Any]:
     embeddings = executor.token_embedding(torch.arange(VALUE_BASE, VALUE_BASE + VALUE_COUNT))
     details = decoder_details(executor, embeddings)
@@ -86,7 +98,10 @@ def canonical_scorer_check(executor: Any, scorer: OrdinalSharedScorer) -> tuple[
             for reference in range(VALUE_COUNT):
                 detail = score_detail(scorer, canonical[x:x + 1], canonical[reference:reference + 1], adjustment_action(x, reference))
                 records.append({"x": x, "reference": reference, **detail})
-    return {"samples": len(records), "correct": sum(record["action_correct"] for record in records), "exact": all(record["action_correct"] for record in records), "accuracy": sum(record["action_correct"] for record in records) / len(records), "scorer_tau": float(scorer.tau().item())}, records
+    with torch.inference_mode():
+        q_scores = scorer.score(embeddings)
+        gaps = q_scores[1:] - q_scores[:-1]
+    return {"samples": len(records), "correct": sum(record["action_correct"] for record in records), "exact": all(record["action_correct"] for record in records), "accuracy": sum(record["action_correct"] for record in records) / len(records), "scorer_tau": float(scorer.tau().item()), "q_k": [float(value) for value in q_scores.tolist()], "g_k": [float(value) for value in gaps.tolist()], "g_min": float(gaps.min().item())}, records
 
 
 def real_r_check(executor: Any, scorer: OrdinalSharedScorer, manifest: dict[str, Any], runtime: dict[int, dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -119,7 +134,8 @@ def evaluate_original_pilot(executor: Any, scorer: OrdinalSharedScorer, manifest
             state, operation = dispatch_adjustment(executor, navigation["memory_keys"], navigation["memory_values"], navigation["memory_types"], navigation["row_mask"], navigation["state"].clone(), navigation["presence"], detail["action"])
             predicted_value = decode_value(executor, state)
             final_success = predicted_value == example["target_value"]
-            records.append({"example": example["example"], "episode": example["episode"], "distance": example["distance"], "x": example["x"], "reference": example["reference"], "expected_action": example["action"], "action_correct": detail["action_correct"], "final_success": final_success, "trace_success": trace_success(final_success, navigation["timeout"], navigation["first_control_error"], None if final_success else {"stage": "CTRL-2-O-CANON", "instruction": operation}), "predicted_value": predicted_value, "target_value": example["target_value"], "operation": operation})
+            first_control_error, first_execution_error = propagate_ctrl2_accounting(navigation, action_correct=detail["action_correct"], final_success=final_success, expected_action=example["action"], predicted_action=detail["action"])
+            records.append({"example": example["example"], "episode": example["episode"], "distance": example["distance"], "x": example["x"], "reference": example["reference"], "expected_action": example["action"], "action_correct": detail["action_correct"], "final_success": final_success, "trace_success": trace_success(final_success, navigation["timeout"], first_control_error, first_execution_error), "first_control_error": first_control_error, "first_execution_error": first_execution_error, "predicted_value": predicted_value, "target_value": example["target_value"], "operation": operation})
     return simple_metrics(records), records
 
 
@@ -143,7 +159,9 @@ def evaluate_contextual(executor: Any, scorer: OrdinalSharedScorer, manifest: di
                 target = adjusted_target(x, reference)
                 oracle_value = decode_value(executor, oracle_state)
                 predicted_value = decode_value(executor, predicted_state)
-                records.append({"episode": episode["episode"], "graph": episode["graph"], "distance": episode["distance"], "x": x, "reference": reference, "expected_action": expected, "predicted_action": detail["action"], "predicted_action_name": detail["action_name"], "action_correct": detail["action_correct"], "oracle_final_success": oracle_value == target, "final_success": predicted_value == target, "trace_success": trace_success(predicted_value == target, navigation["timeout"], None if detail["action_correct"] else {"stage": "CTRL-2-O-CANON", "reference": reference}, None if predicted_value == target else {"stage": "CTRL-2-O-CANON", "instruction": operation}), "canonicalized_r_value": int(q_index.item()), "predicted_value": predicted_value, "target_value": target, "operation": operation})
+                final_success = predicted_value == target
+                first_control_error, first_execution_error = propagate_ctrl2_accounting(navigation, action_correct=detail["action_correct"], final_success=final_success, expected_action=expected, predicted_action=detail["action"])
+                records.append({"episode": episode["episode"], "graph": episode["graph"], "distance": episode["distance"], "x": x, "reference": reference, "expected_action": expected, "predicted_action": detail["action"], "predicted_action_name": detail["action_name"], "action_correct": detail["action_correct"], "oracle_final_success": oracle_value == target, "final_success": final_success, "trace_success": trace_success(final_success, navigation["timeout"], first_control_error, first_execution_error), "first_control_error": first_control_error, "first_execution_error": first_execution_error, "canonicalized_r_value": int(q_index.item()), "predicted_value": predicted_value, "target_value": target, "operation": operation})
     summary = simple_metrics(records)
     summary.update({"decision_correct": summary["action_correct"], "decision_accuracy": summary["action_accuracy"], "oracle_final_success": sum(record["oracle_final_success"] for record in records), "oracle_final_success_rate": sum(record["oracle_final_success"] for record in records) / len(records), "by_action": {name: {**values, "decision_correct": values["action_correct"]} for name, values in summary["by_action"].items()}})
     summary["by_distance"] = {distance: {**values, "decision_correct": values["action_correct"]} for distance, values in summary["by_distance"].items()}
@@ -154,12 +172,13 @@ def evaluate_contextual(executor: Any, scorer: OrdinalSharedScorer, manifest: di
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
+    parser.add_argument("--scorer-checkpoint", type=Path, default=SCORER_ROOT / "final.pt")
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
     manifests = load_base_manifests()
     model = load_executor()
     ctrl1 = load_ctrl1()
-    scorer_payload = torch.load(SCORER_ROOT / "final.pt", map_location="cpu", weights_only=False)
+    scorer_payload = torch.load(args.scorer_checkpoint, map_location="cpu", weights_only=False)
     scorer = OrdinalSharedScorer()
     scorer.load_state_dict(scorer_payload["controller"], strict=True)
     scorer.eval()
@@ -179,13 +198,14 @@ def main() -> None:
             summary.setdefault("failed_references", []).append({"reference": record["reference"], "action": record["action_correct"], "final_success": record["final_success"], "oracle_final_success": record["oracle_final_success"]})
     for summary in real_r_records:
         summary.setdefault("failed_references", [])
-    full_context_failures = [record for record in contextual_records if not record["action_correct"] or not record["final_success"] or not record["oracle_final_success"]]
+    full_context_failures = [record for record in contextual_records if not record["action_correct"] or not record["final_success"] or not record["oracle_final_success"] or not record["trace_success"]]
     decoder_failures = [record for record in real_r_records if not record["decoder_correct_against_symbolic_x"]]
     tail = {"selection_rule_fixed_before_evaluation": "all decoder-misclassified R or contextual rows with action/final/oracle failure; counts computed before output limiting", "decoder_failure_count": len(decoder_failures), "contextual_failure_count": len(full_context_failures), "decoder_failures": decoder_failures, "contextual_failures": full_context_failures[:512]}
-    result = {"status": "completed", "task": "T1-CTRL-2-O-CANON", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2_original": {"path": str(SCORER_ROOT / "final.pt"), "sha256": sha256(SCORER_ROOT / "final.pt")}, "protocol": {"diagnostic_read_e_select": False, "r_real_preserved_for_alu": True, "scorer_input": "Q(R) and Q(reference)", "alu_input": "raw R", "new_weights": False, "new_data": False, "training": False}, "bridge": "canonical_value_view", "prototype_check": prototype, "canonical_scorer_check": canonical_summary, "canonical_scorer_records": canonical_records, "real_r_check": {key: value for key, value in real_r_summary.items() if key != "records"}, "real_r_records": real_r_records, "original_pilot": original_summary, "original_pilot_records": original_records, "contextual": contextual_summary, "contextual_pair_table": pair_table, "contextual_records": contextual_records, "tail": tail, "gate": gate}
+    scorer_seed = scorer_payload.get("controller_seed")
+    result = {"status": "completed", "task": "T1-CTRL-2-O-CANON", "training": False, "checkpoint_executor": {"path": str(BASE_CHECKPOINT), "sha256": sha256(BASE_CHECKPOINT)}, "checkpoint_ctrl1": {"path": str(CTRL1_CHECKPOINT), "sha256": sha256(CTRL1_CHECKPOINT)}, "checkpoint_ctrl2_original": {"path": str(args.scorer_checkpoint), "sha256": sha256(args.scorer_checkpoint), "training_seed": scorer_seed}, "protocol": {"diagnostic_read_e_select": False, "r_real_preserved_for_alu": True, "scorer_input": "Q(R) and Q(reference)", "alu_input": "raw R", "new_weights": False, "new_data": False, "training": False}, "bridge": "canonical_value_view", "prototype_check": prototype, "canonical_scorer_check": canonical_summary, "canonical_scorer_records": canonical_records, "real_r_check": {key: value for key, value in real_r_summary.items() if key != "records"}, "real_r_records": real_r_records, "original_pilot": original_summary, "original_pilot_records": original_records, "contextual": contextual_summary, "contextual_pair_table": pair_table, "contextual_records": contextual_records, "tail": tail, "gate": gate}
     output_path = args.output_root / "results.json"
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"path": str(output_path), "sha256": sha256(output_path), "checkpoint_ctrl2_sha256": sha256(SCORER_ROOT / "final.pt"), "prototype": {key: value for key, value in prototype.items() if key != "records"}, "real_r": {key: value for key, value in real_r_summary.items() if key != "records"}, "original_pilot": {key: value for key, value in original_summary.items() if key not in ("by_action", "by_distance")}, "contextual": {key: value for key, value in contextual_summary.items() if key not in ("by_action", "by_distance")}, "gate": gate, "tail": {key: value for key, value in tail.items() if key not in ("decoder_failures", "contextual_failures")}}, indent=2, sort_keys=True))
+    print(json.dumps({"path": str(output_path), "sha256": sha256(output_path), "checkpoint_ctrl2_sha256": sha256(args.scorer_checkpoint), "checkpoint_ctrl2_training_seed": scorer_seed, "prototype": {key: value for key, value in prototype.items() if key != "records"}, "real_r": {key: value for key, value in real_r_summary.items() if key != "records"}, "original_pilot": {key: value for key, value in original_summary.items() if key not in ("by_action", "by_distance")}, "contextual": {key: value for key, value in contextual_summary.items() if key not in ("by_action", "by_distance")}, "gate": gate, "tail": {key: value for key, value in tail.items() if key not in ("decoder_failures", "contextual_failures")}}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from ctrl2_common import load_executor
+from evaluate_u0c_ctrl2_o_canon import propagate_ctrl2_accounting
 from train_u0c_ctrl2_o import DIMENSION, DECREASE, INCREASE, KEEP, OrdinalSharedScorer, action_from_difference, codebook_distinctness, equality_consistency_loss, parameter_count
 
 
@@ -108,3 +109,17 @@ def test_equality_loss_detaches_tau_gradient() -> None:
     equality_consistency_loss(difference, scorer.tau(), labels).backward()
     assert scorer.rho.grad is None or torch.count_nonzero(scorer.rho.grad).item() == 0
     assert torch.count_nonzero(difference.grad).item() > 0
+
+
+def test_causal_accounting_preserves_prior_error_when_final_output_recovers() -> None:
+    navigation = {"aligned": False, "first_control_error": {"stage": "CTRL-1"}, "first_execution_error": None}
+    control_error, execution_error = propagate_ctrl2_accounting(navigation, action_correct=True, final_success=True, expected_action=KEEP, predicted_action=KEEP)
+    assert control_error == {"stage": "CTRL-1"}
+    assert execution_error is None
+
+
+def test_causal_accounting_does_not_double_attribute_wrong_action_and_output() -> None:
+    navigation = {"aligned": True, "first_control_error": None, "first_execution_error": None}
+    control_error, execution_error = propagate_ctrl2_accounting(navigation, action_correct=False, final_success=False, expected_action=KEEP, predicted_action=DECREASE)
+    assert control_error == {"stage": "CTRL-2-O-CANON", "expected_action": KEEP, "predicted_action": DECREASE}
+    assert execution_error is None
