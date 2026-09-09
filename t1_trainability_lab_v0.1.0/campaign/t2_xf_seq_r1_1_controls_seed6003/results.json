@@ -11,7 +11,7 @@
     },
     "inference": {
       "instructions": 96,
-      "seconds_per_instruction": 0.0003645385440904647
+      "seconds_per_instruction": 0.0003087291649232308
     },
     "noop_exhaustive": {
       "AVOID": {
