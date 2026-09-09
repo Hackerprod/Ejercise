@@ -18,11 +18,14 @@ from evaluate_u0c_ctrl7_heldout import run_canonical_learned
 from evaluate_u0c_ctrl7_preflight import real_cases
 from evaluate_u0c_ctrl7_trained import run_learned
 from train_t2_i0_baseline_b import LatentConditionedSupervisor
-from train_t2_xf_clause_r1_1 import OUTPUT as TRAINING_OUTPUT
 from train_u0c_ctrl2_o import OrdinalSharedScorer, sha256
 from t2_xf_transformer import MatchedTransformerEncoder, encode_clauses
 
-ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CHECKPOINT = TRAINING_OUTPUT / "final.pt"; CTRL7_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"; SCORER_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl2_o_pilot_seed2201_frozen" / "final.pt"; MANIFEST_PATH = CAMPAIGN_ROOT / "u0c_ctrl3_real_r_seed2201" / "real_r_manifest.json"; MANIFEST_SHA256 = "d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3"; OUTPUT_ROOT = CAMPAIGN_ROOT / "t2_xf_clause_r1_1_heldout_seed6001"; ORDERS = ("AT_LEAST_THEN_AVOID", "AVOID_THEN_AT_LEAST")
+ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CTRL7_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"; SCORER_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl2_o_pilot_seed2201_frozen" / "final.pt"; MANIFEST_PATH = CAMPAIGN_ROOT / "u0c_ctrl3_real_r_seed2201" / "real_r_manifest.json"; MANIFEST_SHA256 = "d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3"; ORDERS = ("AT_LEAST_THEN_AVOID", "AVOID_THEN_AT_LEAST")
+
+
+def checkpoint_for_seed(seed: int) -> Path:
+    return CAMPAIGN_ROOT / f"t2_xf_clause_r1_1_seed{seed}" / "final.pt"
 
 
 class Adapter(nn.Module):
@@ -43,9 +46,9 @@ def post_copy(result: dict[str, Any]) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT); args = parser.parse_args(); args.output_root.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=6001); parser.add_argument("--output-root", type=Path); args = parser.parse_args(); output_root = args.output_root or CAMPAIGN_ROOT / f"t2_xf_clause_r1_1_heldout_seed{args.seed}"; output_root.mkdir(parents=True, exist_ok=True); checkpoint = checkpoint_for_seed(args.seed)
     if any(name in inspect.signature(dispatch_unified_action).parameters for name in ("constraints", "lower", "forbidden", "floor", "avoid")): raise RuntimeError("dispatcher received forbidden inputs")
-    encoder = MatchedTransformerEncoder(); encoder.load_state_dict(torch.load(CHECKPOINT, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7_CHECKPOINT); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST_PATH, MANIFEST_SHA256); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER_CHECKPOINT, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode_by_x = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; results = {}
+    encoder = MatchedTransformerEncoder(); encoder.load_state_dict(torch.load(checkpoint, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7_CHECKPOINT); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST_PATH, MANIFEST_SHA256); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER_CHECKPOINT, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode_by_x = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; results = {}
     for order in ORDERS:
         cache: dict[str, Adapter] = {}
         def adapter(text: str) -> Adapter:
@@ -63,7 +66,7 @@ def main() -> None:
         interaction = [row for row in real_rows if row["category"] == "x_lt_L_eq_F"]; interaction_success = sum(1 for row in interaction if row["result"]["success"] and post_copy(row["result"]) == ["INCREASE"] * (row["result"]["forbidden"] - row["result"]["x0"] + 1) + ["EMIT"]); crossing = next(row for row in real_rows if row["result"]["x0"] == 10 and row["result"]["lower"] == 14 and row["result"]["forbidden"] == 12); crossing_actions = post_copy(crossing["result"]); crossing_success = int(crossing["result"]["success"] and crossing_actions == ["INCREASE"] * 4 + ["EMIT"])
         results[order] = {"canonical": {"samples": 31744, "success": canonical_success}, "real": {"samples": 128, "success": sum(row["result"]["success"] for row in real_rows), "categories": {category: {"samples": sum(row["category"] == category for row in real_rows), "success": sum(row["category"] == category and row["result"]["success"] for row in real_rows)} for category in sorted({row["category"] for row in real_rows})}}, "interaction_gate": {"samples": 32, "success": interaction_success}, "crossing_literal": {"samples": 1, "success": crossing_success, "post_copy_actions": crossing_actions}}
         print(json.dumps({order: results[order]}, sort_keys=True))
-    passed = all(item["canonical"]["success"] == 31744 and item["real"]["success"] == 128 and item["interaction_gate"]["success"] == 32 and item["crossing_literal"]["success"] == 1 for item in results.values()); result = {"status": "passed" if passed else "failed", "task": "T2-XF", "phase": "XF-CLAUSE_R1.1_heldout", "training": False, "checkpoint": {"path": str(CHECKPOINT), "sha256": sha256(CHECKPOINT)}, "ctrl7_checkpoint": sha256(CTRL7_CHECKPOINT), "dispatcher_guard": "passed", "orders": results}; output = args.output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
+    passed = all(item["canonical"]["success"] == 31744 and item["real"]["success"] == 128 and item["interaction_gate"]["success"] == 32 and item["crossing_literal"]["success"] == 1 for item in results.values()); result = {"status": "passed" if passed else "failed", "task": "T2-XF", "phase": "XF-CLAUSE_R1.1_heldout", "training": False, "checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}, "ctrl7_checkpoint": sha256(CTRL7_CHECKPOINT), "dispatcher_guard": "passed", "orders": results}; output = output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__": main()

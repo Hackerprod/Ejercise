@@ -17,7 +17,6 @@ from evaluate_u0c_ctrl4_preflight import dispatch_unified_action, load_fixed_man
 from evaluate_u0c_ctrl7_trained import run_learned
 from train_t2_i0_baseline_b import LatentConditionedSupervisor
 from train_t2_i0_b_r2 import SharedClauseEncoder, clause_condition as r2_clause_condition
-from train_t2_xf_clause_r1_1 import OUTPUT as XF_TRAINING_OUTPUT
 from train_u0c_ctrl2_o import OrdinalSharedScorer, sha256
 from train_u0c_ctrl7 import GoalConditionedSupervisor614
 from t2_xf_transformer import MatchedTransformerEncoder, encode_clauses

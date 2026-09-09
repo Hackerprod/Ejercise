@@ -17,7 +17,11 @@ from train_t2_i0_baseline_b import LatentConditionedSupervisor
 from train_t2_xf_seq_r1_1 import source_data
 from train_u0c_ctrl2_o import sha256
 
-ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CTRL7_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"; OUTPUT = CAMPAIGN_ROOT / "t2_xf_clause_r1_1_seed6001"
+ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CTRL7_CHECKPOINT = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"
+
+
+def output_for_seed(seed: int) -> Path:
+    return CAMPAIGN_ROOT / f"t2_xf_clause_r1_1_seed{seed}"
 
 
 def train(model, supervisor, observations, labels, texts, seed: int):
@@ -29,7 +33,7 @@ def train(model, supervisor, observations, labels, texts, seed: int):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=6001); args = parser.parse_args(); torch.manual_seed(args.seed); random.seed(args.seed); rows = r1_1_corpus(); texts = [text for text, _ in rows]; model = MatchedTransformerEncoder(); supervisor = LatentConditionedSupervisor(CTRL7_CHECKPOINT); observations, labels = source_data("train", rows); training = train(model, supervisor, observations, labels, texts, args.seed); OUTPUT.mkdir(parents=True, exist_ok=True); checkpoint = OUTPUT / "final.pt"; torch.save({"encoder": model.state_dict(), "seed": args.seed, "updates": 5000, "and_trained": False, "trainable_parameters": parameter_count(model), "configuration": "XF-CLAUSE R1.1"}, checkpoint); result = {"status": "trained", "task": "T2-XF", "phase": "XF-CLAUSE_R1.1_training", "curriculum_rows": len(rows), "heldout_orders_excluded": True, "seed": args.seed, "training": training, "checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}}; (OUTPUT / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps(result, indent=2, sort_keys=True))
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=6001); args = parser.parse_args(); torch.manual_seed(args.seed); random.seed(args.seed); rows = r1_1_corpus(); texts = [text for text, _ in rows]; model = MatchedTransformerEncoder(); supervisor = LatentConditionedSupervisor(CTRL7_CHECKPOINT); observations, labels = source_data("train", rows); training = train(model, supervisor, observations, labels, texts, args.seed); output = output_for_seed(args.seed); output.mkdir(parents=True, exist_ok=True); checkpoint = output / "final.pt"; torch.save({"encoder": model.state_dict(), "seed": args.seed, "updates": 5000, "and_trained": False, "trainable_parameters": parameter_count(model), "configuration": "XF-CLAUSE R1.1"}, checkpoint); result = {"status": "trained", "task": "T2-XF", "phase": "XF-CLAUSE_R1.1_training", "curriculum_rows": len(rows), "heldout_orders_excluded": True, "seed": args.seed, "training": training, "checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}}; (output / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__": main()
