@@ -33,16 +33,16 @@ CONSTRAINTS = (1, 1)
 
 
 @torch.no_grad()
-def run_canonical_learned(model: Any, ctrl1: Any, scorer: OrdinalSharedScorer, supervisor: GoalConditionedSupervisor614, manifest: dict[str, Any], episode: dict[str, Any], x0: int, lower: int, forbidden: int) -> dict[str, Any]:
+def run_canonical_learned(model: Any, ctrl1: Any, scorer: OrdinalSharedScorer, supervisor: GoalConditionedSupervisor614, manifest: dict[str, Any], episode: dict[str, Any], x0: int, lower: int, forbidden: int, constraints: tuple[int, int] = CONSTRAINTS) -> dict[str, Any]:
     graph = manifest["graphs"][episode["graph"]]
     memory_keys, memory_values, memory_types, row_mask = materialize_graph_batch(model, [graph])
     state = torch.zeros((1, SLOT_COUNT, DIMENSION)); state[:, SLOT_P] = model.token_embedding(torch.tensor([episode["goal_key"] + KEY_BASE])); state[:, SLOT_R] = model.token_embedding(torch.tensor([VALUE_BASE + x0]))
     presence = torch.ones((1, SLOT_COUNT), dtype=torch.bool); navigation_goal = model.token_embedding(torch.tensor([episode["goal_key"] + KEY_BASE]))
-    value = x0; target = target_value(x0, lower, forbidden, CONSTRAINTS); events: list[dict[str, Any]] = []; first_bad = None; emitted = False
+    value = x0; target = target_value(x0, lower, forbidden, constraints); events: list[dict[str, Any]] = []; first_bad = None; emitted = False
     for decision in range(MAX_DECISIONS):
-        expected = oracle_action(episode["goal_key"], episode["goal_key"], read_e_done=True, copied=True, value=value, lower=lower, forbidden=forbidden, constraints=CONSTRAINTS)
+        expected = oracle_action(episode["goal_key"], episode["goal_key"], read_e_done=True, copied=True, value=value, lower=lower, forbidden=forbidden, constraints=constraints)
         features = supervisor_features_ctrl7(model, ctrl1, scorer, state, navigation_goal, lower, forbidden, v_e=True, v_r=True)
-        action = int(supervisor(features, torch.tensor([[1.0, 1.0]])).argmax(-1).item())
+        action = int(supervisor(features, torch.tensor([[float(constraints[0]), float(constraints[1])]])).argmax(-1).item())
         before = state.clone()
         state, operation = dispatch_unified_action(model, memory_keys, memory_values, memory_types, row_mask, state, presence, action, v_e=True, v_r=True)
         check = primitive_check(model, before, state, action, {**operation, "available_e": True, "available_r": True}, -1, graph, target)
@@ -53,7 +53,7 @@ def run_canonical_learned(model: Any, ctrl1: Any, scorer: OrdinalSharedScorer, s
         elif action == EMIT and not operation.get("rejected", False): emitted = True
         if emitted: break
     final = int(canonical_value_view(model, state[:, SLOT_R])[1].item())
-    return {"x0": x0, "lower": lower, "forbidden": forbidden, "constraints": list(CONSTRAINTS), "goal": GOALS[CONSTRAINTS], "target": target, "actions": [event["action_name"] for event in events], "events": events, "decisions": len(events), "alu_steps": sum(event["action"] in (INCREASE, 4) for event in events), "final_value": final, "first_bad": first_bad, "timeout": not emitted, "success": emitted and first_bad is None and final == target and events[-1]["action"] == EMIT}
+    return {"x0": x0, "lower": lower, "forbidden": forbidden, "constraints": list(constraints), "goal": GOALS[constraints], "target": target, "actions": [event["action_name"] for event in events], "events": events, "decisions": len(events), "alu_steps": sum(event["action"] in (INCREASE, 4) for event in events), "final_value": final, "first_bad": first_bad, "timeout": not emitted, "success": emitted and first_bad is None and final == target and events[-1]["action"] == EMIT}
 
 
 def main() -> None:
