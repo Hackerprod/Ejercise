@@ -24,12 +24,12 @@ from train_u0c_ctrl2_o import OrdinalSharedScorer, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 CAMPAIGN_ROOT = ROOT / "campaign"
-CHECKPOINT = CAMPAIGN_ROOT / "t2_i0_b_r2_seed5701" / "final.pt"
 CTRL7 = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"
 SCORER = CAMPAIGN_ROOT / "u0c_ctrl2_o_pilot_seed2201_frozen" / "final.pt"
 MANIFEST = CAMPAIGN_ROOT / "u0c_ctrl3_real_r_seed2201" / "real_r_manifest.json"
 MANIFEST_SHA = "d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3"
-OUTPUT = CAMPAIGN_ROOT / "t2_i0_b_r2_heldout_seed5701"
+def checkpoint_for_seed(seed: int) -> Path:
+    return CAMPAIGN_ROOT / f"t2_i0_b_r2_seed{seed}" / "final.pt"
 ORDERS = ("AT_LEAST_THEN_AVOID", "AVOID_THEN_AT_LEAST")
 
 
@@ -57,9 +57,9 @@ def post_copy(result: dict[str, Any]) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--output-root", type=Path, default=OUTPUT); args = parser.parse_args(); args.output_root.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=5701); parser.add_argument("--output-root", type=Path); args = parser.parse_args(); output_root = args.output_root or CAMPAIGN_ROOT / f"t2_i0_b_r2_heldout_seed{args.seed}"; output_root.mkdir(parents=True, exist_ok=True); checkpoint = checkpoint_for_seed(args.seed)
     if any(name in inspect.signature(dispatch_unified_action).parameters for name in ("constraints", "lower", "forbidden", "floor", "avoid")): raise RuntimeError("dispatcher received forbidden inputs")
-    encoder = SharedClauseEncoder(); encoder.load_state_dict(torch.load(CHECKPOINT, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST, MANIFEST_SHA); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode_by_x = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; cache = {}
+    encoder = SharedClauseEncoder(); encoder.load_state_dict(torch.load(checkpoint, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST, MANIFEST_SHA); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode_by_x = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; cache = {}
     def adapter(instruction_text: str) -> Adapter:
         if instruction_text not in cache: cache[instruction_text] = Adapter(core, clause_condition(encoder, [instruction_text]))
         return cache[instruction_text]
@@ -74,8 +74,8 @@ def main() -> None:
             instruction_text = text(order, lower, forbidden); candidate = run_learned(executor, ctrl1, scorer, adapter(instruction_text), manifest, episode_by_x[x0], lower, forbidden, (1, 1)); real_rows.append({"category": category, "result": candidate})
         interaction = [row for row in real_rows if row["category"] == "x_lt_L_eq_F"]; interaction_gate = sum(1 for row in interaction if post_copy(row["result"]) == ["INCREASE"] * (row["result"]["forbidden"] - row["result"]["x0"] + 1) + ["EMIT"]); crossing = next(row for row in real_rows if row["result"]["x0"] == 10 and row["result"]["lower"] == 14 and row["result"]["forbidden"] == 12); crossing_actions = post_copy(crossing["result"]); crossing_gate = int(crossing_actions == ["INCREASE"] * 4 + ["EMIT"])
         orders[order] = {"canonical": {"samples": 31744, "success": canonical_success}, "real": {"samples": 128, "success": sum(row["result"]["success"] for row in real_rows), "categories": {category: {"samples": sum(row["category"] == category for row in real_rows), "success": sum(row["category"] == category and row["result"]["success"] for row in real_rows)} for category in sorted({row["category"] for row in real_rows})}}, "interaction_gate": {"samples": 32, "success": interaction_gate}, "crossing_literal": {"samples": 1, "success": crossing_gate, "post_copy_actions": crossing_actions}}
-    result = {"status": "passed" if all(item["canonical"]["success"] == 31744 and item["real"]["success"] == 128 and item["interaction_gate"]["success"] == 32 and item["crossing_literal"]["success"] == 1 for item in orders.values()) else "failed", "task": "T2-I0-B-R2", "phase": "heldout_both_orders", "training": False, "checkpoint": {"path": str(CHECKPOINT), "sha256": sha256(CHECKPOINT)}, "ctrl7_checkpoint": sha256(CTRL7), "dispatcher_guard": "passed", "orders": orders}
-    output = args.output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
+    result = {"status": "passed" if all(item["canonical"]["success"] == 31744 and item["real"]["success"] == 128 and item["interaction_gate"]["success"] == 32 and item["crossing_literal"]["success"] == 1 for item in orders.values()) else "failed", "task": "T2-I0-B-R2", "phase": "heldout_both_orders", "training": False, "checkpoint": {"path": str(checkpoint), "sha256": sha256(checkpoint)}, "ctrl7_checkpoint": sha256(CTRL7), "dispatcher_guard": "passed", "orders": orders}
+    output = output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__": main()

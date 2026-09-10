@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMPAIGN_ROOT = ROOT / "campaign"
 SOURCE_ROOT = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701"
 CTRL7_CHECKPOINT = SOURCE_ROOT / "final.pt"
-OUTPUT_ROOT = CAMPAIGN_ROOT / "t2_i0_b_r2_seed5701"
+def output_for_seed(seed: int) -> Path:
+    return CAMPAIGN_ROOT / f"t2_i0_b_r2_seed{seed}"
 
 
 class SharedClauseEncoder(nn.Module):
@@ -64,7 +65,7 @@ def train(encoder: SharedClauseEncoder, supervisor: LatentConditionedSupervisor,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=5701); args = parser.parse_args(); corpus = r1_1_corpus(); torch.manual_seed(args.seed); random.seed(args.seed); encoder = SharedClauseEncoder(); observations, labels = source_data("train", corpus); supervisor = LatentConditionedSupervisor(CTRL7_CHECKPOINT); training = train(encoder, supervisor, observations, labels, corpus, args.seed); OUTPUT_ROOT.mkdir(parents=True, exist_ok=True); torch.save({"encoder": encoder.state_dict(), "seed": args.seed, "updates": 5000, "and_trained": False, "trainable_parameters": parameter_count(encoder)}, OUTPUT_ROOT / "final.pt"); result = {"status": "trained", "task": "T2-I0-B-R2", "seed": args.seed, "corpus_rows": len(corpus), "training": training, "checkpoint": sha256(OUTPUT_ROOT / "final.pt"), "heldout_orders_excluded": True}; (OUTPUT_ROOT / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps(result, indent=2, sort_keys=True))
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=5701); args = parser.parse_args(); corpus = r1_1_corpus(); torch.manual_seed(args.seed); random.seed(args.seed); encoder = SharedClauseEncoder(); observations, labels = source_data("train", corpus); supervisor = LatentConditionedSupervisor(CTRL7_CHECKPOINT); training = train(encoder, supervisor, observations, labels, corpus, args.seed); output_root = output_for_seed(args.seed); output_root.mkdir(parents=True, exist_ok=True); torch.save({"encoder": encoder.state_dict(), "seed": args.seed, "updates": 5000, "and_trained": False, "trainable_parameters": parameter_count(encoder)}, output_root / "final.pt"); result = {"status": "trained", "task": "T2-I0-B-R2", "seed": args.seed, "corpus_rows": len(corpus), "training": training, "checkpoint": sha256(output_root / "final.pt"), "heldout_orders_excluded": True}; (output_root / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__": main()

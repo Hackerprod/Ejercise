@@ -20,7 +20,11 @@ from train_u0c_ctrl2_o import OrdinalSharedScorer, sha256
 from t2_i0_instruction_r1_1 import instruction_for_r1_1
 from t2_i0_instruction_r1 import parse_instruction_r1
 
-ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CHECKPOINT = CAMPAIGN_ROOT / "t2_i0_b_r2_seed5701" / "final.pt"; CTRL7 = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"; SCORER = CAMPAIGN_ROOT / "u0c_ctrl2_o_pilot_seed2201_frozen" / "final.pt"; MANIFEST = CAMPAIGN_ROOT / "u0c_ctrl3_real_r_seed2201" / "real_r_manifest.json"; MANIFEST_SHA = "d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3"; OUTPUT = CAMPAIGN_ROOT / "t2_i0_b_r2_controls_seed5701"
+ROOT = Path(__file__).resolve().parents[1]; CAMPAIGN_ROOT = ROOT / "campaign"; CTRL7 = CAMPAIGN_ROOT / "u0c_ctrl7_pilot_seed4701" / "final.pt"; SCORER = CAMPAIGN_ROOT / "u0c_ctrl2_o_pilot_seed2201_frozen" / "final.pt"; MANIFEST = CAMPAIGN_ROOT / "u0c_ctrl3_real_r_seed2201" / "real_r_manifest.json"; MANIFEST_SHA = "d62e30833b5b8cbbfb618800828e5bea4609cd8ad1ad860608cf2279d0953df3"
+
+
+def checkpoint_for_seed(seed: int) -> Path:
+    return CAMPAIGN_ROOT / f"t2_i0_b_r2_seed{seed}" / "final.pt"
 
 
 class Adapter(torch.nn.Module):
@@ -39,9 +43,9 @@ def text(constraints, value, variant, dummy=0):
 
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument("--output-root", type=Path, default=OUTPUT); args = parser.parse_args(); args.output_root.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, default=5701); parser.add_argument("--output-root", type=Path); args = parser.parse_args(); output_root = args.output_root or CAMPAIGN_ROOT / f"t2_i0_b_r2_controls_seed{args.seed}"; output_root.mkdir(parents=True, exist_ok=True); checkpoint = checkpoint_for_seed(args.seed)
     if any(name in inspect.signature(dispatch_unified_action).parameters for name in ("constraints", "lower", "forbidden", "floor", "avoid")): raise RuntimeError("dispatcher received forbidden inputs")
-    encoder = SharedClauseEncoder(); encoder.load_state_dict(torch.load(CHECKPOINT, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST, MANIFEST_SHA); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; cache = {}
+    encoder = SharedClauseEncoder(); encoder.load_state_dict(torch.load(checkpoint, weights_only=False)["encoder"], strict=True); encoder.eval(); core = LatentConditionedSupervisor(CTRL7); core.eval(); manifest = load_base_manifests()["test"]; fixed = load_fixed_manifest(MANIFEST, MANIFEST_SHA); executor = load_executor(); ctrl1 = load_ctrl1(); scorer_payload = torch.load(SCORER, weights_only=False); scorer = OrdinalSharedScorer(); scorer.load_state_dict(scorer_payload["controller"], strict=True); scorer.eval(); episode = {int(entry["x"]): manifest["episodes"][entry["episode"]] for entry in fixed["entries"]}; cache = {}
     def run(instruction_text, constraints, lower, forbidden):
         if instruction_text not in cache: cache[instruction_text] = Adapter(core, clause_condition(encoder, [instruction_text]))
         return run_learned(executor, ctrl1, scorer, cache[instruction_text], manifest, episode[10], lower, forbidden, constraints)
@@ -56,7 +60,7 @@ def main():
                 for dummy in range(32):
                     instruction_text = text(constraints, value, variant, dummy); lower = value if constraints == (1, 0) else 0; forbidden = value if constraints == (0, 1) else 0; result = run(instruction_text, constraints, lower, forbidden); noop[name]["success"] += int(result["success"]); noop[name]["samples"] += 1
         floor_text = text((1, 0), value, 1); avoid_text = text((0, 1), value, 1); floor_condition = clause_condition(encoder, [floor_text]); avoid_condition = clause_condition(encoder, [avoid_text]); commutative["identical"] += int(torch.equal(floor_condition + avoid_condition, avoid_condition + floor_condition)); commutative["samples"] += 1
-    summary = {"position_invariance": position, "early_memory": memory, "noop_exhaustive": noop, "conditioning_commutativity": commutative}; result = {"status": "passed" if position["success"] == position["samples"] and memory["success"] == memory["samples"] and all(item["success"] == item["samples"] for item in noop.values()) and commutative["identical"] == commutative["samples"] else "failed", "task": "T2-I0-B-R2", "phase": "pre_heldout_controls", "training": False, "checkpoint": sha256(CHECKPOINT), "ctrl7_checkpoint": sha256(CTRL7), "dispatcher_guard": "passed", "summary": summary}; output = args.output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
+    summary = {"position_invariance": position, "early_memory": memory, "noop_exhaustive": noop, "conditioning_commutativity": commutative}; result = {"status": "passed" if position["success"] == position["samples"] and memory["success"] == memory["samples"] and all(item["success"] == item["samples"] for item in noop.values()) and commutative["identical"] == commutative["samples"] else "failed", "task": "T2-I0-B-R2", "phase": "pre_heldout_controls", "training": False, "checkpoint": sha256(checkpoint), "ctrl7_checkpoint": sha256(CTRL7), "dispatcher_guard": "passed", "summary": summary}; output = output_root / "results.json"; output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"); print(json.dumps({"path": str(output), "sha256": file_sha(output), **result}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__": main()
