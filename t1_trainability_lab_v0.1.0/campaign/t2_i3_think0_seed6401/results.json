@@ -9,6 +9,7 @@
     "hidden_dimension": 32,
     "input": "[batch,2,32]",
     "input_dimension": 104,
+    "lambda_legs": 1.0,
     "layer_norm_affine": false,
     "module": "Think0",
     "pooling": "recurrent residual workspace integration",
@@ -41,14 +42,16 @@
     "writer_checkpoint_sha256": "beb0d552e9d776a7ce220f45332d36412dc9a8066b4b6980c0423a88121b1fde"
   },
   "calibration_manifest_sha256": "088b0b5b8a65b1f4adcf79cd127cb4e32eafc57cea264e92e1601bf1698bb7c3",
-  "checkpoint": "001e1a138792a0e2c5e17d9f8492242acd46666b2c54bdc110aca0dcc5c8c1bb",
+  "checkpoint": "826bf6cbfd59474150e7030d311054754470909a475c7299ff5815e85bf86cc9",
   "seed": 6401,
   "status": "trained",
-  "task": "T2-I3",
+  "task": "T2-I3-THINK-LG1",
   "training": {
-    "final_cardinality_loss": 0.00016957652405835688,
-    "final_joint_loss": 3.0501701985485852e-05,
-    "final_main_loss": 0.0001774768315954134,
+    "final_cardinality_loss": 0.00018072969396598637,
+    "final_joint_loss": 4.085719774593599e-05,
+    "final_legs_loss": 7.604876736877486e-05,
+    "final_main_loss": 0.0002013452467508614,
+    "lambda_legs": 1.0,
     "trainable_parameters": 4537,
     "updates": 5000
   }

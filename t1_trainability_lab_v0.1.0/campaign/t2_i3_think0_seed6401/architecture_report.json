@@ -8,6 +8,7 @@
   "hidden_dimension": 32,
   "input": "[batch,2,32]",
   "input_dimension": 104,
+  "lambda_legs": 1.0,
   "layer_norm_affine": false,
   "module": "Think0",
   "pooling": "recurrent residual workspace integration",

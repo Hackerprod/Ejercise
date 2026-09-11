@@ -1,8 +1,6 @@
 {
-  "calibration_manifest_sha256": "088b0b5b8a65b1f4adcf79cd127cb4e32eafc57cea264e92e1601bf1698bb7c3",
   "checkpoint": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\t2_i2_r3_seed6301\\final.pt",
   "dispatcher_guard": "passed",
-  "gate": "G3",
   "matching_scope": "128 real + 32 interaction + 1 crossing per realization/order; no canonical sweep",
   "null_behavior": {
     "AT_LEAST VALUE_12 AND NOOP VALUE_19": {
@@ -61,8 +59,8 @@
         }
       },
       "matching": {
-        "fraction": 0.23741007194252873,
-        "samples": 139,
+        "fraction": 0.2578125,
+        "samples": 128,
         "success": 33
       },
       "permutations": {
@@ -77,6 +75,6 @@
     }
   },
   "status": "failed",
-  "task": "T2-I3",
+  "task": "T2-I2-R1",
   "training": false
 }
