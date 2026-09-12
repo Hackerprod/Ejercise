@@ -1,6 +1,7 @@
 {
   "attention": false,
   "calibration_manifest_sha256": "088b0b5b8a65b1f4adcf79cd127cb4e32eafc57cea264e92e1601bf1698bb7c3",
+  "dynamics": "anchored proposal interpolation",
   "gate_shape": [
     1,
     104
@@ -10,7 +11,7 @@
   "input_dimension": 104,
   "lambda_legs": 1.0,
   "layer_norm_affine": false,
-  "module": "Think0",
+  "module": "Think1",
   "pooling": "recurrent residual workspace integration",
   "role_embedding_shape": [
     2,

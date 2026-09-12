@@ -6,11 +6,11 @@ import torch
 import audit_t2_i2_r1_matching as base
 import t2_i2_r3_semantic_writer as writer_mod
 from t2_i3_common import build_calibration_manifest
-from t2_i3_think0 import Think0
+from t2_i3_think1 import Think1
 from train_t2_i2_r3 import checkpoint_for_seed as writer_checkpoint
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, required=True); parser.add_argument("--think-checkpoint", type=Path, required=True); args = parser.parse_args(); think = Think0(); think.load_state_dict(torch.load(args.think_checkpoint, weights_only=False)["think"], strict=True); manifest = build_calibration_manifest(); original_encode = base.encode; base.REALIZATIONS = (("CALIBRATION", "AT_LEAST", "AVOID"),); base.ORDERS = ("NORMAL",); base.real_cases = lambda: [("calibration", 10, pair["lower"], pair["forbidden"]) for pair in manifest["calibration"]]
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, required=True); parser.add_argument("--think-checkpoint", type=Path, required=True); args = parser.parse_args(); think = Think1(); think.load_state_dict(torch.load(args.think_checkpoint, weights_only=False)["think"], strict=True); manifest = build_calibration_manifest(); original_encode = base.encode; base.REALIZATIONS = (("CALIBRATION", "AT_LEAST", "AVOID"),); base.ORDERS = ("NORMAL",); base.real_cases = lambda: [("calibration", 10, pair["lower"], pair["forbidden"]) for pair in manifest["calibration"]]
     def encode(writer, text):
         with torch.no_grad(): return think( original_encode(writer, text).unsqueeze(0))[0]
     base.CompetitiveSemanticWriter = writer_mod.CompetitiveSemanticWriter; base.checkpoint_for_seed = lambda _seed: writer_checkpoint(6301); base.output_for_seed = lambda _seed: Path(__file__).resolve().parents[1] / "campaign" / f"t2_i3_g3_seed{args.seed}"; base.encode = encode; argv = sys.argv; sys.argv = [argv[0], "--seed", str(args.seed)]

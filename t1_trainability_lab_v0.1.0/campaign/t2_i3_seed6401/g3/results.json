@@ -57,17 +57,17 @@
       "categories": {
         "calibration": {
           "samples": 139,
-          "success": 33
+          "success": 40
         }
       },
       "matching": {
-        "fraction": 0.23741007194252873,
+        "fraction": 0.28776978417266186,
         "samples": 139,
-        "success": 33
+        "success": 40
       },
       "permutations": {
-        "identity": 31,
-        "swap": 33
+        "identity": 34,
+        "swap": 40
       },
       "scope": {
         "crossing": 1,
