@@ -31,7 +31,7 @@ def main():
         ix=torch.cat(selected)
         texts=[text_for(labels['constraints'][i].tolist(),int(labels['lower'][i]),int(labels['forbidden'][i])) for i in ix.tolist()]
         token_ids,lengths=tensorize(texts)
-        rf,ra,mode,af,aa=enc(token_ids,lengths,return_details=True)
+        rf,ra,mode,af,aa,_,_,_=enc(token_ids,lengths,return_details=True)
         last_b=F.cross_entropy(sup(obs['features'][ix],mode),labels['action'][ix])
         role_terms=[]; floor=(labels['constraints'][ix,0]==1); avoid=(labels['constraints'][ix,1]==1)
         qf=torch.cat((rf,torch.zeros_like(rf)),dim=-1); qa=torch.cat((ra,torch.zeros_like(ra)),dim=-1)
