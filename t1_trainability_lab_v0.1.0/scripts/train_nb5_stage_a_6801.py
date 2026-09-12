@@ -1,4 +1,4 @@
-import hashlib,json,random
+import hashlib,json,random,os
 from pathlib import Path
 import torch
 import torch.nn.functional as F
@@ -7,11 +7,11 @@ from train_t2_i2_r2 import load_source
 from train_t2_i0_baseline_b import LatentConditionedSupervisor,CTRL7_CHECKPOINT
 from ctrl2_common import BASE_CHECKPOINT,load_executor
 from evaluate_u0c_c1_e_r_alu import VALUE_BASE,VALUE_COUNT
-R=Path(__file__).resolve().parents[1]; M=R/'campaign/nb5_manifests/manifest_6801.json'; O=R/'campaign/nb5_stage_a_6801'
+SEED=int(os.environ.get('NB5_SEED','6801')); R=Path(__file__).resolve().parents[1]; M=R/'campaign/nb5_manifests'/f'manifest_{SEED}_v2.json'; O=R/'campaign'/f'nb5_stage_a_{SEED}'
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
- m=json.loads(M.read_text()); assert sha(M)=='de2b47cbd183c871a539ebc019232a8e5130e2a8ce582088eadc1b7c1d1b0244'; rows=m['train']; assert len(rows)==96 and not any(x['kind']=='joint' for x in rows)
- torch.manual_seed(6801); random.seed(6801); enc=NB5CoreEncoder(m,6801); obs,lab=load_source(); sup=LatentConditionedSupervisor(CTRL7_CHECKPOINT); sup.eval(); exe=load_executor(); exe.eval(); cb=exe.token_embedding(torch.arange(VALUE_BASE,VALUE_BASE+VALUE_COUNT)); perm=m['permutation']; inv={v:i for i,v in enumerate(perm)}; ids=[]; lens=[]; source=[]; floor=[]; avoid=[]
+ m=json.loads(M.read_text()); rows=m['train']; assert len(rows)==96 and not any(x['kind']=='joint' for x in rows)
+ torch.manual_seed(SEED); random.seed(SEED); enc=NB5CoreEncoder(m,SEED); obs,lab=load_source(); sup=LatentConditionedSupervisor(CTRL7_CHECKPOINT); sup.eval(); exe=load_executor(); exe.eval(); cb=exe.token_embedding(torch.arange(VALUE_BASE,VALUE_BASE+VALUE_COUNT)); perm=m['permutation']; inv={v:i for i,v in enumerate(perm)}; ids=[]; lens=[]; source=[]; floor=[]; avoid=[]
  for row in rows:
   c=row['constraints']; val=int(row['value']); op=row['operator'];
   if row['kind']=='noop': toks=[enc.vocab.noop_index]; candidates=torch.where((lab['constraints'][:,0]==0)&(lab['constraints'][:,1]==0))[0]
