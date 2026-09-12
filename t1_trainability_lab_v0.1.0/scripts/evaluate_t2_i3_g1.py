@@ -5,12 +5,12 @@ from pathlib import Path
 import torch
 import evaluate_t2_i2_r1_controls as base
 import t2_i2_r3_semantic_writer as writer_mod
-from t2_i3_think1 import Think1
+from t2_i3_think2 import Think2
 from train_t2_i2_r3 import checkpoint_for_seed as writer_checkpoint
 from train_t2_i3 import checkpoint_for_seed as think_checkpoint
 
 def run(k: int, seed: int, checkpoint: Path | None) -> dict:
-    think = Think1()
+    think = Think2()
     if checkpoint is not None: think.load_state_dict(torch.load(checkpoint, weights_only=False)["think"], strict=True)
     original_encode = base.encode
     def encode(writer, text):

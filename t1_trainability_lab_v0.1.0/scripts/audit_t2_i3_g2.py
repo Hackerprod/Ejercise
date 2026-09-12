@@ -5,11 +5,11 @@ from pathlib import Path
 import torch
 import audit_t2_i2_r3_cardinality as base
 import t2_i2_r3_semantic_writer as writer_mod
-from t2_i3_think1 import Think1
+from t2_i3_think2 import Think2
 from train_t2_i2_r3 import checkpoint_for_seed as writer_checkpoint
 
 def main() -> None:
-    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, required=True); parser.add_argument("--think-checkpoint", type=Path, required=True); args = parser.parse_args(); think = Think1(); think.load_state_dict(torch.load(args.think_checkpoint, weights_only=False)["think"], strict=True); original_encode = base.encode; outputs = {}
+    parser = argparse.ArgumentParser(); parser.add_argument("--seed", type=int, required=True); parser.add_argument("--think-checkpoint", type=Path, required=True); args = parser.parse_args(); think = Think2(); think.load_state_dict(torch.load(args.think_checkpoint, weights_only=False)["think"], strict=True); original_encode = base.encode; outputs = {}
     for k in (0, 1, 2):
         def encode(writer, text, round_count=k):
             with torch.no_grad(): return think.run_rounds(original_encode(writer, text).unsqueeze(0), round_count)[0]

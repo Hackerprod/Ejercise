@@ -2,7 +2,8 @@
   "architecture_report": {
     "attention": false,
     "calibration_manifest_sha256": "088b0b5b8a65b1f4adcf79cd127cb4e32eafc57cea264e92e1601bf1698bb7c3",
-    "dynamics": "anchored proposal interpolation",
+    "context": "state.flip(1)",
+    "dynamics": "anchored proposal interpolation with other-slot context",
     "gate_shape": [
       1,
       104
@@ -12,7 +13,7 @@
     "input_dimension": 104,
     "lambda_legs": 1.0,
     "layer_norm_affine": false,
-    "module": "Think1",
+    "module": "Think2",
     "pooling": "recurrent residual workspace integration",
     "role_embedding_shape": [
       2,
@@ -43,15 +44,15 @@
     "writer_checkpoint_sha256": "beb0d552e9d776a7ce220f45332d36412dc9a8066b4b6980c0423a88121b1fde"
   },
   "calibration_manifest_sha256": "088b0b5b8a65b1f4adcf79cd127cb4e32eafc57cea264e92e1601bf1698bb7c3",
-  "checkpoint": "348ae4ed219248350d6592008b4a6de8eb28a32bbec47c8dee86d39958f2ab46",
+  "checkpoint": "c7b87ff18a1550c398fc1d647e7f9c36e3fd3764570f8738d02edcf172b474d5",
   "seed": 6401,
   "status": "trained",
-  "task": "T2-I3-THINK-1",
+  "task": "T2-I3-THINK-2",
   "training": {
-    "final_cardinality_loss": 0.00017646313062869012,
-    "final_joint_loss": 4.0287231968250126e-05,
-    "final_legs_loss": 7.245812594192103e-05,
-    "final_main_loss": 0.00018049846403300762,
+    "final_cardinality_loss": 0.0001720045693218708,
+    "final_joint_loss": 4.363567495602183e-05,
+    "final_legs_loss": 6.99359952704981e-05,
+    "final_main_loss": 0.00017876815400086343,
     "lambda_legs": 1.0,
     "trainable_parameters": 4537,
     "updates": 5000
