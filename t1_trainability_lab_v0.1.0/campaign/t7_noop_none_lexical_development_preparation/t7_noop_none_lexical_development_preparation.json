@@ -1,0 +1,6216 @@
+{
+  "artifact_self_hash": "0c6fd5e75780fbe010b1587c8f4f0ff8c2939366f7153622a2d1e86dbf4da4b4",
+  "forbidden_operations": [
+    "training",
+    "checkpoint_load",
+    "optimizer_step",
+    "calibration",
+    "historical_manifest_load",
+    "new_checkpoint_write"
+  ],
+  "frozen_stage_A": {
+    "background_rows": 40,
+    "rcsep_mode": "/16",
+    "recipe": "T6 active-set midpoint fresh development recipe; frozen, not executed",
+    "role": "atomic_development",
+    "rows": 128,
+    "rows_per_role": 32,
+    "updates": 5000
+  },
+  "frozen_stage_B": {
+    "catalog": "base-only atomic and background catalog",
+    "executed": false,
+    "formula": "b_r=(N_r_max+P_r_min)/2",
+    "role": "midpoint_calibration"
+  },
+  "frozen_stage_C": {
+    "contexts": 34,
+    "executed": false,
+    "loss": "mean(softplus(s_r(c)-b_r)) over r,c",
+    "queries": 4,
+    "role": "noop_none_lexical_development",
+    "terms": 136,
+    "trainable_parameter": "e_N only"
+  },
+  "independent_checker": {
+    "command": [
+      "C:\\Python314\\python.exe",
+      "scripts/check_t7_noop_none_lexical_development.py"
+    ],
+    "passed": true,
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\n  \"checkpoint_load\": false,\n  \"checks\": {\n    \"all_120_role_permutations\": true,\n    \"all_manifest_checks\": true,\n    \"evaluation_counts\": true,\n    \"evaluation_formula\": true,\n    \"five_manifests\": true,\n    \"integration_source_separation\": true,\n    \"selected_five_deterministic\": true\n  },\n  \"manifests\": [\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7701_v1.json\",\n      \"seed\": 7701,\n      \"sha256\": \"3babe1a7e68598ec8b7471f8ac07d12c46288ef35325ea3703e501ea15ebfe8f\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7702_v1.json\",\n      \"seed\": 7702,\n      \"sha256\": \"514d44433006b32ad098deac2d82ac06371116b1138bde7cb8b0d6a5edc797c3\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7703_v1.json\",\n      \"seed\": 7703,\n      \"sha256\": \"ab2a19d7d7601d72a01224985bbd1654ae6cb8e4cf35b028c7029a9526d7b634\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7704_v1.json\",\n      \"seed\": 7704,\n      \"sha256\": \"9b9724fed4d8bbcacd20aefa75ca2db8a6f92a23a65be56166ae9006fc3f182c\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7705_v1.json\",\n      \"seed\": 7705,\n      \"sha256\": \"1bb8e0fb7bc0fb2f68fe87fa165343c50911e64d1d23914e46d6d00f401a9173\"\n    }\n  ],\n  \"model_construction\": false,\n  \"optimizer_step\": false,\n  \"status\": \"passed\",\n  \"training\": false\n}"
+  },
+  "integration_tests": {
+    "command": [
+      "C:\\Python314\\python.exe",
+      "-m",
+      "pytest",
+      "tests/test_t7_production_core_noop_integration.py",
+      "tests/test_noop_none_supervision.py",
+      "-q"
+    ],
+    "passed": true,
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "...........                                                              [100%]\n11 passed in 1.61s"
+  },
+  "manifest_registry": [
+    {
+      "bytes": 24847,
+      "content": {
+        "active_operator_role_assignment": {
+          "OP_V": "MATCH",
+          "OP_W": "AVOID",
+          "OP_X": "FLOOR",
+          "OP_Z": "ANCHOR"
+        },
+        "certificates": {
+          "coverage": "all 32 possible NOOP argument values plus two structural candidates",
+          "noop_to_null": "G_r^{NOOP->NULL}=b_r-max_{z in U}s_r(z)>0 for every r",
+          "status": "formula sealed; not computed during preparation"
+        },
+        "evaluation": {
+          "augmented": {
+            "1": {
+              "orders": 2,
+              "rows": 256
+            },
+            "2": {
+              "orders": 6,
+              "rows": 35712
+            },
+            "3": {
+              "orders": 24,
+              "rows": 95232
+            },
+            "4": {
+              "orders": 120,
+              "rows": 119040
+            }
+          },
+          "augmented_order_formula": "itertools.permutations(active_roles + (NOOP,))",
+          "augmented_total": 250240,
+          "base": {
+            "1": {
+              "orders": 1,
+              "rows": 128
+            },
+            "2": {
+              "orders": 2,
+              "rows": 11904
+            },
+            "3": {
+              "orders": 6,
+              "rows": 23808
+            },
+            "4": {
+              "orders": 24,
+              "rows": 23808
+            }
+          },
+          "base_order_formula": "itertools.permutations(active_roles)",
+          "base_total": 59648,
+          "five_seed": {
+            "augmented": 1251200,
+            "base": 298240,
+            "combined": 1549440
+          },
+          "formula": "For each non-empty active subset of R and distinct active values, enumerate every permutation of active clauses; augmented enumerates every permutation after inserting exactly one NOOP clause.",
+          "pairing_rule": "The augmented row is paired to its base row by removing the NOOP clause outside the model; D is fixed across all orders for that assignment.",
+          "per_seed": {
+            "augmented": 250240,
+            "base": 59648,
+            "combined": 309888
+          }
+        },
+        "noop_contexts": {
+          "count": 34,
+          "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
+          "link_rule": "score only OP_NOOP position; do not turn LINK->OP_NOOP into a complete instruction",
+          "score_positions": {
+            "LINK->OP_NOOP": 1,
+            "OP_NOOP->ARG_D": 1,
+            "START->OP_NOOP": 0
+          },
+          "start_forward": "zero previous state at first token; no BOS invention"
+        },
+        "noop_operator": "OP_Y",
+        "operator_order": [
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z"
+        ],
+        "operator_role_assignment": {
+          "OP_V": "MATCH",
+          "OP_W": "AVOID",
+          "OP_X": "FLOOR",
+          "OP_Y": "NOOP",
+          "OP_Z": "ANCHOR"
+        },
+        "role_assignment": {
+          "all_count": 120,
+          "all_permutation_order": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR",
+            "NOOP"
+          ],
+          "formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)",
+          "omitted": [
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            }
+          ],
+          "omitted_count": 115,
+          "selected": {
+            "OP_V": "MATCH",
+            "OP_W": "AVOID",
+            "OP_X": "FLOOR",
+            "OP_Y": "NOOP",
+            "OP_Z": "ANCHOR"
+          },
+          "selected_five": [
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            }
+          ],
+          "selection_index": 0
+        },
+        "role_order": [
+          "FLOOR",
+          "AVOID",
+          "MATCH",
+          "ANCHOR",
+          "NOOP"
+        ],
+        "schema": "T7-noop-none-lexical-development-preparation-manifest-v1",
+        "seed": 7701,
+        "separation_contract": {
+          "evaluation_reads": [
+            "paired base and augmented logical rows only after all training stages"
+          ],
+          "no_stage_reads_augmented_evaluation_during_training": true,
+          "stage_a_reads": [
+            "stage A atomic active-role rows only"
+          ],
+          "stage_b_reads": [
+            "stage A frozen core",
+            "128 atomic active-role rows",
+            "40 base BG contexts"
+          ],
+          "stage_c_reads": [
+            "stage B frozen core and b_r",
+            "34 NOOP contexts only"
+          ]
+        },
+        "stage_a": {
+          "L_sep": {
+            "reduction": "/16",
+            "role_bg_terms": 4,
+            "role_role_terms": 12,
+            "total_terms": 16
+          },
+          "background_contexts": 40,
+          "init": "fresh from zero per T7 domain; no historical checkpoint",
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "noop_in_background_catalog": false,
+          "noop_in_batch": false,
+          "noop_in_objective": false,
+          "objective": "L_behavior^(F,A)+L_ref^(F,A,M,H)+L_sep^(4+BG)",
+          "operator_vocab_excludes_noop": true,
+          "optimizer": "AdamW",
+          "training_rows": 128,
+          "training_rows_by_role": {
+            "ANCHOR": 32,
+            "AVOID": 32,
+            "FLOOR": 32,
+            "MATCH": 32
+          },
+          "updates": 5000,
+          "weight_decay": 0.0
+        },
+        "stage_b": {
+          "core_frozen": true,
+          "formula": "b_r=N_r^max+(P_r^min-N_r^max)/2",
+          "freeze_after_calibration": true,
+          "noop_contexts_used": false,
+          "recalibrate_after_stage_c": false,
+          "roles_calibrated": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR"
+          ],
+          "sources": [
+            "128 atomic active-role relations",
+            "40 base BG contexts"
+          ],
+          "strict_checks": [
+            "P_r^min-b_r>0 in inference dtype",
+            "b_r-N_r^max>0 in inference dtype"
+          ]
+        },
+        "stage_c": {
+          "active_role_loss": false,
+          "contexts_per_update": 34,
+          "extra_terms": false,
+          "frozen": [
+            "core",
+            "old embeddings",
+            "four queries",
+            "key network",
+            "W_v",
+            "decoder",
+            "b_r"
+          ],
+          "initialization": "normal standard",
+          "initialization_generator": "independent generator",
+          "initialization_seed": 107701,
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "loss": "(1/136)*sum_r sum_z softplus(s_r(z;e_N)-b_r)",
+          "noop_atomic_controls": {
+            "reported_separately": true,
+            "rows": 32,
+            "target": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "optimizer": "AdamW",
+          "selection": "last update; no early stopping",
+          "trainable_dimension": 16,
+          "trainable_parameters": [
+            "e_N=e_{noop_operator}"
+          ],
+          "updates": 5000,
+          "value_loss": false,
+          "weight_decay": 0.0
+        },
+        "status": "prepared_not_executed",
+        "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "vocabulary": {
+          "argument_tokens": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31"
+          ],
+          "ids_preserved_when_appending": true,
+          "noop_added_after_stage_b": true,
+          "stage_a_noop_operator_present": false,
+          "stage_a_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_X",
+            "OP_Z",
+            "LINK"
+          ],
+          "stage_c_noop_row_internal_id": 37,
+          "stage_c_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_X",
+            "OP_Z",
+            "LINK",
+            "OP_Y"
+          ]
+        }
+      },
+      "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7701_v1.json",
+      "seed": 7701,
+      "sha256": "3babe1a7e68598ec8b7471f8ac07d12c46288ef35325ea3703e501ea15ebfe8f"
+    },
+    {
+      "bytes": 24847,
+      "content": {
+        "active_operator_role_assignment": {
+          "OP_V": "FLOOR",
+          "OP_X": "AVOID",
+          "OP_Y": "ANCHOR",
+          "OP_Z": "MATCH"
+        },
+        "certificates": {
+          "coverage": "all 32 possible NOOP argument values plus two structural candidates",
+          "noop_to_null": "G_r^{NOOP->NULL}=b_r-max_{z in U}s_r(z)>0 for every r",
+          "status": "formula sealed; not computed during preparation"
+        },
+        "evaluation": {
+          "augmented": {
+            "1": {
+              "orders": 2,
+              "rows": 256
+            },
+            "2": {
+              "orders": 6,
+              "rows": 35712
+            },
+            "3": {
+              "orders": 24,
+              "rows": 95232
+            },
+            "4": {
+              "orders": 120,
+              "rows": 119040
+            }
+          },
+          "augmented_order_formula": "itertools.permutations(active_roles + (NOOP,))",
+          "augmented_total": 250240,
+          "base": {
+            "1": {
+              "orders": 1,
+              "rows": 128
+            },
+            "2": {
+              "orders": 2,
+              "rows": 11904
+            },
+            "3": {
+              "orders": 6,
+              "rows": 23808
+            },
+            "4": {
+              "orders": 24,
+              "rows": 23808
+            }
+          },
+          "base_order_formula": "itertools.permutations(active_roles)",
+          "base_total": 59648,
+          "five_seed": {
+            "augmented": 1251200,
+            "base": 298240,
+            "combined": 1549440
+          },
+          "formula": "For each non-empty active subset of R and distinct active values, enumerate every permutation of active clauses; augmented enumerates every permutation after inserting exactly one NOOP clause.",
+          "pairing_rule": "The augmented row is paired to its base row by removing the NOOP clause outside the model; D is fixed across all orders for that assignment.",
+          "per_seed": {
+            "augmented": 250240,
+            "base": 59648,
+            "combined": 309888
+          }
+        },
+        "noop_contexts": {
+          "count": 34,
+          "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
+          "link_rule": "score only OP_NOOP position; do not turn LINK->OP_NOOP into a complete instruction",
+          "score_positions": {
+            "LINK->OP_NOOP": 1,
+            "OP_NOOP->ARG_D": 1,
+            "START->OP_NOOP": 0
+          },
+          "start_forward": "zero previous state at first token; no BOS invention"
+        },
+        "noop_operator": "OP_W",
+        "operator_order": [
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z"
+        ],
+        "operator_role_assignment": {
+          "OP_V": "FLOOR",
+          "OP_W": "NOOP",
+          "OP_X": "AVOID",
+          "OP_Y": "ANCHOR",
+          "OP_Z": "MATCH"
+        },
+        "role_assignment": {
+          "all_count": 120,
+          "all_permutation_order": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR",
+            "NOOP"
+          ],
+          "formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)",
+          "omitted": [
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            }
+          ],
+          "omitted_count": 115,
+          "selected": {
+            "OP_V": "FLOOR",
+            "OP_W": "NOOP",
+            "OP_X": "AVOID",
+            "OP_Y": "ANCHOR",
+            "OP_Z": "MATCH"
+          },
+          "selected_five": [
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            }
+          ],
+          "selection_index": 1
+        },
+        "role_order": [
+          "FLOOR",
+          "AVOID",
+          "MATCH",
+          "ANCHOR",
+          "NOOP"
+        ],
+        "schema": "T7-noop-none-lexical-development-preparation-manifest-v1",
+        "seed": 7702,
+        "separation_contract": {
+          "evaluation_reads": [
+            "paired base and augmented logical rows only after all training stages"
+          ],
+          "no_stage_reads_augmented_evaluation_during_training": true,
+          "stage_a_reads": [
+            "stage A atomic active-role rows only"
+          ],
+          "stage_b_reads": [
+            "stage A frozen core",
+            "128 atomic active-role rows",
+            "40 base BG contexts"
+          ],
+          "stage_c_reads": [
+            "stage B frozen core and b_r",
+            "34 NOOP contexts only"
+          ]
+        },
+        "stage_a": {
+          "L_sep": {
+            "reduction": "/16",
+            "role_bg_terms": 4,
+            "role_role_terms": 12,
+            "total_terms": 16
+          },
+          "background_contexts": 40,
+          "init": "fresh from zero per T7 domain; no historical checkpoint",
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "noop_in_background_catalog": false,
+          "noop_in_batch": false,
+          "noop_in_objective": false,
+          "objective": "L_behavior^(F,A)+L_ref^(F,A,M,H)+L_sep^(4+BG)",
+          "operator_vocab_excludes_noop": true,
+          "optimizer": "AdamW",
+          "training_rows": 128,
+          "training_rows_by_role": {
+            "ANCHOR": 32,
+            "AVOID": 32,
+            "FLOOR": 32,
+            "MATCH": 32
+          },
+          "updates": 5000,
+          "weight_decay": 0.0
+        },
+        "stage_b": {
+          "core_frozen": true,
+          "formula": "b_r=N_r^max+(P_r^min-N_r^max)/2",
+          "freeze_after_calibration": true,
+          "noop_contexts_used": false,
+          "recalibrate_after_stage_c": false,
+          "roles_calibrated": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR"
+          ],
+          "sources": [
+            "128 atomic active-role relations",
+            "40 base BG contexts"
+          ],
+          "strict_checks": [
+            "P_r^min-b_r>0 in inference dtype",
+            "b_r-N_r^max>0 in inference dtype"
+          ]
+        },
+        "stage_c": {
+          "active_role_loss": false,
+          "contexts_per_update": 34,
+          "extra_terms": false,
+          "frozen": [
+            "core",
+            "old embeddings",
+            "four queries",
+            "key network",
+            "W_v",
+            "decoder",
+            "b_r"
+          ],
+          "initialization": "normal standard",
+          "initialization_generator": "independent generator",
+          "initialization_seed": 107702,
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "loss": "(1/136)*sum_r sum_z softplus(s_r(z;e_N)-b_r)",
+          "noop_atomic_controls": {
+            "reported_separately": true,
+            "rows": 32,
+            "target": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "optimizer": "AdamW",
+          "selection": "last update; no early stopping",
+          "trainable_dimension": 16,
+          "trainable_parameters": [
+            "e_N=e_{noop_operator}"
+          ],
+          "updates": 5000,
+          "value_loss": false,
+          "weight_decay": 0.0
+        },
+        "status": "prepared_not_executed",
+        "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "vocabulary": {
+          "argument_tokens": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31"
+          ],
+          "ids_preserved_when_appending": true,
+          "noop_added_after_stage_b": true,
+          "stage_a_noop_operator_present": false,
+          "stage_a_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_X",
+            "OP_Y",
+            "OP_Z",
+            "LINK"
+          ],
+          "stage_c_noop_row_internal_id": 37,
+          "stage_c_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_X",
+            "OP_Y",
+            "OP_Z",
+            "LINK",
+            "OP_W"
+          ]
+        }
+      },
+      "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7702_v1.json",
+      "seed": 7702,
+      "sha256": "514d44433006b32ad098deac2d82ac06371116b1138bde7cb8b0d6a5edc797c3"
+    },
+    {
+      "bytes": 24847,
+      "content": {
+        "active_operator_role_assignment": {
+          "OP_V": "AVOID",
+          "OP_W": "FLOOR",
+          "OP_X": "ANCHOR",
+          "OP_Y": "MATCH"
+        },
+        "certificates": {
+          "coverage": "all 32 possible NOOP argument values plus two structural candidates",
+          "noop_to_null": "G_r^{NOOP->NULL}=b_r-max_{z in U}s_r(z)>0 for every r",
+          "status": "formula sealed; not computed during preparation"
+        },
+        "evaluation": {
+          "augmented": {
+            "1": {
+              "orders": 2,
+              "rows": 256
+            },
+            "2": {
+              "orders": 6,
+              "rows": 35712
+            },
+            "3": {
+              "orders": 24,
+              "rows": 95232
+            },
+            "4": {
+              "orders": 120,
+              "rows": 119040
+            }
+          },
+          "augmented_order_formula": "itertools.permutations(active_roles + (NOOP,))",
+          "augmented_total": 250240,
+          "base": {
+            "1": {
+              "orders": 1,
+              "rows": 128
+            },
+            "2": {
+              "orders": 2,
+              "rows": 11904
+            },
+            "3": {
+              "orders": 6,
+              "rows": 23808
+            },
+            "4": {
+              "orders": 24,
+              "rows": 23808
+            }
+          },
+          "base_order_formula": "itertools.permutations(active_roles)",
+          "base_total": 59648,
+          "five_seed": {
+            "augmented": 1251200,
+            "base": 298240,
+            "combined": 1549440
+          },
+          "formula": "For each non-empty active subset of R and distinct active values, enumerate every permutation of active clauses; augmented enumerates every permutation after inserting exactly one NOOP clause.",
+          "pairing_rule": "The augmented row is paired to its base row by removing the NOOP clause outside the model; D is fixed across all orders for that assignment.",
+          "per_seed": {
+            "augmented": 250240,
+            "base": 59648,
+            "combined": 309888
+          }
+        },
+        "noop_contexts": {
+          "count": 34,
+          "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
+          "link_rule": "score only OP_NOOP position; do not turn LINK->OP_NOOP into a complete instruction",
+          "score_positions": {
+            "LINK->OP_NOOP": 1,
+            "OP_NOOP->ARG_D": 1,
+            "START->OP_NOOP": 0
+          },
+          "start_forward": "zero previous state at first token; no BOS invention"
+        },
+        "noop_operator": "OP_Z",
+        "operator_order": [
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z"
+        ],
+        "operator_role_assignment": {
+          "OP_V": "AVOID",
+          "OP_W": "FLOOR",
+          "OP_X": "ANCHOR",
+          "OP_Y": "MATCH",
+          "OP_Z": "NOOP"
+        },
+        "role_assignment": {
+          "all_count": 120,
+          "all_permutation_order": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR",
+            "NOOP"
+          ],
+          "formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)",
+          "omitted": [
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            }
+          ],
+          "omitted_count": 115,
+          "selected": {
+            "OP_V": "AVOID",
+            "OP_W": "FLOOR",
+            "OP_X": "ANCHOR",
+            "OP_Y": "MATCH",
+            "OP_Z": "NOOP"
+          },
+          "selected_five": [
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            }
+          ],
+          "selection_index": 2
+        },
+        "role_order": [
+          "FLOOR",
+          "AVOID",
+          "MATCH",
+          "ANCHOR",
+          "NOOP"
+        ],
+        "schema": "T7-noop-none-lexical-development-preparation-manifest-v1",
+        "seed": 7703,
+        "separation_contract": {
+          "evaluation_reads": [
+            "paired base and augmented logical rows only after all training stages"
+          ],
+          "no_stage_reads_augmented_evaluation_during_training": true,
+          "stage_a_reads": [
+            "stage A atomic active-role rows only"
+          ],
+          "stage_b_reads": [
+            "stage A frozen core",
+            "128 atomic active-role rows",
+            "40 base BG contexts"
+          ],
+          "stage_c_reads": [
+            "stage B frozen core and b_r",
+            "34 NOOP contexts only"
+          ]
+        },
+        "stage_a": {
+          "L_sep": {
+            "reduction": "/16",
+            "role_bg_terms": 4,
+            "role_role_terms": 12,
+            "total_terms": 16
+          },
+          "background_contexts": 40,
+          "init": "fresh from zero per T7 domain; no historical checkpoint",
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "noop_in_background_catalog": false,
+          "noop_in_batch": false,
+          "noop_in_objective": false,
+          "objective": "L_behavior^(F,A)+L_ref^(F,A,M,H)+L_sep^(4+BG)",
+          "operator_vocab_excludes_noop": true,
+          "optimizer": "AdamW",
+          "training_rows": 128,
+          "training_rows_by_role": {
+            "ANCHOR": 32,
+            "AVOID": 32,
+            "FLOOR": 32,
+            "MATCH": 32
+          },
+          "updates": 5000,
+          "weight_decay": 0.0
+        },
+        "stage_b": {
+          "core_frozen": true,
+          "formula": "b_r=N_r^max+(P_r^min-N_r^max)/2",
+          "freeze_after_calibration": true,
+          "noop_contexts_used": false,
+          "recalibrate_after_stage_c": false,
+          "roles_calibrated": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR"
+          ],
+          "sources": [
+            "128 atomic active-role relations",
+            "40 base BG contexts"
+          ],
+          "strict_checks": [
+            "P_r^min-b_r>0 in inference dtype",
+            "b_r-N_r^max>0 in inference dtype"
+          ]
+        },
+        "stage_c": {
+          "active_role_loss": false,
+          "contexts_per_update": 34,
+          "extra_terms": false,
+          "frozen": [
+            "core",
+            "old embeddings",
+            "four queries",
+            "key network",
+            "W_v",
+            "decoder",
+            "b_r"
+          ],
+          "initialization": "normal standard",
+          "initialization_generator": "independent generator",
+          "initialization_seed": 107703,
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "loss": "(1/136)*sum_r sum_z softplus(s_r(z;e_N)-b_r)",
+          "noop_atomic_controls": {
+            "reported_separately": true,
+            "rows": 32,
+            "target": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "optimizer": "AdamW",
+          "selection": "last update; no early stopping",
+          "trainable_dimension": 16,
+          "trainable_parameters": [
+            "e_N=e_{noop_operator}"
+          ],
+          "updates": 5000,
+          "value_loss": false,
+          "weight_decay": 0.0
+        },
+        "status": "prepared_not_executed",
+        "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "vocabulary": {
+          "argument_tokens": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31"
+          ],
+          "ids_preserved_when_appending": true,
+          "noop_added_after_stage_b": true,
+          "stage_a_noop_operator_present": false,
+          "stage_a_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_X",
+            "OP_Y",
+            "LINK"
+          ],
+          "stage_c_noop_row_internal_id": 37,
+          "stage_c_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_X",
+            "OP_Y",
+            "LINK",
+            "OP_Z"
+          ]
+        }
+      },
+      "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7703_v1.json",
+      "seed": 7703,
+      "sha256": "ab2a19d7d7601d72a01224985bbd1654ae6cb8e4cf35b028c7029a9526d7b634"
+    },
+    {
+      "bytes": 24847,
+      "content": {
+        "active_operator_role_assignment": {
+          "OP_V": "ANCHOR",
+          "OP_W": "MATCH",
+          "OP_Y": "AVOID",
+          "OP_Z": "FLOOR"
+        },
+        "certificates": {
+          "coverage": "all 32 possible NOOP argument values plus two structural candidates",
+          "noop_to_null": "G_r^{NOOP->NULL}=b_r-max_{z in U}s_r(z)>0 for every r",
+          "status": "formula sealed; not computed during preparation"
+        },
+        "evaluation": {
+          "augmented": {
+            "1": {
+              "orders": 2,
+              "rows": 256
+            },
+            "2": {
+              "orders": 6,
+              "rows": 35712
+            },
+            "3": {
+              "orders": 24,
+              "rows": 95232
+            },
+            "4": {
+              "orders": 120,
+              "rows": 119040
+            }
+          },
+          "augmented_order_formula": "itertools.permutations(active_roles + (NOOP,))",
+          "augmented_total": 250240,
+          "base": {
+            "1": {
+              "orders": 1,
+              "rows": 128
+            },
+            "2": {
+              "orders": 2,
+              "rows": 11904
+            },
+            "3": {
+              "orders": 6,
+              "rows": 23808
+            },
+            "4": {
+              "orders": 24,
+              "rows": 23808
+            }
+          },
+          "base_order_formula": "itertools.permutations(active_roles)",
+          "base_total": 59648,
+          "five_seed": {
+            "augmented": 1251200,
+            "base": 298240,
+            "combined": 1549440
+          },
+          "formula": "For each non-empty active subset of R and distinct active values, enumerate every permutation of active clauses; augmented enumerates every permutation after inserting exactly one NOOP clause.",
+          "pairing_rule": "The augmented row is paired to its base row by removing the NOOP clause outside the model; D is fixed across all orders for that assignment.",
+          "per_seed": {
+            "augmented": 250240,
+            "base": 59648,
+            "combined": 309888
+          }
+        },
+        "noop_contexts": {
+          "count": 34,
+          "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
+          "link_rule": "score only OP_NOOP position; do not turn LINK->OP_NOOP into a complete instruction",
+          "score_positions": {
+            "LINK->OP_NOOP": 1,
+            "OP_NOOP->ARG_D": 1,
+            "START->OP_NOOP": 0
+          },
+          "start_forward": "zero previous state at first token; no BOS invention"
+        },
+        "noop_operator": "OP_X",
+        "operator_order": [
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z"
+        ],
+        "operator_role_assignment": {
+          "OP_V": "ANCHOR",
+          "OP_W": "MATCH",
+          "OP_X": "NOOP",
+          "OP_Y": "AVOID",
+          "OP_Z": "FLOOR"
+        },
+        "role_assignment": {
+          "all_count": 120,
+          "all_permutation_order": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR",
+            "NOOP"
+          ],
+          "formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)",
+          "omitted": [
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            }
+          ],
+          "omitted_count": 115,
+          "selected": {
+            "OP_V": "ANCHOR",
+            "OP_W": "MATCH",
+            "OP_X": "NOOP",
+            "OP_Y": "AVOID",
+            "OP_Z": "FLOOR"
+          },
+          "selected_five": [
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            }
+          ],
+          "selection_index": 3
+        },
+        "role_order": [
+          "FLOOR",
+          "AVOID",
+          "MATCH",
+          "ANCHOR",
+          "NOOP"
+        ],
+        "schema": "T7-noop-none-lexical-development-preparation-manifest-v1",
+        "seed": 7704,
+        "separation_contract": {
+          "evaluation_reads": [
+            "paired base and augmented logical rows only after all training stages"
+          ],
+          "no_stage_reads_augmented_evaluation_during_training": true,
+          "stage_a_reads": [
+            "stage A atomic active-role rows only"
+          ],
+          "stage_b_reads": [
+            "stage A frozen core",
+            "128 atomic active-role rows",
+            "40 base BG contexts"
+          ],
+          "stage_c_reads": [
+            "stage B frozen core and b_r",
+            "34 NOOP contexts only"
+          ]
+        },
+        "stage_a": {
+          "L_sep": {
+            "reduction": "/16",
+            "role_bg_terms": 4,
+            "role_role_terms": 12,
+            "total_terms": 16
+          },
+          "background_contexts": 40,
+          "init": "fresh from zero per T7 domain; no historical checkpoint",
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "noop_in_background_catalog": false,
+          "noop_in_batch": false,
+          "noop_in_objective": false,
+          "objective": "L_behavior^(F,A)+L_ref^(F,A,M,H)+L_sep^(4+BG)",
+          "operator_vocab_excludes_noop": true,
+          "optimizer": "AdamW",
+          "training_rows": 128,
+          "training_rows_by_role": {
+            "ANCHOR": 32,
+            "AVOID": 32,
+            "FLOOR": 32,
+            "MATCH": 32
+          },
+          "updates": 5000,
+          "weight_decay": 0.0
+        },
+        "stage_b": {
+          "core_frozen": true,
+          "formula": "b_r=N_r^max+(P_r^min-N_r^max)/2",
+          "freeze_after_calibration": true,
+          "noop_contexts_used": false,
+          "recalibrate_after_stage_c": false,
+          "roles_calibrated": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR"
+          ],
+          "sources": [
+            "128 atomic active-role relations",
+            "40 base BG contexts"
+          ],
+          "strict_checks": [
+            "P_r^min-b_r>0 in inference dtype",
+            "b_r-N_r^max>0 in inference dtype"
+          ]
+        },
+        "stage_c": {
+          "active_role_loss": false,
+          "contexts_per_update": 34,
+          "extra_terms": false,
+          "frozen": [
+            "core",
+            "old embeddings",
+            "four queries",
+            "key network",
+            "W_v",
+            "decoder",
+            "b_r"
+          ],
+          "initialization": "normal standard",
+          "initialization_generator": "independent generator",
+          "initialization_seed": 107704,
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "loss": "(1/136)*sum_r sum_z softplus(s_r(z;e_N)-b_r)",
+          "noop_atomic_controls": {
+            "reported_separately": true,
+            "rows": 32,
+            "target": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "optimizer": "AdamW",
+          "selection": "last update; no early stopping",
+          "trainable_dimension": 16,
+          "trainable_parameters": [
+            "e_N=e_{noop_operator}"
+          ],
+          "updates": 5000,
+          "value_loss": false,
+          "weight_decay": 0.0
+        },
+        "status": "prepared_not_executed",
+        "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "vocabulary": {
+          "argument_tokens": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31"
+          ],
+          "ids_preserved_when_appending": true,
+          "noop_added_after_stage_b": true,
+          "stage_a_noop_operator_present": false,
+          "stage_a_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_Y",
+            "OP_Z",
+            "LINK"
+          ],
+          "stage_c_noop_row_internal_id": 37,
+          "stage_c_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_V",
+            "OP_W",
+            "OP_Y",
+            "OP_Z",
+            "LINK",
+            "OP_X"
+          ]
+        }
+      },
+      "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7704_v1.json",
+      "seed": 7704,
+      "sha256": "9b9724fed4d8bbcacd20aefa75ca2db8a6f92a23a65be56166ae9006fc3f182c"
+    },
+    {
+      "bytes": 24847,
+      "content": {
+        "active_operator_role_assignment": {
+          "OP_W": "AVOID",
+          "OP_X": "ANCHOR",
+          "OP_Y": "FLOOR",
+          "OP_Z": "MATCH"
+        },
+        "certificates": {
+          "coverage": "all 32 possible NOOP argument values plus two structural candidates",
+          "noop_to_null": "G_r^{NOOP->NULL}=b_r-max_{z in U}s_r(z)>0 for every r",
+          "status": "formula sealed; not computed during preparation"
+        },
+        "evaluation": {
+          "augmented": {
+            "1": {
+              "orders": 2,
+              "rows": 256
+            },
+            "2": {
+              "orders": 6,
+              "rows": 35712
+            },
+            "3": {
+              "orders": 24,
+              "rows": 95232
+            },
+            "4": {
+              "orders": 120,
+              "rows": 119040
+            }
+          },
+          "augmented_order_formula": "itertools.permutations(active_roles + (NOOP,))",
+          "augmented_total": 250240,
+          "base": {
+            "1": {
+              "orders": 1,
+              "rows": 128
+            },
+            "2": {
+              "orders": 2,
+              "rows": 11904
+            },
+            "3": {
+              "orders": 6,
+              "rows": 23808
+            },
+            "4": {
+              "orders": 24,
+              "rows": 23808
+            }
+          },
+          "base_order_formula": "itertools.permutations(active_roles)",
+          "base_total": 59648,
+          "five_seed": {
+            "augmented": 1251200,
+            "base": 298240,
+            "combined": 1549440
+          },
+          "formula": "For each non-empty active subset of R and distinct active values, enumerate every permutation of active clauses; augmented enumerates every permutation after inserting exactly one NOOP clause.",
+          "pairing_rule": "The augmented row is paired to its base row by removing the NOOP clause outside the model; D is fixed across all orders for that assignment.",
+          "per_seed": {
+            "augmented": 250240,
+            "base": 59648,
+            "combined": 309888
+          }
+        },
+        "noop_contexts": {
+          "count": 34,
+          "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
+          "link_rule": "score only OP_NOOP position; do not turn LINK->OP_NOOP into a complete instruction",
+          "score_positions": {
+            "LINK->OP_NOOP": 1,
+            "OP_NOOP->ARG_D": 1,
+            "START->OP_NOOP": 0
+          },
+          "start_forward": "zero previous state at first token; no BOS invention"
+        },
+        "noop_operator": "OP_V",
+        "operator_order": [
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z"
+        ],
+        "operator_role_assignment": {
+          "OP_V": "NOOP",
+          "OP_W": "AVOID",
+          "OP_X": "ANCHOR",
+          "OP_Y": "FLOOR",
+          "OP_Z": "MATCH"
+        },
+        "role_assignment": {
+          "all_count": 120,
+          "all_permutation_order": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR",
+            "NOOP"
+          ],
+          "formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)",
+          "omitted": [
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "ANCHOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "MATCH",
+              "OP_W": "NOOP",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "FLOOR",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "AVOID",
+              "OP_X": "NOOP",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "NOOP",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "NOOP",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "MATCH",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "FLOOR",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "MATCH",
+              "OP_X": "ANCHOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "AVOID",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "FLOOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "AVOID",
+              "OP_Y": "MATCH",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "FLOOR",
+              "OP_Z": "AVOID"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "ANCHOR",
+              "OP_X": "MATCH",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            }
+          ],
+          "omitted_count": 115,
+          "selected": {
+            "OP_V": "NOOP",
+            "OP_W": "AVOID",
+            "OP_X": "ANCHOR",
+            "OP_Y": "FLOOR",
+            "OP_Z": "MATCH"
+          },
+          "selected_five": [
+            {
+              "OP_V": "MATCH",
+              "OP_W": "AVOID",
+              "OP_X": "FLOOR",
+              "OP_Y": "NOOP",
+              "OP_Z": "ANCHOR"
+            },
+            {
+              "OP_V": "FLOOR",
+              "OP_W": "NOOP",
+              "OP_X": "AVOID",
+              "OP_Y": "ANCHOR",
+              "OP_Z": "MATCH"
+            },
+            {
+              "OP_V": "AVOID",
+              "OP_W": "FLOOR",
+              "OP_X": "ANCHOR",
+              "OP_Y": "MATCH",
+              "OP_Z": "NOOP"
+            },
+            {
+              "OP_V": "ANCHOR",
+              "OP_W": "MATCH",
+              "OP_X": "NOOP",
+              "OP_Y": "AVOID",
+              "OP_Z": "FLOOR"
+            },
+            {
+              "OP_V": "NOOP",
+              "OP_W": "AVOID",
+              "OP_X": "ANCHOR",
+              "OP_Y": "FLOOR",
+              "OP_Z": "MATCH"
+            }
+          ],
+          "selection_index": 4
+        },
+        "role_order": [
+          "FLOOR",
+          "AVOID",
+          "MATCH",
+          "ANCHOR",
+          "NOOP"
+        ],
+        "schema": "T7-noop-none-lexical-development-preparation-manifest-v1",
+        "seed": 7705,
+        "separation_contract": {
+          "evaluation_reads": [
+            "paired base and augmented logical rows only after all training stages"
+          ],
+          "no_stage_reads_augmented_evaluation_during_training": true,
+          "stage_a_reads": [
+            "stage A atomic active-role rows only"
+          ],
+          "stage_b_reads": [
+            "stage A frozen core",
+            "128 atomic active-role rows",
+            "40 base BG contexts"
+          ],
+          "stage_c_reads": [
+            "stage B frozen core and b_r",
+            "34 NOOP contexts only"
+          ]
+        },
+        "stage_a": {
+          "L_sep": {
+            "reduction": "/16",
+            "role_bg_terms": 4,
+            "role_role_terms": 12,
+            "total_terms": 16
+          },
+          "background_contexts": 40,
+          "init": "fresh from zero per T7 domain; no historical checkpoint",
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "noop_in_background_catalog": false,
+          "noop_in_batch": false,
+          "noop_in_objective": false,
+          "objective": "L_behavior^(F,A)+L_ref^(F,A,M,H)+L_sep^(4+BG)",
+          "operator_vocab_excludes_noop": true,
+          "optimizer": "AdamW",
+          "training_rows": 128,
+          "training_rows_by_role": {
+            "ANCHOR": 32,
+            "AVOID": 32,
+            "FLOOR": 32,
+            "MATCH": 32
+          },
+          "updates": 5000,
+          "weight_decay": 0.0
+        },
+        "stage_b": {
+          "core_frozen": true,
+          "formula": "b_r=N_r^max+(P_r^min-N_r^max)/2",
+          "freeze_after_calibration": true,
+          "noop_contexts_used": false,
+          "recalibrate_after_stage_c": false,
+          "roles_calibrated": [
+            "FLOOR",
+            "AVOID",
+            "MATCH",
+            "ANCHOR"
+          ],
+          "sources": [
+            "128 atomic active-role relations",
+            "40 base BG contexts"
+          ],
+          "strict_checks": [
+            "P_r^min-b_r>0 in inference dtype",
+            "b_r-N_r^max>0 in inference dtype"
+          ]
+        },
+        "stage_c": {
+          "active_role_loss": false,
+          "contexts_per_update": 34,
+          "extra_terms": false,
+          "frozen": [
+            "core",
+            "old embeddings",
+            "four queries",
+            "key network",
+            "W_v",
+            "decoder",
+            "b_r"
+          ],
+          "initialization": "normal standard",
+          "initialization_generator": "independent generator",
+          "initialization_seed": 107705,
+          "learning_rate": {
+            "final": 1e-05,
+            "initial": 0.001,
+            "schedule": "linear"
+          },
+          "loss": "(1/136)*sum_r sum_z softplus(s_r(z;e_N)-b_r)",
+          "noop_atomic_controls": {
+            "reported_separately": true,
+            "rows": 32,
+            "target": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "optimizer": "AdamW",
+          "selection": "last update; no early stopping",
+          "trainable_dimension": 16,
+          "trainable_parameters": [
+            "e_N=e_{noop_operator}"
+          ],
+          "updates": 5000,
+          "value_loss": false,
+          "weight_decay": 0.0
+        },
+        "status": "prepared_not_executed",
+        "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "vocabulary": {
+          "argument_tokens": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31"
+          ],
+          "ids_preserved_when_appending": true,
+          "noop_added_after_stage_b": true,
+          "stage_a_noop_operator_present": false,
+          "stage_a_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_W",
+            "OP_X",
+            "OP_Y",
+            "OP_Z",
+            "LINK"
+          ],
+          "stage_c_noop_row_internal_id": 37,
+          "stage_c_token_order": [
+            "ARG_00",
+            "ARG_01",
+            "ARG_02",
+            "ARG_03",
+            "ARG_04",
+            "ARG_05",
+            "ARG_06",
+            "ARG_07",
+            "ARG_08",
+            "ARG_09",
+            "ARG_10",
+            "ARG_11",
+            "ARG_12",
+            "ARG_13",
+            "ARG_14",
+            "ARG_15",
+            "ARG_16",
+            "ARG_17",
+            "ARG_18",
+            "ARG_19",
+            "ARG_20",
+            "ARG_21",
+            "ARG_22",
+            "ARG_23",
+            "ARG_24",
+            "ARG_25",
+            "ARG_26",
+            "ARG_27",
+            "ARG_28",
+            "ARG_29",
+            "ARG_30",
+            "ARG_31",
+            "OP_W",
+            "OP_X",
+            "OP_Y",
+            "OP_Z",
+            "LINK",
+            "OP_V"
+          ]
+        }
+      },
+      "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7705_v1.json",
+      "seed": 7705,
+      "sha256": "1bb8e0fb7bc0fb2f68fe87fa165343c50911e64d1d23914e46d6d00f401a9173"
+    }
+  ],
+  "production_core_integration": {
+    "argument_candidate_unique_values_by_query": [
+      32,
+      32,
+      32,
+      32
+    ],
+    "candidate_terms": 136,
+    "contexts": 34,
+    "forward_source_sha256": "f523817e2154d94e4b4835b03e54907f5f0977e3e6d40c57415d0f28a2658759",
+    "loss": 0.4852425754070282,
+    "noop_gradient_max_abs": 0.0018135827267542481,
+    "noop_gradient_norm": 0.0032684982288628817,
+    "noop_token_id": 37,
+    "old_embedding_bit_exact_after_noop_change": true,
+    "old_path_max_abs_after_noop_change": 0.0,
+    "old_vocab_size": 37,
+    "production_core": "scripts/t5_nrole_design_audit.py::GenericNRoleBinder",
+    "queries": 4,
+    "scaled_gradient_sigmoid_max_abs_error": 5.960464477539063e-08,
+    "scaled_score_gradient_max": 0.4626387059688568,
+    "scaled_score_gradient_min": 0.3002934157848358,
+    "scores_shape": [
+      4,
+      34
+    ],
+    "trainable_parameter_names": [
+      "embedding.noop_embedding"
+    ]
+  },
+  "reserved_fresh_seeds": [
+    7801,
+    7802,
+    7803,
+    7804,
+    7805
+  ],
+  "role_assignment_freeze": {
+    "all_assignment_count": 120,
+    "omitted_count": 115,
+    "operator_order": [
+      "OP_V",
+      "OP_W",
+      "OP_X",
+      "OP_Y",
+      "OP_Z"
+    ],
+    "role_order": [
+      "FLOOR",
+      "AVOID",
+      "MATCH",
+      "ANCHOR",
+      "NOOP"
+    ],
+    "selected": [
+      {
+        "OP_V": "MATCH",
+        "OP_W": "AVOID",
+        "OP_X": "FLOOR",
+        "OP_Y": "NOOP",
+        "OP_Z": "ANCHOR"
+      },
+      {
+        "OP_V": "FLOOR",
+        "OP_W": "NOOP",
+        "OP_X": "AVOID",
+        "OP_Y": "ANCHOR",
+        "OP_Z": "MATCH"
+      },
+      {
+        "OP_V": "AVOID",
+        "OP_W": "FLOOR",
+        "OP_X": "ANCHOR",
+        "OP_Y": "MATCH",
+        "OP_Z": "NOOP"
+      },
+      {
+        "OP_V": "ANCHOR",
+        "OP_W": "MATCH",
+        "OP_X": "NOOP",
+        "OP_Y": "AVOID",
+        "OP_Z": "FLOOR"
+      },
+      {
+        "OP_V": "NOOP",
+        "OP_W": "AVOID",
+        "OP_X": "ANCHOR",
+        "OP_Y": "FLOOR",
+        "OP_Z": "MATCH"
+      }
+    ],
+    "selected_count": 5,
+    "selection_formula": "random.Random(7700).sample(list(itertools.permutations((FLOOR,AVOID,MATCH,ANCHOR,NOOP))), 5)"
+  },
+  "schema": "T7-noop-none-lexical-development-preparation-v1",
+  "scope": {
+    "calibration_performed": false,
+    "checkpoint_load": false,
+    "historical_manifests_loaded": false,
+    "mode": "development_preparation",
+    "new_checkpoints": false,
+    "optimizer_step": false,
+    "training_performed": false
+  },
+  "seeds": [
+    7701,
+    7702,
+    7703,
+    7704,
+    7705
+  ],
+  "source_registry": [
+    {
+      "bytes": 8605,
+      "path": "scripts/prepare_t7_noop_none_lexical_development.py",
+      "sha256": "0c6f3e0dcef7231c4c368e2cd7058da56d1f7f0d10bd5d51be630f4687396114"
+    },
+    {
+      "bytes": 5518,
+      "path": "scripts/check_t7_noop_none_lexical_development.py",
+      "sha256": "74102614ff42d6bc39a7c52fa90e95e5f8361beb607eba814bbc9df7c179811b"
+    },
+    {
+      "bytes": 3594,
+      "path": "t1_trainability/t7_production_core_noop_integration.py",
+      "sha256": "08be5b511dd727d17382feccc5ab04b4dae963604032027ae9604fc7f5db12a5"
+    },
+    {
+      "bytes": 2709,
+      "path": "tests/test_t7_production_core_noop_integration.py",
+      "sha256": "ef7eeb2704326c96a80350eb13801c8426df1ecbac28775ff1a25ae48d7db40e"
+    }
+  ],
+  "status": "passed",
+  "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION"
+}
