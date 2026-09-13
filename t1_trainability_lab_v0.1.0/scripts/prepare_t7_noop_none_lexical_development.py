@@ -17,6 +17,14 @@ SEEDS = (7701, 7702, 7703, 7704, 7705)
 ROLES = ("FLOOR", "AVOID", "MATCH", "ANCHOR", "NOOP")
 OPERATORS = ("OP_V", "OP_W", "OP_X", "OP_Y", "OP_Z")
 ARGUMENTS = tuple(f"ARG_{index:02d}" for index in range(32))
+VALUE_COUNT = 32
+ID_BLOCKS = {
+    7701: (47000, 47499),
+    7702: (48000, 48499),
+    7703: (49000, 49499),
+    7704: (50000, 50499),
+    7705: (51000, 51499),
+}
 
 
 def all_assignments() -> tuple[dict[str, str], ...]:
@@ -26,6 +34,16 @@ def all_assignments() -> tuple[dict[str, str], ...]:
 
 ALL_ASSIGNMENTS = all_assignments()
 SELECTED_ASSIGNMENTS = tuple(random.Random(7700).sample(list(ALL_ASSIGNMENTS), 5))
+
+
+def domain_permutation(seed: int) -> list[int]:
+    return random.Random(seed).sample(range(VALUE_COUNT), VALUE_COUNT)
+
+
+def base_token_ids(seed: int, token_order: list[str]) -> dict[str, int]:
+    start, end = ID_BLOCKS[seed]
+    physical_ids = random.Random(seed + 100000).sample(range(start, end + 1), len(token_order))
+    return dict(zip(token_order, physical_ids))
 
 
 def distractor_formula() -> str:
@@ -55,6 +73,9 @@ def build_manifest(seed: int, mapping: dict[str, str]) -> dict[str, Any]:
     active_operators = [operator for operator in OPERATORS if operator != noop_operator]
     stage_a_token_order = [*ARGUMENTS, *active_operators, "LINK"]
     stage_c_token_order = [*stage_a_token_order, noop_operator]
+    permutation = domain_permutation(seed)
+    token_ids = base_token_ids(seed, stage_a_token_order)
+    operator_for_role = {role: operator for operator, role in active_mapping.items()}
     selected_index = SEEDS.index(seed)
     selected = SELECTED_ASSIGNMENTS[selected_index]
     omitted = [assignment for assignment in ALL_ASSIGNMENTS if assignment not in SELECTED_ASSIGNMENTS]
@@ -65,6 +86,12 @@ def build_manifest(seed: int, mapping: dict[str, str]) -> dict[str, Any]:
         "operator_role_assignment": mapping,
         "active_operator_role_assignment": active_mapping,
         "noop_operator": noop_operator,
+        "permutation": permutation,
+        "token_order": stage_a_token_order,
+        "token_ids": token_ids,
+        "id_block": list(ID_BLOCKS[seed]),
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
+        "operator_for_role": operator_for_role,
         "role_order": list(ROLES),
         "operator_order": list(OPERATORS),
         "role_assignment": {

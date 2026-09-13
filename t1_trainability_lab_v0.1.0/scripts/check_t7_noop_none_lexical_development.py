@@ -15,10 +15,33 @@ MANIFEST_ROOT = ROOT / "campaign" / "t7_noop_none_lexical_development_preparatio
 SEEDS = (7701, 7702, 7703, 7704, 7705)
 ROLES = ("FLOOR", "AVOID", "MATCH", "ANCHOR", "NOOP")
 OPERATORS = ("OP_V", "OP_W", "OP_X", "OP_Y", "OP_Z")
+VALUE_COUNT = 32
+ID_BLOCKS = {
+    7701: (47000, 47499),
+    7702: (48000, 48499),
+    7703: (49000, 49499),
+    7704: (50000, 50499),
+    7705: (51000, 51499),
+}
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def collect_physical_ids(value: Any, found: set[int]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"token_ids", "physical_ids", "physical_token_ids"}:
+                if isinstance(child, dict):
+                    found.update(item for item in child.values() if isinstance(item, int))
+                elif isinstance(child, list):
+                    found.update(item for item in child if isinstance(item, int))
+            else:
+                collect_physical_ids(child, found)
+    elif isinstance(value, list):
+        for child in value:
+            collect_physical_ids(child, found)
 
 
 def check_manifest(path: Path, expected: dict[str, str], selected: tuple[dict[str, str], ...], all_assignments: tuple[dict[str, str], ...]) -> dict[str, Any]:
@@ -36,6 +59,21 @@ def check_manifest(path: Path, expected: dict[str, str], selected: tuple[dict[st
         errors.append("omitted assignment count is not 115")
     if manifest.get("role_assignment", {}).get("omitted") != expected_omitted:
         errors.append("omitted assignment list is not exact")
+    permutation = manifest.get("permutation")
+    expected_permutation = random.Random(int(manifest.get("seed"))).sample(range(VALUE_COUNT), VALUE_COUNT)
+    if permutation != expected_permutation or permutation == list(range(VALUE_COUNT)):
+        errors.append("fresh non-trivial value permutation mismatch")
+    token_order = manifest.get("token_order")
+    stage_a_token_order = manifest.get("vocabulary", {}).get("stage_a_token_order")
+    token_ids = manifest.get("token_ids")
+    start, end = ID_BLOCKS[int(manifest.get("seed"))]
+    if token_order != stage_a_token_order or not isinstance(token_ids, dict) or set(token_ids) != set(stage_a_token_order) or len(token_ids) != 37 or len(set(token_ids.values())) != 37 or any(not isinstance(value, int) or not start <= value <= end for value in token_ids.values()):
+        errors.append("fresh base physical vocabulary mismatch")
+    if manifest.get("id_block") != [start, end]:
+        errors.append("physical ID block mismatch")
+    expected_operator_for_role = {role: operator for operator, role in mapping.items() if role != "NOOP"}
+    if manifest.get("operator_for_role") != expected_operator_for_role:
+        errors.append("active operator inverse mapping mismatch")
     vocabulary = manifest.get("vocabulary", {})
     noop = manifest.get("noop_operator")
     stage_a = vocabulary.get("stage_a_token_order", [])
@@ -87,6 +125,20 @@ def main() -> int:
     integration_path = ROOT / "t1_trainability" / "t7_production_core_noop_integration.py"
     integration_source = integration_path.read_text(encoding="utf-8") if integration_path.exists() else ""
     checks["integration_source_separation"] = bool(integration_source) and "GenericNRoleBinder" in integration_source and "torch.load" not in integration_source and "optimizer.step" not in integration_source and "load_state_dict" not in integration_source
+    current_ids: set[int] = set()
+    for record in records:
+        if "path" in record and not record.get("errors"):
+            collect_physical_ids(json.loads((ROOT / record["path"]).read_text(encoding="utf-8")), current_ids)
+    prior_ids: set[int] = set()
+    for path in ROOT.glob("campaign/**/*.json"):
+        if "t7_noop_none_lexical_development_preparation" in path.parts:
+            continue
+        try:
+            collect_physical_ids(json.loads(path.read_text(encoding="utf-8")), prior_ids)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    checks["fresh_physical_ids_disjoint_across_seeds"] = len(current_ids) == 185
+    checks["fresh_physical_ids_disjoint_from_prior_campaigns"] = not current_ids.intersection(prior_ids)
     result = {"status": "passed" if all(checks.values()) else "failed", "checks": checks, "manifests": records, "training": False, "model_construction": False, "checkpoint_load": False, "optimizer_step": False}
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] == "passed" else 1

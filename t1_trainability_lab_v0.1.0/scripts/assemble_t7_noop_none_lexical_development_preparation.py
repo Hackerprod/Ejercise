@@ -95,6 +95,7 @@ def build_unsigned() -> dict[str, Any]:
 
     source_paths = [
         ROOT / "scripts" / "prepare_t7_noop_none_lexical_development.py",
+        ROOT / "scripts" / "resell_t7_noop_none_lexical_manifests.py",
         ROOT / "scripts" / "check_t7_noop_none_lexical_development.py",
         ROOT / "t1_trainability" / "t7_production_core_noop_integration.py",
         ROOT / "tests" / "test_t7_production_core_noop_integration.py",
@@ -103,6 +104,16 @@ def build_unsigned() -> dict[str, Any]:
         "schema": "T7-noop-none-lexical-development-preparation-v1",
         "status": "passed" if checker["passed"] and tests["passed"] else "failed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "preparation_correction": {
+            "status": "corrected_and_resold",
+            "reason": "Original accepted manifests lacked per-seed value permutations and fresh physical token IDs required for genuine fresh domains.",
+            "added_fields": ["permutation", "token_order", "token_ids", "id_block", "id_semantics", "operator_for_role"],
+            "preserved_fields": ["role_assignment", "noop_operator", "stage_a", "stage_b", "stage_c", "certificates", "evaluation", "separation_contract"],
+            "mapping_formula": "random.Random(seed).sample(range(32), 32)",
+            "physical_id_formula": "random.Random(seed + 100000).sample(range(id_block_start, id_block_end + 1), 37)",
+            "id_blocks": {"7701": [47000, 47499], "7702": [48000, 48499], "7703": [49000, 49499], "7704": [50000, 50499], "7705": [51000, 51499]},
+            "training_started": False,
+        },
         "seeds": list(SEEDS),
         "reserved_fresh_seeds": [7801, 7802, 7803, 7804, 7805],
         "scope": {

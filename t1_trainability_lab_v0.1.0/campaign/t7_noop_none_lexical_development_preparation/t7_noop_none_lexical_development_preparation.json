@@ -1,5 +1,5 @@
 {
-  "artifact_self_hash": "0c6fd5e75780fbe010b1587c8f4f0ff8c2939366f7153622a2d1e86dbf4da4b4",
+  "artifact_self_hash": "2d9bda3781a2d85d2585460b8437e832f3d0edb68ecf1a7898f2ebbad417cab9",
   "forbidden_operations": [
     "training",
     "checkpoint_load",
@@ -40,7 +40,7 @@
     "passed": true,
     "returncode": 0,
     "stderr": "",
-    "stdout": "{\n  \"checkpoint_load\": false,\n  \"checks\": {\n    \"all_120_role_permutations\": true,\n    \"all_manifest_checks\": true,\n    \"evaluation_counts\": true,\n    \"evaluation_formula\": true,\n    \"five_manifests\": true,\n    \"integration_source_separation\": true,\n    \"selected_five_deterministic\": true\n  },\n  \"manifests\": [\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7701_v1.json\",\n      \"seed\": 7701,\n      \"sha256\": \"3babe1a7e68598ec8b7471f8ac07d12c46288ef35325ea3703e501ea15ebfe8f\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7702_v1.json\",\n      \"seed\": 7702,\n      \"sha256\": \"514d44433006b32ad098deac2d82ac06371116b1138bde7cb8b0d6a5edc797c3\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7703_v1.json\",\n      \"seed\": 7703,\n      \"sha256\": \"ab2a19d7d7601d72a01224985bbd1654ae6cb8e4cf35b028c7029a9526d7b634\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7704_v1.json\",\n      \"seed\": 7704,\n      \"sha256\": \"9b9724fed4d8bbcacd20aefa75ca2db8a6f92a23a65be56166ae9006fc3f182c\"\n    },\n    {\n      \"bytes\": 24847,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7705_v1.json\",\n      \"seed\": 7705,\n      \"sha256\": \"1bb8e0fb7bc0fb2f68fe87fa165343c50911e64d1d23914e46d6d00f401a9173\"\n    }\n  ],\n  \"model_construction\": false,\n  \"optimizer_step\": false,\n  \"status\": \"passed\",\n  \"training\": false\n}"
+    "stdout": "{\n  \"checkpoint_load\": false,\n  \"checks\": {\n    \"all_120_role_permutations\": true,\n    \"all_manifest_checks\": true,\n    \"evaluation_counts\": true,\n    \"evaluation_formula\": true,\n    \"five_manifests\": true,\n    \"fresh_physical_ids_disjoint_across_seeds\": true,\n    \"fresh_physical_ids_disjoint_from_prior_campaigns\": true,\n    \"integration_source_separation\": true,\n    \"selected_five_deterministic\": true\n  },\n  \"manifests\": [\n    {\n      \"bytes\": 26690,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7701_v1.json\",\n      \"seed\": 7701,\n      \"sha256\": \"b4405fc75da08c50e1ded774a4ad9ec0b5f7383b30b0083d5d4495210bd0f8ee\"\n    },\n    {\n      \"bytes\": 26690,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7702_v1.json\",\n      \"seed\": 7702,\n      \"sha256\": \"2483cbcf3e8ffb4a422b656e253da2d02aec939731cc3d59b325dfb9bc79ed88\"\n    },\n    {\n      \"bytes\": 26690,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7703_v1.json\",\n      \"seed\": 7703,\n      \"sha256\": \"e8be6949668ff788f7dc49fb72a6a70c5e9dc8ba0698568cdee3c91dcf485bfe\"\n    },\n    {\n      \"bytes\": 26690,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7704_v1.json\",\n      \"seed\": 7704,\n      \"sha256\": \"135d2fed430185b29f8e6bc07665ae6dfc1b94acb75840bdb5ba37442c03aa7a\"\n    },\n    {\n      \"bytes\": 26690,\n      \"errors\": [],\n      \"path\": \"campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7705_v1.json\",\n      \"seed\": 7705,\n      \"sha256\": \"ceb26787d40e3e77f157792bbd05d8dc6e1a4218f3251b4019955e31c8349730\"\n    }\n  ],\n  \"model_construction\": false,\n  \"optimizer_step\": false,\n  \"status\": \"passed\",\n  \"training\": false\n}"
   },
   "integration_tests": {
     "command": [
@@ -54,11 +54,11 @@
     "passed": true,
     "returncode": 0,
     "stderr": "",
-    "stdout": "...........                                                              [100%]\n11 passed in 1.61s"
+    "stdout": "...........                                                              [100%]\n11 passed in 5.13s"
   },
   "manifest_registry": [
     {
-      "bytes": 24847,
+      "bytes": 26690,
       "content": {
         "active_operator_role_assignment": {
           "OP_V": "MATCH",
@@ -125,6 +125,11 @@
             "combined": 309888
           }
         },
+        "id_block": [
+          47000,
+          47499
+        ],
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
         "noop_contexts": {
           "count": 34,
           "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
@@ -137,6 +142,12 @@
           "start_forward": "zero previous state at first token; no BOS invention"
         },
         "noop_operator": "OP_Y",
+        "operator_for_role": {
+          "ANCHOR": "OP_Z",
+          "AVOID": "OP_W",
+          "FLOOR": "OP_X",
+          "MATCH": "OP_V"
+        },
         "operator_order": [
           "OP_V",
           "OP_W",
@@ -151,6 +162,40 @@
           "OP_Y": "NOOP",
           "OP_Z": "ANCHOR"
         },
+        "permutation": [
+          4,
+          8,
+          29,
+          25,
+          2,
+          11,
+          0,
+          21,
+          27,
+          10,
+          15,
+          19,
+          28,
+          1,
+          14,
+          31,
+          17,
+          20,
+          24,
+          7,
+          13,
+          3,
+          16,
+          6,
+          30,
+          22,
+          23,
+          9,
+          26,
+          12,
+          18,
+          5
+        ],
         "role_assignment": {
           "all_count": 120,
           "all_permutation_order": [
@@ -1137,6 +1182,84 @@
         },
         "status": "prepared_not_executed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "token_ids": {
+          "ARG_00": 47009,
+          "ARG_01": 47126,
+          "ARG_02": 47266,
+          "ARG_03": 47206,
+          "ARG_04": 47447,
+          "ARG_05": 47393,
+          "ARG_06": 47481,
+          "ARG_07": 47449,
+          "ARG_08": 47355,
+          "ARG_09": 47307,
+          "ARG_10": 47492,
+          "ARG_11": 47324,
+          "ARG_12": 47466,
+          "ARG_13": 47254,
+          "ARG_14": 47092,
+          "ARG_15": 47100,
+          "ARG_16": 47417,
+          "ARG_17": 47163,
+          "ARG_18": 47195,
+          "ARG_19": 47197,
+          "ARG_20": 47183,
+          "ARG_21": 47410,
+          "ARG_22": 47125,
+          "ARG_23": 47306,
+          "ARG_24": 47211,
+          "ARG_25": 47039,
+          "ARG_26": 47422,
+          "ARG_27": 47475,
+          "ARG_28": 47142,
+          "ARG_29": 47001,
+          "ARG_30": 47321,
+          "ARG_31": 47213,
+          "LINK": 47318,
+          "OP_V": 47316,
+          "OP_W": 47074,
+          "OP_X": 47377,
+          "OP_Z": 47480
+        },
+        "token_order": [
+          "ARG_00",
+          "ARG_01",
+          "ARG_02",
+          "ARG_03",
+          "ARG_04",
+          "ARG_05",
+          "ARG_06",
+          "ARG_07",
+          "ARG_08",
+          "ARG_09",
+          "ARG_10",
+          "ARG_11",
+          "ARG_12",
+          "ARG_13",
+          "ARG_14",
+          "ARG_15",
+          "ARG_16",
+          "ARG_17",
+          "ARG_18",
+          "ARG_19",
+          "ARG_20",
+          "ARG_21",
+          "ARG_22",
+          "ARG_23",
+          "ARG_24",
+          "ARG_25",
+          "ARG_26",
+          "ARG_27",
+          "ARG_28",
+          "ARG_29",
+          "ARG_30",
+          "ARG_31",
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Z",
+          "LINK"
+        ],
         "vocabulary": {
           "argument_tokens": [
             "ARG_00",
@@ -1259,10 +1382,10 @@
       },
       "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7701_v1.json",
       "seed": 7701,
-      "sha256": "3babe1a7e68598ec8b7471f8ac07d12c46288ef35325ea3703e501ea15ebfe8f"
+      "sha256": "b4405fc75da08c50e1ded774a4ad9ec0b5f7383b30b0083d5d4495210bd0f8ee"
     },
     {
-      "bytes": 24847,
+      "bytes": 26690,
       "content": {
         "active_operator_role_assignment": {
           "OP_V": "FLOOR",
@@ -1329,6 +1452,11 @@
             "combined": 309888
           }
         },
+        "id_block": [
+          48000,
+          48499
+        ],
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
         "noop_contexts": {
           "count": 34,
           "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
@@ -1341,6 +1469,12 @@
           "start_forward": "zero previous state at first token; no BOS invention"
         },
         "noop_operator": "OP_W",
+        "operator_for_role": {
+          "ANCHOR": "OP_Y",
+          "AVOID": "OP_X",
+          "FLOOR": "OP_V",
+          "MATCH": "OP_Z"
+        },
         "operator_order": [
           "OP_V",
           "OP_W",
@@ -1355,6 +1489,40 @@
           "OP_Y": "ANCHOR",
           "OP_Z": "MATCH"
         },
+        "permutation": [
+          18,
+          28,
+          3,
+          15,
+          11,
+          1,
+          25,
+          12,
+          19,
+          2,
+          9,
+          16,
+          29,
+          31,
+          13,
+          24,
+          14,
+          5,
+          20,
+          10,
+          6,
+          23,
+          0,
+          30,
+          8,
+          21,
+          7,
+          22,
+          4,
+          27,
+          26,
+          17
+        ],
         "role_assignment": {
           "all_count": 120,
           "all_permutation_order": [
@@ -2341,6 +2509,84 @@
         },
         "status": "prepared_not_executed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "token_ids": {
+          "ARG_00": 48126,
+          "ARG_01": 48418,
+          "ARG_02": 48109,
+          "ARG_03": 48369,
+          "ARG_04": 48273,
+          "ARG_05": 48408,
+          "ARG_06": 48359,
+          "ARG_07": 48262,
+          "ARG_08": 48379,
+          "ARG_09": 48238,
+          "ARG_10": 48304,
+          "ARG_11": 48132,
+          "ARG_12": 48000,
+          "ARG_13": 48010,
+          "ARG_14": 48244,
+          "ARG_15": 48406,
+          "ARG_16": 48258,
+          "ARG_17": 48194,
+          "ARG_18": 48326,
+          "ARG_19": 48147,
+          "ARG_20": 48432,
+          "ARG_21": 48486,
+          "ARG_22": 48291,
+          "ARG_23": 48100,
+          "ARG_24": 48122,
+          "ARG_25": 48464,
+          "ARG_26": 48232,
+          "ARG_27": 48104,
+          "ARG_28": 48269,
+          "ARG_29": 48466,
+          "ARG_30": 48105,
+          "ARG_31": 48251,
+          "LINK": 48092,
+          "OP_V": 48260,
+          "OP_X": 48115,
+          "OP_Y": 48393,
+          "OP_Z": 48275
+        },
+        "token_order": [
+          "ARG_00",
+          "ARG_01",
+          "ARG_02",
+          "ARG_03",
+          "ARG_04",
+          "ARG_05",
+          "ARG_06",
+          "ARG_07",
+          "ARG_08",
+          "ARG_09",
+          "ARG_10",
+          "ARG_11",
+          "ARG_12",
+          "ARG_13",
+          "ARG_14",
+          "ARG_15",
+          "ARG_16",
+          "ARG_17",
+          "ARG_18",
+          "ARG_19",
+          "ARG_20",
+          "ARG_21",
+          "ARG_22",
+          "ARG_23",
+          "ARG_24",
+          "ARG_25",
+          "ARG_26",
+          "ARG_27",
+          "ARG_28",
+          "ARG_29",
+          "ARG_30",
+          "ARG_31",
+          "OP_V",
+          "OP_X",
+          "OP_Y",
+          "OP_Z",
+          "LINK"
+        ],
         "vocabulary": {
           "argument_tokens": [
             "ARG_00",
@@ -2463,10 +2709,10 @@
       },
       "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7702_v1.json",
       "seed": 7702,
-      "sha256": "514d44433006b32ad098deac2d82ac06371116b1138bde7cb8b0d6a5edc797c3"
+      "sha256": "2483cbcf3e8ffb4a422b656e253da2d02aec939731cc3d59b325dfb9bc79ed88"
     },
     {
-      "bytes": 24847,
+      "bytes": 26690,
       "content": {
         "active_operator_role_assignment": {
           "OP_V": "AVOID",
@@ -2533,6 +2779,11 @@
             "combined": 309888
           }
         },
+        "id_block": [
+          49000,
+          49499
+        ],
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
         "noop_contexts": {
           "count": 34,
           "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
@@ -2545,6 +2796,12 @@
           "start_forward": "zero previous state at first token; no BOS invention"
         },
         "noop_operator": "OP_Z",
+        "operator_for_role": {
+          "ANCHOR": "OP_X",
+          "AVOID": "OP_V",
+          "FLOOR": "OP_W",
+          "MATCH": "OP_Y"
+        },
         "operator_order": [
           "OP_V",
           "OP_W",
@@ -2559,6 +2816,40 @@
           "OP_Y": "MATCH",
           "OP_Z": "NOOP"
         },
+        "permutation": [
+          6,
+          17,
+          10,
+          26,
+          16,
+          12,
+          25,
+          29,
+          4,
+          11,
+          3,
+          23,
+          7,
+          9,
+          22,
+          28,
+          5,
+          19,
+          2,
+          21,
+          27,
+          18,
+          0,
+          24,
+          8,
+          30,
+          15,
+          31,
+          1,
+          14,
+          20,
+          13
+        ],
         "role_assignment": {
           "all_count": 120,
           "all_permutation_order": [
@@ -3545,6 +3836,84 @@
         },
         "status": "prepared_not_executed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "token_ids": {
+          "ARG_00": 49350,
+          "ARG_01": 49164,
+          "ARG_02": 49236,
+          "ARG_03": 49272,
+          "ARG_04": 49001,
+          "ARG_05": 49365,
+          "ARG_06": 49045,
+          "ARG_07": 49357,
+          "ARG_08": 49158,
+          "ARG_09": 49169,
+          "ARG_10": 49201,
+          "ARG_11": 49403,
+          "ARG_12": 49162,
+          "ARG_13": 49026,
+          "ARG_14": 49400,
+          "ARG_15": 49265,
+          "ARG_16": 49227,
+          "ARG_17": 49402,
+          "ARG_18": 49141,
+          "ARG_19": 49297,
+          "ARG_20": 49024,
+          "ARG_21": 49370,
+          "ARG_22": 49067,
+          "ARG_23": 49037,
+          "ARG_24": 49451,
+          "ARG_25": 49408,
+          "ARG_26": 49319,
+          "ARG_27": 49057,
+          "ARG_28": 49372,
+          "ARG_29": 49204,
+          "ARG_30": 49174,
+          "ARG_31": 49459,
+          "LINK": 49076,
+          "OP_V": 49177,
+          "OP_W": 49112,
+          "OP_X": 49245,
+          "OP_Y": 49031
+        },
+        "token_order": [
+          "ARG_00",
+          "ARG_01",
+          "ARG_02",
+          "ARG_03",
+          "ARG_04",
+          "ARG_05",
+          "ARG_06",
+          "ARG_07",
+          "ARG_08",
+          "ARG_09",
+          "ARG_10",
+          "ARG_11",
+          "ARG_12",
+          "ARG_13",
+          "ARG_14",
+          "ARG_15",
+          "ARG_16",
+          "ARG_17",
+          "ARG_18",
+          "ARG_19",
+          "ARG_20",
+          "ARG_21",
+          "ARG_22",
+          "ARG_23",
+          "ARG_24",
+          "ARG_25",
+          "ARG_26",
+          "ARG_27",
+          "ARG_28",
+          "ARG_29",
+          "ARG_30",
+          "ARG_31",
+          "OP_V",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "LINK"
+        ],
         "vocabulary": {
           "argument_tokens": [
             "ARG_00",
@@ -3667,10 +4036,10 @@
       },
       "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7703_v1.json",
       "seed": 7703,
-      "sha256": "ab2a19d7d7601d72a01224985bbd1654ae6cb8e4cf35b028c7029a9526d7b634"
+      "sha256": "e8be6949668ff788f7dc49fb72a6a70c5e9dc8ba0698568cdee3c91dcf485bfe"
     },
     {
-      "bytes": 24847,
+      "bytes": 26690,
       "content": {
         "active_operator_role_assignment": {
           "OP_V": "ANCHOR",
@@ -3737,6 +4106,11 @@
             "combined": 309888
           }
         },
+        "id_block": [
+          50000,
+          50499
+        ],
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
         "noop_contexts": {
           "count": 34,
           "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
@@ -3749,6 +4123,12 @@
           "start_forward": "zero previous state at first token; no BOS invention"
         },
         "noop_operator": "OP_X",
+        "operator_for_role": {
+          "ANCHOR": "OP_V",
+          "AVOID": "OP_Y",
+          "FLOOR": "OP_Z",
+          "MATCH": "OP_W"
+        },
         "operator_order": [
           "OP_V",
           "OP_W",
@@ -3763,6 +4143,40 @@
           "OP_Y": "AVOID",
           "OP_Z": "FLOOR"
         },
+        "permutation": [
+          17,
+          20,
+          23,
+          29,
+          16,
+          25,
+          14,
+          21,
+          11,
+          24,
+          22,
+          31,
+          26,
+          15,
+          8,
+          19,
+          3,
+          6,
+          9,
+          30,
+          28,
+          2,
+          1,
+          27,
+          13,
+          18,
+          4,
+          10,
+          7,
+          5,
+          0,
+          12
+        ],
         "role_assignment": {
           "all_count": 120,
           "all_permutation_order": [
@@ -4749,6 +5163,84 @@
         },
         "status": "prepared_not_executed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "token_ids": {
+          "ARG_00": 50116,
+          "ARG_01": 50073,
+          "ARG_02": 50249,
+          "ARG_03": 50331,
+          "ARG_04": 50262,
+          "ARG_05": 50267,
+          "ARG_06": 50179,
+          "ARG_07": 50040,
+          "ARG_08": 50270,
+          "ARG_09": 50437,
+          "ARG_10": 50121,
+          "ARG_11": 50361,
+          "ARG_12": 50480,
+          "ARG_13": 50085,
+          "ARG_14": 50344,
+          "ARG_15": 50368,
+          "ARG_16": 50454,
+          "ARG_17": 50354,
+          "ARG_18": 50173,
+          "ARG_19": 50211,
+          "ARG_20": 50165,
+          "ARG_21": 50286,
+          "ARG_22": 50427,
+          "ARG_23": 50111,
+          "ARG_24": 50210,
+          "ARG_25": 50142,
+          "ARG_26": 50172,
+          "ARG_27": 50271,
+          "ARG_28": 50234,
+          "ARG_29": 50277,
+          "ARG_30": 50206,
+          "ARG_31": 50455,
+          "LINK": 50355,
+          "OP_V": 50065,
+          "OP_W": 50183,
+          "OP_Y": 50474,
+          "OP_Z": 50020
+        },
+        "token_order": [
+          "ARG_00",
+          "ARG_01",
+          "ARG_02",
+          "ARG_03",
+          "ARG_04",
+          "ARG_05",
+          "ARG_06",
+          "ARG_07",
+          "ARG_08",
+          "ARG_09",
+          "ARG_10",
+          "ARG_11",
+          "ARG_12",
+          "ARG_13",
+          "ARG_14",
+          "ARG_15",
+          "ARG_16",
+          "ARG_17",
+          "ARG_18",
+          "ARG_19",
+          "ARG_20",
+          "ARG_21",
+          "ARG_22",
+          "ARG_23",
+          "ARG_24",
+          "ARG_25",
+          "ARG_26",
+          "ARG_27",
+          "ARG_28",
+          "ARG_29",
+          "ARG_30",
+          "ARG_31",
+          "OP_V",
+          "OP_W",
+          "OP_Y",
+          "OP_Z",
+          "LINK"
+        ],
         "vocabulary": {
           "argument_tokens": [
             "ARG_00",
@@ -4871,10 +5363,10 @@
       },
       "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7704_v1.json",
       "seed": 7704,
-      "sha256": "9b9724fed4d8bbcacd20aefa75ca2db8a6f92a23a65be56166ae9006fc3f182c"
+      "sha256": "135d2fed430185b29f8e6bc07665ae6dfc1b94acb75840bdb5ba37442c03aa7a"
     },
     {
-      "bytes": 24847,
+      "bytes": 26690,
       "content": {
         "active_operator_role_assignment": {
           "OP_W": "AVOID",
@@ -4941,6 +5433,11 @@
             "combined": 309888
           }
         },
+        "id_block": [
+          51000,
+          51499
+        ],
+        "id_semantics": "physical IDs fresh and disjoint; model uses manifest-local vocabulary indices",
         "noop_contexts": {
           "count": 34,
           "formula": "U={OP_NOOP->ARG_D:D=0..31} union {START->OP_NOOP,LINK->OP_NOOP}",
@@ -4953,6 +5450,12 @@
           "start_forward": "zero previous state at first token; no BOS invention"
         },
         "noop_operator": "OP_V",
+        "operator_for_role": {
+          "ANCHOR": "OP_X",
+          "AVOID": "OP_W",
+          "FLOOR": "OP_Y",
+          "MATCH": "OP_Z"
+        },
         "operator_order": [
           "OP_V",
           "OP_W",
@@ -4967,6 +5470,40 @@
           "OP_Y": "FLOOR",
           "OP_Z": "MATCH"
         },
+        "permutation": [
+          13,
+          7,
+          18,
+          19,
+          28,
+          9,
+          0,
+          29,
+          16,
+          2,
+          14,
+          12,
+          17,
+          15,
+          20,
+          25,
+          5,
+          23,
+          10,
+          24,
+          3,
+          26,
+          30,
+          27,
+          4,
+          6,
+          21,
+          22,
+          31,
+          8,
+          1,
+          11
+        ],
         "role_assignment": {
           "all_count": 120,
           "all_permutation_order": [
@@ -5953,6 +6490,84 @@
         },
         "status": "prepared_not_executed",
         "task": "T7-NOOP-NONE-LEXICAL-DEVELOPMENT-PREPARATION",
+        "token_ids": {
+          "ARG_00": 51058,
+          "ARG_01": 51388,
+          "ARG_02": 51099,
+          "ARG_03": 51119,
+          "ARG_04": 51266,
+          "ARG_05": 51040,
+          "ARG_06": 51424,
+          "ARG_07": 51482,
+          "ARG_08": 51081,
+          "ARG_09": 51074,
+          "ARG_10": 51279,
+          "ARG_11": 51203,
+          "ARG_12": 51023,
+          "ARG_13": 51270,
+          "ARG_14": 51324,
+          "ARG_15": 51477,
+          "ARG_16": 51255,
+          "ARG_17": 51421,
+          "ARG_18": 51047,
+          "ARG_19": 51316,
+          "ARG_20": 51134,
+          "ARG_21": 51302,
+          "ARG_22": 51055,
+          "ARG_23": 51300,
+          "ARG_24": 51091,
+          "ARG_25": 51346,
+          "ARG_26": 51265,
+          "ARG_27": 51188,
+          "ARG_28": 51242,
+          "ARG_29": 51007,
+          "ARG_30": 51096,
+          "ARG_31": 51301,
+          "LINK": 51398,
+          "OP_W": 51102,
+          "OP_X": 51212,
+          "OP_Y": 51070,
+          "OP_Z": 51353
+        },
+        "token_order": [
+          "ARG_00",
+          "ARG_01",
+          "ARG_02",
+          "ARG_03",
+          "ARG_04",
+          "ARG_05",
+          "ARG_06",
+          "ARG_07",
+          "ARG_08",
+          "ARG_09",
+          "ARG_10",
+          "ARG_11",
+          "ARG_12",
+          "ARG_13",
+          "ARG_14",
+          "ARG_15",
+          "ARG_16",
+          "ARG_17",
+          "ARG_18",
+          "ARG_19",
+          "ARG_20",
+          "ARG_21",
+          "ARG_22",
+          "ARG_23",
+          "ARG_24",
+          "ARG_25",
+          "ARG_26",
+          "ARG_27",
+          "ARG_28",
+          "ARG_29",
+          "ARG_30",
+          "ARG_31",
+          "OP_W",
+          "OP_X",
+          "OP_Y",
+          "OP_Z",
+          "LINK"
+        ],
         "vocabulary": {
           "argument_tokens": [
             "ARG_00",
@@ -6075,9 +6690,56 @@
       },
       "path": "campaign/t7_noop_none_lexical_development_preparation/manifests/manifest_7705_v1.json",
       "seed": 7705,
-      "sha256": "1bb8e0fb7bc0fb2f68fe87fa165343c50911e64d1d23914e46d6d00f401a9173"
+      "sha256": "ceb26787d40e3e77f157792bbd05d8dc6e1a4218f3251b4019955e31c8349730"
     }
   ],
+  "preparation_correction": {
+    "added_fields": [
+      "permutation",
+      "token_order",
+      "token_ids",
+      "id_block",
+      "id_semantics",
+      "operator_for_role"
+    ],
+    "id_blocks": {
+      "7701": [
+        47000,
+        47499
+      ],
+      "7702": [
+        48000,
+        48499
+      ],
+      "7703": [
+        49000,
+        49499
+      ],
+      "7704": [
+        50000,
+        50499
+      ],
+      "7705": [
+        51000,
+        51499
+      ]
+    },
+    "mapping_formula": "random.Random(seed).sample(range(32), 32)",
+    "physical_id_formula": "random.Random(seed + 100000).sample(range(id_block_start, id_block_end + 1), 37)",
+    "preserved_fields": [
+      "role_assignment",
+      "noop_operator",
+      "stage_a",
+      "stage_b",
+      "stage_c",
+      "certificates",
+      "evaluation",
+      "separation_contract"
+    ],
+    "reason": "Original accepted manifests lacked per-seed value permutations and fresh physical token IDs required for genuine fresh domains.",
+    "status": "corrected_and_resold",
+    "training_started": false
+  },
   "production_core_integration": {
     "argument_candidate_unique_values_by_query": [
       32,
@@ -6191,14 +6853,19 @@
   ],
   "source_registry": [
     {
-      "bytes": 8605,
+      "bytes": 9636,
       "path": "scripts/prepare_t7_noop_none_lexical_development.py",
-      "sha256": "0c6f3e0dcef7231c4c368e2cd7058da56d1f7f0d10bd5d51be630f4687396114"
+      "sha256": "04d91db8058630f11437a24d07f2360959a93216c70956ef73295a9238df3935"
     },
     {
-      "bytes": 5518,
+      "bytes": 1733,
+      "path": "scripts/resell_t7_noop_none_lexical_manifests.py",
+      "sha256": "5ff884f379a35e52ff94bc0dd38040770aead83474952bf6ace3c21ad4a4f7c4"
+    },
+    {
+      "bytes": 8347,
       "path": "scripts/check_t7_noop_none_lexical_development.py",
-      "sha256": "74102614ff42d6bc39a7c52fa90e95e5f8361beb607eba814bbc9df7c179811b"
+      "sha256": "318f91a30ccdd467f325e429d7ab883654582995703d4cf4cfbb1b049efb84ed"
     },
     {
       "bytes": 3594,
