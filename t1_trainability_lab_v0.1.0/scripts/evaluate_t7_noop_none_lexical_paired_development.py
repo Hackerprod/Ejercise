@@ -98,7 +98,8 @@ def tensor_digest(tensors: dict[str, torch.Tensor]) -> str:
 
 
 def derived_value(seed: int, values: list[int]) -> int:
-    candidate = (seed + sum(values) + 2) % VALUE_COUNT
+    offset = 1 if len(values) == 2 else 2
+    candidate = (seed + sum(values) + offset) % VALUE_COUNT
     while candidate in values:
         candidate = (candidate + 1) % VALUE_COUNT
     return candidate
