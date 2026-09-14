@@ -1,0 +1,79 @@
+{
+  "artifact_self_hash": "317b893b5ce5304d2dcf7aa02aaf46b7fb50298f79d9169df767028d397b938e",
+  "base_image_verified": true,
+  "derived_image_built": false,
+  "registry_image_available": "NOT_CHECKED_NO_PULL",
+  "runtime_integration_tests": "PREPARED_ONLY; local static/syntax and synthetic budget/runner checks passed; no Docker build or pod execution",
+  "volume_binding_prepared": true,
+  "regional_gpu_quote": {
+    "artifact": "regional_gpu_quote.json",
+    "status": "NO_A4000_QUOTE_IN_US_MO_2",
+    "queried_at_utc": "2026-09-14T06:43:33.593945+00:00",
+    "volume": "q4t3-vol/6yrppoqpkz/US-MO-2",
+    "primary_candidate": "RTX A4000 16GB; global community quote $0.17/h Low, not region-compatible in current US-MO-2 availability response",
+    "regional_visible": "L4 Low and RTX PRO 6000 Low",
+    "artifact_sha256": "b2c41a16314f3e7e111b5811800ab9fcba3f2051563cd7a06b1564c5488a1168"
+  },
+  "pod_created": false,
+  "paid_runtime_authorized": false,
+  "cuda_execution_validated": false,
+  "scientific_pilot_started": false,
+  "base_image": {
+    "reference": "pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime@sha256:eee11b3b3872a8c838e35ef48f08b2d5def2080902c7f666831310ca1a0ef2be",
+    "python_target": "3.12",
+    "framework_policy": "base image owns CUDA torch; do not pip install -U torch or silently replace framework"
+  },
+  "dependency_resolution_check": {
+    "method": "read-only PyPI metadata query; no package installation",
+    "python_target": "3.12",
+    "requires_python": {
+      "transformers==5.4.0": ">=3.10.0",
+      "datasets==4.8.5": ">=3.10.0",
+      "psutil==7.2.2": ">=3.6",
+      "huggingface-hub==1.8.0": ">=3.9.0",
+      "tokenizers==0.22.2": ">=3.9",
+      "safetensors==0.7.0": ">=3.9"
+    },
+    "torch_policy": "torch==2.11.0 is recorded for base-image verification, not pip installation"
+  },
+  "status": "PREPARED_NOT_DEPLOYED",
+  "scope": {
+    "pod_created": false,
+    "money_spent": false,
+    "real_training_started": false,
+    "real_artifacts_transferred": false,
+    "vps_changed": false,
+    "master_or_dataset_redownloaded": false
+  },
+  "prior_fixed_artifacts": {
+    "teacher": {"id": "distilbert/distilgpt2", "revision": "2290a62682d06624634c1f46a6ad5be0f47f38aa"},
+    "dataset": {"id": "Salesforce/wikitext", "config": "wikitext-2-raw-v1", "split": "train", "revision": "b08601e04326c79dfdd32d625aee71d232d685c3"},
+    "cpu_port": "preflight ran on Windows/Python 3.14.3/torch 2.11.0+cpu; pod target is Python 3.12/CUDA image"
+  },
+  "persistent_volume": {
+    "name": "q4t3-vol",
+    "network_volume_id": "6yrppoqpkz",
+    "size_gb": 50,
+    "data_center": "US-MO-2",
+    "attach_only_when_pod_explicitly_approved": true
+  },
+  "files": {
+    "Dockerfile": {"sha256": "bc145337a40a975eb397a0aa99f004488b2a83271db277a2b60ab7c38775a43b", "bytes": 743},
+    "docker/sshd_config": {"sha256": "ae753fe3dd4897dc3c6a0c4a9e5fadc57069f7ecb52aedd640e7d11aa0bee13e", "bytes": 440},
+    "docker/runpod-entrypoint.sh": {"sha256": "1f3a5479340a910a677cacead6e5aedf895a261d9b28c78f344760935b4c490e", "bytes": 650},
+    "requirements.lock": {"sha256": "38de8910f95cf6894d79e934ebb739a884392c37bc3af5930d59df8b0132d501", "bytes": 376},
+    "volume-layout.md": {"sha256": "9d285a222bd889ef2d85485cf481054da2faf8c3e8d5a9718ac66632f32fec24", "bytes": 2691},
+    "vps_control.py": {"sha256": "530f9489aaea01aeae593393a57d995c4fcc90d1121f5ecb4b07cf08e9e7c187", "bytes": 7152},
+    "omega_nominal_microbatch_runner.py": {"sha256": "4339e906fc982404ed1a0400911558b88b135426145ccb3c13fa9ebd18157455", "bytes": 11261},
+    "test_omega_nominal_microbatch_runner.py": {"sha256": "efda38f7ff9b16a378dc6e8b65b7d48ec1b296856ab7ede281164124f72a4be0", "bytes": 3389},
+    "regional_gpu_quote.json": {"sha256": "b2c41a16314f3e7e111b5811800ab9fcba3f2051563cd7a06b1564c5488a1168", "bytes": 1382},
+    "budget_controller.py": {"sha256": "4af53542e998a1ef3e996394086eabbd38e34ec0c749ac4842d15a4b1d737d04", "bytes": 8843},
+    "test_budget_controller.py": {"sha256": "733e83ead4fd7e6d391f4c032e852fac0a0eadc0d732f56e4f596f8dc9679e4c", "bytes": 2627}
+  },
+  "vps_control": {
+    "deployment": "not deployed",
+    "authority": "record-only; no RunPod API, no create/stop/relaunch capability",
+    "transport": "HTTP event receiver suitable for SSH tunnel; local bind default 127.0.0.1",
+    "audit": "JSONL streaming counts/phases/RSS/available memory without loading multi-GB files"
+  }
+}
