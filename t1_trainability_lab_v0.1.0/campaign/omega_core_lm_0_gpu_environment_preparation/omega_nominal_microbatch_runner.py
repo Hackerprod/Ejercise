@@ -38,6 +38,10 @@ from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
 
 
 PHASES = ("update_started", "student_forward_completed", "teacher_forward_completed", "loss_completed", "memory_guard_failed", "backward_completed", "optimizer_step_started", "optimizer_step_completed", "update_completed")
+EFFECTIVE_BATCH = 8
+TOKENS_PER_WINDOW = 256
+SOURCE_TOKENS = 513
+SUPPORTED_PHYSICAL_BATCHES = (2, 4, 8)
 WINDOWS = (
     {"window": 0, "input_range": [0, 256], "target_range": [1, 257], "teacher_context_range": [0, 256]},
     {"window": 1, "input_range": [256, 512], "target_range": [257, 513], "teacher_context_range": [0, 512]},
@@ -67,12 +71,19 @@ APPROVED_SELECTION_MANIFEST = {
 }
 
 
+def microbatch_count_for_physical_batch(physical_batch: int) -> int:
+    if type(physical_batch) is not int or physical_batch not in SUPPORTED_PHYSICAL_BATCHES:
+        raise ValueError(f"physical_batch must be one of {SUPPORTED_PHYSICAL_BATCHES}, got {physical_batch}")
+    return EFFECTIVE_BATCH // physical_batch
+
+
 class RunLedger:
     """Append-only run ledger; never deletes or silently reuses an old run."""
 
-    def __init__(self, run_dir: Path, run_id: str, *, resume: bool = False) -> None:
+    def __init__(self, run_dir: Path, run_id: str, *, resume: bool = False, profile: dict[str, float] | None = None) -> None:
         self.run_dir = run_dir
         self.run_id = run_id
+        self.profile = profile
         self.events_path = run_dir / "events.jsonl"
         if self.events_path.exists() and not resume:
             raise FileExistsError(f"run ledger already exists; choose new run_id or explicit resume: {self.events_path}")
@@ -81,6 +92,7 @@ class RunLedger:
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
     def append(self, event: dict[str, Any]) -> None:
+        started = time.perf_counter()
         required = {
             "run_id", "variant", "update", "microbatch", "phase", "status", "elapsed_seconds", "memory",
             "document_id", "input_range", "target_range", "teacher_context_range", "window",
@@ -96,6 +108,8 @@ class RunLedger:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        if self.profile is not None:
+            self.profile["ledger_instrumentation_seconds"] = self.profile.get("ledger_instrumentation_seconds", 0.0) + time.perf_counter() - started
 
 
 def synchronize(device: torch.device) -> None:
@@ -269,21 +283,20 @@ def ledger_summary(path: Path) -> dict[str, Any]:
     return {"events": len(events), "applied_updates": applied, "uncertain_updates": uncertain, "completed_updates": completed, "phases": [event["phase"] for event in events]}
 
 
-def microbatch_update(*, ledger: RunLedger, run_id: str, variant: str, update: int, student: OmegaCoreLM0R1Technical, teacher: torch.nn.Module, source: torch.Tensor, valid_mask: torch.Tensor, optimizer: torch.optim.Optimizer, window: int, persistent_state: torch.Tensor | None, input_valid_mask: torch.Tensor | None = None, memory_limit_rss_bytes: int | None = None, clip_max_norm: float = 1.0, fault: str | None = None, physical_batch: int = 2, document_ids: list[str] | None = None, source_manifest: dict[str, Any] | None = None, state_source_update: int | None = None) -> tuple[torch.Tensor, dict[str, Any]]:
-    if physical_batch != 2:
-        raise ValueError("OMEGA nominal runner requires physical_batch=2")
+def microbatch_update(*, ledger: RunLedger, run_id: str, variant: str, update: int, student: OmegaCoreLM0R1Technical, teacher: torch.nn.Module, source: torch.Tensor, valid_mask: torch.Tensor, optimizer: torch.optim.Optimizer, window: int, persistent_state: torch.Tensor | None, input_valid_mask: torch.Tensor | None = None, memory_limit_rss_bytes: int | None = None, clip_max_norm: float = 1.0, fault: str | None = None, physical_batch: int = 2, document_ids: list[str] | None = None, source_manifest: dict[str, Any] | None = None, state_source_update: int | None = None, profile: dict[str, float] | None = None, forward_window_fn: Callable[..., tuple[torch.Tensor, torch.Tensor]] | None = None, comparison_capture: dict[str, Any] | None = None) -> tuple[torch.Tensor, dict[str, Any]]:
+    microbatches = microbatch_count_for_physical_batch(physical_batch)
     if clip_max_norm <= 0:
         raise ValueError("clip_max_norm must be positive")
     if window not in (0, 1):
         raise ValueError(f"window must be 0 or 1, got {window}")
-    if source.shape[0] != 8 or source.shape[1] != 513:
-        raise ValueError(f"source must be [8,513], got {tuple(source.shape)}")
-    if valid_mask.shape != (8, 256):
-        raise ValueError(f"valid_mask must be [8,256], got {tuple(valid_mask.shape)}")
+    if source.shape != (EFFECTIVE_BATCH, SOURCE_TOKENS):
+        raise ValueError(f"source must be [{EFFECTIVE_BATCH},{SOURCE_TOKENS}], got {tuple(source.shape)}")
+    if valid_mask.shape != (EFFECTIVE_BATCH, TOKENS_PER_WINDOW):
+        raise ValueError(f"valid_mask must be [{EFFECTIVE_BATCH},{TOKENS_PER_WINDOW}], got {tuple(valid_mask.shape)}")
     if input_valid_mask is None:
         input_valid_mask = torch.ones_like(valid_mask)
-    if input_valid_mask.shape != (8, 256):
-        raise ValueError(f"input_valid_mask must be [8,256], got {tuple(input_valid_mask.shape)}")
+    if input_valid_mask.shape != (EFFECTIVE_BATCH, TOKENS_PER_WINDOW):
+        raise ValueError(f"input_valid_mask must be [{EFFECTIVE_BATCH},{TOKENS_PER_WINDOW}], got {tuple(input_valid_mask.shape)}")
     if valid_mask.dtype != torch.bool:
         raise TypeError("target valid_mask must be bool")
     if input_valid_mask.dtype != torch.bool:
@@ -294,8 +307,8 @@ def microbatch_update(*, ledger: RunLedger, run_id: str, variant: str, update: i
     if window == 1 and persistent_state is None:
         raise ValueError("window 1 requires detached per-sequence persistent state")
     if document_ids is None:
-        document_ids = [f"sequence-{index}" for index in range(8)]
-    if len(document_ids) != 8:
+        document_ids = [f"sequence-{index}" for index in range(EFFECTIVE_BATCH)]
+    if len(document_ids) != EFFECTIVE_BATCH:
         raise ValueError("document_ids must contain one ID per source sequence")
     if state_source_update is None:
         state_source_update = None if window == 0 else update - 1
@@ -304,34 +317,45 @@ def microbatch_update(*, ledger: RunLedger, run_id: str, variant: str, update: i
     if window == 1 and state_source_update != update - 1:
         raise ValueError("window 1 state must come from immediately preceding window 0 update")
     optimizer.zero_grad(set_to_none=True)
+    if forward_window_fn is None:
+        forward_window_fn = student.forward_window
     update_timer = ExecutionTimer(source.device)
     if memory_limit_rss_bytes is not None:
         observed = memory_observed(source.device)
         if observed["rss_bytes"] is not None and observed["rss_bytes"] >= memory_limit_rss_bytes:
             ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch="all", phase="memory_guard_failed", timer=update_timer, input_shape=[8, 256], student_shape=None, teacher_shape=None, valid_tokens=total_valid, document_ids=document_ids, window=window, state_source_update=state_source_update, manifest=source_manifest, status="ABORTED", metrics={"rss_bytes": float(observed["rss_bytes"]), "memory_limit_rss_bytes": float(memory_limit_rss_bytes)}))
             raise MemoryError("RSS memory guard exceeded before update allocation")
-    next_state = torch.zeros(8, student.slots, student.dimension, device=source.device)
+    next_state = torch.zeros(EFFECTIVE_BATCH, student.slots, student.dimension, device=source.device)
     micro_metrics: list[dict[str, Any]] = []
-    for microbatch, start in enumerate(range(0, 8, physical_batch)):
+    for microbatch, start in enumerate(range(0, EFFECTIVE_BATCH, physical_batch)):
         stop = start + physical_batch
         if memory_limit_rss_bytes is not None:
             observed = memory_observed(source.device)
             if observed["rss_bytes"] is not None and observed["rss_bytes"] >= memory_limit_rss_bytes:
                 ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="memory_guard_failed", timer=update_timer, input_shape=[physical_batch, 256], student_shape=None, teacher_shape=None, valid_tokens=int(valid_mask[start:stop].sum().item()), document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest, status="ABORTED", metrics={"rss_bytes": float(observed["rss_bytes"]), "memory_limit_rss_bytes": float(memory_limit_rss_bytes)}))
                 raise MemoryError("RSS memory guard exceeded before microbatch forward")
-        input_ids = source[start:stop, :256] if window == 0 else source[start:stop, 256:512]
-        targets = source[start:stop, 1:257] if window == 0 else source[start:stop, 257:513]
+        input_ids = source[start:stop, :TOKENS_PER_WINDOW] if window == 0 else source[start:stop, TOKENS_PER_WINDOW : SOURCE_TOKENS - 1]
+        targets = source[start:stop, 1 : TOKENS_PER_WINDOW + 1] if window == 0 else source[start:stop, TOKENS_PER_WINDOW + 1 : SOURCE_TOKENS]
         target_mask = valid_mask[start:stop]
         input_mask = input_valid_mask[start:stop]
         valid_count = int(target_mask.sum().item())
         previous = torch.zeros(physical_batch, student.slots, student.dimension, device=source.device) if window == 0 else persistent_state[start:stop]
         ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="update_started", timer=update_timer, input_shape=list(input_ids.shape), student_shape=None, teacher_shape=None, valid_tokens=valid_count, document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest))
-        next_micro_state, student_logits = student.forward_window(input_ids, previous, input_mask)
+        if profile is None:
+            next_micro_state, student_logits = forward_window_fn(input_ids, previous, input_mask)
+        else:
+            next_micro_state, student_logits = forward_window_fn(input_ids, previous, input_mask, profile=profile)
         ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="student_forward_completed", timer=update_timer, input_shape=list(input_ids.shape), student_shape=list(student_logits.shape), teacher_shape=None, valid_tokens=valid_count, document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest))
         teacher_source = source[start:stop]
+        phase_started = time.perf_counter()
         teacher_logits = compact_teacher_logits(teacher, teacher_source, window)
+        if profile is not None:
+            profile["teacher_forward_seconds"] = profile.get("teacher_forward_seconds", 0.0) + time.perf_counter() - phase_started
         ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="teacher_forward_completed", timer=update_timer, input_shape=list(input_ids.shape), student_shape=list(student_logits.shape), teacher_shape=list(teacher_logits.shape), valid_tokens=valid_count, document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest))
+        phase_started = time.perf_counter()
         losses = distillation_loss(student_logits, teacher_logits, targets, target_mask)
+        if profile is not None:
+            profile["ce_kl_softmax_seconds"] = profile.get("ce_kl_softmax_seconds", 0.0) + time.perf_counter() - phase_started
         scale = valid_count / total_valid
         scalar_metrics = {"ce": float(losses["ce"].detach().item()), "kl": float(losses["kl"].detach().item()), "total_loss_mean": float(losses["total"].detach().item()), "weight_from_real_mask": scale, "valid_tokens_total": total_valid}
         loss_event = _event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="loss_completed", timer=update_timer, input_shape=list(input_ids.shape), student_shape=list(student_logits.shape), teacher_shape=list(teacher_logits.shape), valid_tokens=valid_count, document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest, metrics=scalar_metrics)
@@ -343,25 +367,41 @@ def microbatch_update(*, ledger: RunLedger, run_id: str, variant: str, update: i
                 raise MemoryError("RSS memory guard exceeded after loss; backward aborted")
         if fault == "after_loss":
             raise RuntimeError("controlled runner fault after loss")
+        phase_started = time.perf_counter()
         (losses["total"] * scale).backward()
+        if profile is not None:
+            profile["student_backward_seconds"] = profile.get("student_backward_seconds", 0.0) + time.perf_counter() - phase_started
         ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch=microbatch, phase="backward_completed", timer=update_timer, input_shape=list(input_ids.shape), student_shape=list(student_logits.shape), teacher_shape=list(teacher_logits.shape), valid_tokens=valid_count, document_ids=document_ids[start:stop], window=window, state_source_update=state_source_update, manifest=source_manifest))
         if fault == "after_backward":
             raise RuntimeError("controlled runner fault after backward")
         next_state[start:stop] = next_micro_state.detach()
         del next_micro_state, student_logits, teacher_logits, losses
-        micro_metrics.append({"microbatch": microbatch, "valid_tokens": valid_count, "weight": scale})
+        micro_metrics.append({"microbatch": microbatch, "valid_tokens": valid_count, "weight": scale, "ce": scalar_metrics["ce"], "kl": scalar_metrics["kl"], "total_loss_mean": scalar_metrics["total_loss_mean"]})
     pre_clip_grad_norm = float(torch.nn.utils.clip_grad_norm_(student.parameters(), clip_max_norm).item())
+    if comparison_capture is not None:
+        comparison_capture["loss"] = sum(item["total_loss_mean"] * item["weight"] for item in micro_metrics)
+        comparison_capture["gradients_before_optimizer_step"] = [parameter.grad.detach().cpu().clone() if parameter.grad is not None else None for parameter in student.parameters()]
+        comparison_capture["parameters_before_optimizer_step"] = [parameter.detach().cpu().clone() for parameter in student.parameters()]
     ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch="all", phase="optimizer_step_started", timer=update_timer, input_shape=[8, 256], student_shape=[8, 256, student.vocab_size], teacher_shape=[8, 256, student.vocab_size], valid_tokens=total_valid, document_ids=document_ids, window=window, state_source_update=state_source_update, manifest=source_manifest, status="started", metrics={"clip_max_norm": clip_max_norm, "pre_clip_grad_norm": pre_clip_grad_norm}))
+    phase_started = time.perf_counter()
     try:
         optimizer.step()
     except Exception:
         ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch="all", phase="optimizer_step_started", timer=update_timer, input_shape=[8, 256], student_shape=None, teacher_shape=None, valid_tokens=total_valid, document_ids=document_ids, window=window, state_source_update=state_source_update, manifest=source_manifest, status="UNCERTAIN"))
         raise
+    finally:
+        if profile is not None:
+            profile["optimizer_step_seconds"] = profile.get("optimizer_step_seconds", 0.0) + time.perf_counter() - phase_started
+    if comparison_capture is not None:
+        comparison_capture["parameter_update"] = [parameter.detach().cpu().clone() - before for parameter, before in zip(student.parameters(), comparison_capture["parameters_before_optimizer_step"], strict=True)]
     ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch="all", phase="optimizer_step_completed", timer=update_timer, input_shape=[8, 256], student_shape=[8, 256, student.vocab_size], teacher_shape=[8, 256, student.vocab_size], valid_tokens=total_valid, document_ids=document_ids, window=window, state_source_update=state_source_update, manifest=source_manifest, status="APPLIED"))
     optimizer.zero_grad(set_to_none=True)
     ledger.append(_event(run_id=run_id, variant=variant, update=update, microbatch="all", phase="update_completed", timer=update_timer, input_shape=[8, 256], student_shape=[8, 256, student.vocab_size], teacher_shape=[8, 256, student.vocab_size], valid_tokens=total_valid, document_ids=document_ids, window=window, state_source_update=state_source_update, manifest=source_manifest))
     elapsed_seconds, cuda_elapsed_seconds = update_timer.elapsed()
-    return next_state.detach(), {"update": update, "window": window, "effective_batch": 8, "physical_batch": physical_batch, "microbatches": 4, "valid_tokens": total_valid, "microbatch_metrics": micro_metrics, "pre_clip_grad_norm": pre_clip_grad_norm, "clip_max_norm": clip_max_norm, "elapsed_seconds": elapsed_seconds, "cuda_elapsed_seconds": cuda_elapsed_seconds}
+    loss_summary = {key: sum(item[key] * item["weight"] for item in micro_metrics) for key in ("ce", "kl", "total_loss_mean")}
+    if comparison_capture is not None:
+        comparison_capture["final_state"] = next_state.detach().cpu().clone()
+    return next_state.detach(), {"update": update, "window": window, "effective_batch": EFFECTIVE_BATCH, "physical_batch": physical_batch, "microbatches": microbatches, "valid_tokens": total_valid, "microbatch_metrics": micro_metrics, "loss_summary": loss_summary, "pre_clip_grad_norm": pre_clip_grad_norm, "clip_max_norm": clip_max_norm, "elapsed_seconds": elapsed_seconds, "cuda_elapsed_seconds": cuda_elapsed_seconds}
 
 
 def load_fixed_dataset_and_tokenizer(cache_root: Path) -> tuple[Any, Any]:

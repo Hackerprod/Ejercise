@@ -137,16 +137,30 @@ class OmegaCoreLM0R1Technical(nn.Module):
         projected = self.output_projection(normalized)
         return projected @ self.embedding.weight.transpose(0, 1) / math.sqrt(self.dimension)
 
-    def forward_token(self, token: Tensor, previous_state: Tensor) -> tuple[Tensor, Tensor]:
+    def forward_token(self, token: Tensor, previous_state: Tensor, profile: dict[str, float] | None = None) -> tuple[Tensor, Tensor]:
+        if profile is None:
+            anchor = self.prelude_step(token, previous_state)
+            final_state = self.update_step(anchor)
+            return final_state, self.readout_from_state(final_state)
+        started = time.perf_counter()
         anchor = self.prelude_step(token, previous_state)
+        if profile is not None:
+            profile["student_prelude_seconds"] = profile.get("student_prelude_seconds", 0.0) + time.perf_counter() - started
+        started = time.perf_counter()
         final_state = self.update_step(anchor)
-        return final_state, self.readout_from_state(final_state)
+        if profile is not None:
+            profile["student_recurrent_rounds_seconds"] = profile.get("student_recurrent_rounds_seconds", 0.0) + time.perf_counter() - started
+        started = time.perf_counter()
+        logits = self.readout_from_state(final_state)
+        if profile is not None:
+            profile["readout_seconds"] = profile.get("readout_seconds", 0.0) + time.perf_counter() - started
+        return final_state, logits
 
-    def forward_window(self, tokens: Tensor, previous_state: Tensor, valid_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+    def forward_window(self, tokens: Tensor, previous_state: Tensor, valid_mask: Tensor | None = None, profile: dict[str, float] | None = None) -> tuple[Tensor, Tensor]:
         state = previous_state
         outputs: list[Tensor] = []
         for position in range(tokens.shape[1]):
-            next_state, logits = self.forward_token(tokens[:, position], state)
+            next_state, logits = self.forward_token(tokens[:, position], state, profile)
             if valid_mask is None:
                 state = next_state
             else:

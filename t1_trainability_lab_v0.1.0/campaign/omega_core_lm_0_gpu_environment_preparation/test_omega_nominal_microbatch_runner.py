@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 
-from omega_nominal_microbatch_runner import OmegaCoreLM0R1Technical, RunLedger, ledger_summary, microbatch_update, read_ledger
+from omega_nominal_microbatch_runner import EFFECTIVE_BATCH, OmegaCoreLM0R1Technical, RunLedger, ledger_summary, microbatch_count_for_physical_batch, microbatch_update, read_ledger
 
 
 class TinyTeacher(torch.nn.Module):
@@ -78,6 +78,62 @@ def test_memory_guard_aborts_before_backward() -> None:
         events = read_ledger(ledger.events_path)
         assert any(event["phase"] == "memory_guard_failed" and event["status"] == "ABORTED" for event in events)
         assert not any(event["phase"] == "backward_completed" for event in events)
+
+
+def test_physical_batch_partitions_are_cpu_numerically_equivalent() -> None:
+    torch.manual_seed(4110)
+    source = torch.arange(EFFECTIVE_BATCH * 513, dtype=torch.long).reshape(EFFECTIVE_BATCH, 513) % 11
+    mask = torch.ones(EFFECTIVE_BATCH, 256, dtype=torch.bool)
+    input_mask = torch.ones_like(mask)
+    template = OmegaCoreLM0R1Technical(vocab_size=11, dimension=4, slots=2, rounds=1)
+    template_optimizer = torch.optim.AdamW(template.parameters(), lr=3e-4)
+    initial_model = copy.deepcopy(template.state_dict())
+    initial_optimizer = copy.deepcopy(template_optimizer.state_dict())
+    results: dict[int, tuple[torch.Tensor, dict[str, object], torch.nn.Module, torch.optim.Optimizer]] = {}
+    with tempfile.TemporaryDirectory() as directory:
+        for physical_batch in (2, 4, 8):
+            student = OmegaCoreLM0R1Technical(vocab_size=11, dimension=4, slots=2, rounds=1)
+            student.load_state_dict(copy.deepcopy(initial_model))
+            optimizer = torch.optim.AdamW(student.parameters(), lr=3e-4)
+            optimizer.load_state_dict(copy.deepcopy(initial_optimizer))
+            state, metrics = microbatch_update(
+                ledger=RunLedger(Path(directory) / f"run-{physical_batch}", f"fixture-{physical_batch}"),
+                run_id=f"fixture-{physical_batch}",
+                variant="shared_K1",
+                update=0,
+                student=student,
+                teacher=TinyTeacher(),
+                source=source,
+                valid_mask=mask,
+                input_valid_mask=input_mask,
+                optimizer=optimizer,
+                window=0,
+                persistent_state=None,
+                physical_batch=physical_batch,
+            )
+            events = read_ledger(Path(directory) / f"run-{physical_batch}" / "events.jsonl")
+            assert sum(event["phase"] == "backward_completed" for event in events) == microbatch_count_for_physical_batch(physical_batch)
+            assert all(event["input_shape"] == [physical_batch, 256] for event in events if event["microbatch"] != "all")
+            assert all(event["input_range"] == [0, 256] and event["target_range"] == [1, 257] for event in events)
+            assert all(event["document_id"] == [f"sequence-{index}" for index in range(start, start + physical_batch)] for start in range(0, 8, physical_batch) for event in events if event["microbatch"] == start // physical_batch)
+            results[physical_batch] = (state, metrics, student, optimizer)
+    baseline_state, baseline_metrics, baseline_student, baseline_optimizer = results[2]
+    for physical_batch in (4, 8):
+        state, metrics, student, optimizer = results[physical_batch]
+        assert torch.allclose(state, baseline_state, atol=1e-5, rtol=0.0)
+        for key in ("ce", "kl", "total_loss_mean"):
+            assert abs(metrics["loss_summary"][key] - baseline_metrics["loss_summary"][key]) <= 1e-5
+        assert abs(metrics["pre_clip_grad_norm"] - baseline_metrics["pre_clip_grad_norm"]) <= 1e-5
+        for left, right in zip(baseline_student.parameters(), student.parameters(), strict=True):
+            assert torch.allclose(left, right, atol=1e-5, rtol=0.0)
+        assert baseline_optimizer.state_dict()["param_groups"] == optimizer.state_dict()["param_groups"]
+        for left_state, right_state in zip(baseline_optimizer.state_dict()["state"].values(), optimizer.state_dict()["state"].values(), strict=True):
+            for key in left_state:
+                left_value, right_value = left_state[key], right_state[key]
+                if torch.is_tensor(left_value):
+                    assert torch.allclose(left_value, right_value, atol=1e-5, rtol=0.0)
+                else:
+                    assert left_value == right_value
 
 
 def test_directory_protection() -> None:
