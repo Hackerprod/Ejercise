@@ -46,6 +46,10 @@ def test_masked_accumulation_and_state() -> None:
         assert len(events["applied_updates"]) == 1 and len(events["completed_updates"]) == 1
         events = read_ledger(ledger.events_path)
         assert sum(event["phase"] == "backward_completed" for event in events) == 4
+        ledger_fields = {"document_id", "input_range", "target_range", "teacher_context_range", "window", "state_reset", "state_source_update", "valid_tokens"}
+        assert all(ledger_fields <= event.keys() for event in events)
+        assert all(len(event["document_id"]) == (8 if event["microbatch"] == "all" else 2) for event in events)
+        assert all(event["input_range"] == [0, 256] and event["target_range"] == [1, 257] for event in events)
         weights = [event["metrics"]["weight_from_real_mask"] for event in events if event["phase"] == "loss_completed"]
         assert abs(sum(weights) - 1.0) < 1e-12 and len(set(weights)) > 1
         step_events = [event for event in events if event["phase"] == "optimizer_step_started"]
@@ -80,7 +84,7 @@ def test_directory_protection() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_dir = Path(directory) / "run-1"
         first = RunLedger(run_dir, "fixture-run")
-        first.append({"run_id": "fixture-run", "variant": "tiny", "update": 1, "microbatch": 0, "phase": "update_started", "status": "completed", "elapsed_seconds": 0.0, "memory": {}})
+        first.append({"run_id": "fixture-run", "variant": "tiny", "update": 1, "microbatch": 0, "phase": "update_started", "status": "completed", "elapsed_seconds": 0.0, "memory": {}, "document_id": ["sequence-0"], "input_range": [0, 256], "target_range": [1, 257], "teacher_context_range": [0, 256], "window": 0, "state_reset": True, "state_source_update": None, "valid_tokens": 0})
         try:
             RunLedger(run_dir, "fixture-run")
         except FileExistsError:
