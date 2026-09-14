@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -16,6 +17,9 @@ from run_scientific_scoping_a import (  # noqa: E402
     PHYSICAL_BATCH,
     SMOKE_BOUNDARIES,
     VARIANTS,
+    TinyTeacher,
+    WINDOW_TOKENS,
+    _batch_loss,
     build_manifest,
     build_pair_manifest,
     checkpoint_boundaries,
@@ -26,6 +30,11 @@ from run_scientific_scoping_a import (  # noqa: E402
     synthetic_documents,
     validate_policy,
     validate_resume_boundary,
+)
+from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
+    OmegaCoreLM0R1Technical,
+    distillation_loss,
+    teacher_window_logits,
 )
 
 
@@ -122,3 +131,73 @@ def test_new_runner_has_no_external_split_or_accelerator_path() -> None:
 def test_fp32_cpu_policy_is_explicit() -> None:
     policy = validate_policy()
     assert policy == {"device": "cpu", "dtype": "float32", "execution": "eager", "physical_batch": PHYSICAL_BATCH, "effective_batch": 8, "microbatches": 1, "optimizer": "AdamW", "teacher_frozen": True}
+
+
+def _reference_batch_loss(
+    model: OmegaCoreLM0R1Technical,
+    teacher: torch.nn.Module,
+    documents: list[dict[str, object]],
+    window: int,
+    previous_states: list[torch.Tensor] | None,
+) -> tuple[torch.Tensor, list[torch.Tensor], int]:
+    losses: list[torch.Tensor] = []
+    next_states: list[torch.Tensor] = []
+    valid_tokens = 0
+    for index, document in enumerate(documents):
+        source = torch.tensor(document["tokens"], dtype=torch.long).unsqueeze(0)
+        start = window * WINDOW_TOKENS
+        inputs = source[:, start : start + WINDOW_TOKENS]
+        targets = source[:, start + 1 : start + WINDOW_TOKENS + 1]
+        if window == 0:
+            state = model.initial_state(1, device=torch.device("cpu"))
+        else:
+            assert previous_states is not None
+            state = previous_states[index]
+        next_state, logits = model.forward_window(inputs, state)
+        teacher_logits = teacher_window_logits(teacher, source, window)
+        mask = torch.ones_like(targets, dtype=torch.bool)
+        losses.append(distillation_loss(logits, teacher_logits[:, :WINDOW_TOKENS], targets, mask)["total"])
+        next_states.append(next_state.detach())
+        valid_tokens += int(mask.sum().item())
+    return torch.stack(losses).mean(), next_states, valid_tokens
+
+
+def test_batched_loss_matches_reference_loop_through_optimizer_step() -> None:
+    torch.manual_seed(20260914)
+    documents = [
+        {"tokens": [((index + 1) * 3 + position) % 17 for position in range(513)]}
+        for index in range(PHYSICAL_BATCH)
+    ]
+    reference = OmegaCoreLM0R1Technical(vocab_size=17, dimension=4, slots=1, rounds=1, variant="shared").to(dtype=torch.float32)
+    batched = OmegaCoreLM0R1Technical(vocab_size=17, dimension=4, slots=1, rounds=1, variant="shared").to(dtype=torch.float32)
+    batched.load_state_dict(reference.state_dict())
+    reference_optimizer = torch.optim.AdamW(reference.parameters(), lr=3e-4)
+    batched_optimizer = torch.optim.AdamW(batched.parameters(), lr=3e-4)
+    teacher = TinyTeacher(17)
+    reference_states: list[torch.Tensor] | None = None
+    batched_states: list[torch.Tensor] | None = None
+
+    for window in (0, 1):
+        reference_optimizer.zero_grad(set_to_none=True)
+        batched_optimizer.zero_grad(set_to_none=True)
+        reference_loss, reference_states_next, reference_valid = _reference_batch_loss(reference, teacher, documents, window, reference_states)
+        batched_loss, batched_states_next, batched_valid = _batch_loss(batched, teacher, documents, window, batched_states)
+        assert batched_valid == reference_valid == PHYSICAL_BATCH * WINDOW_TOKENS
+        assert torch.allclose(batched_loss, reference_loss, atol=1e-5, rtol=1e-5)
+        assert all(not state.requires_grad for state in batched_states_next)
+        for reference_state, batched_state in zip(reference_states_next, batched_states_next):
+            assert torch.allclose(batched_state, reference_state, atol=1e-5, rtol=1e-5)
+        reference_loss.backward()
+        batched_loss.backward()
+        for reference_parameter, batched_parameter in zip(reference.parameters(), batched.parameters()):
+            assert reference_parameter.grad is not None
+            assert batched_parameter.grad is not None
+            assert torch.allclose(batched_parameter.grad, reference_parameter.grad, atol=1e-5, rtol=1e-5)
+        torch.nn.utils.clip_grad_norm_(reference.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(batched.parameters(), 1.0)
+        reference_optimizer.step()
+        batched_optimizer.step()
+        for reference_parameter, batched_parameter in zip(reference.parameters(), batched.parameters()):
+            assert torch.allclose(batched_parameter, reference_parameter, atol=1e-5, rtol=1e-5)
+        reference_states = reference_states_next if window == 0 else None
+        batched_states = batched_states_next if window == 0 else None

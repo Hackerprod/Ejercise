@@ -404,27 +404,22 @@ def _batch_loss(
     window: int,
     previous_states: list[torch.Tensor] | None,
 ) -> tuple[torch.Tensor, list[torch.Tensor], int]:
-    losses: list[torch.Tensor] = []
-    next_states: list[torch.Tensor] = []
-    valid_tokens = 0
-    for index, document in enumerate(documents):
-        source = torch.tensor(document["tokens"], dtype=torch.long).unsqueeze(0)
-        input_start = window * WINDOW_TOKENS
-        input_ids = source[:, input_start : input_start + WINDOW_TOKENS]
-        targets = source[:, input_start + 1 : input_start + WINDOW_TOKENS + 1]
-        if window == 0:
-            state = model.initial_state(1, device=torch.device("cpu"))
-        else:
-            if previous_states is None:
-                raise ValueError("window 1 requires previous detached window 0 states")
-            state = previous_states[index]
-        next_state, logits = model.forward_window(input_ids, state)
-        teacher_logits = teacher_window_logits(teacher, source, window)
-        mask = torch.ones_like(targets, dtype=torch.bool)
-        losses.append(distillation_loss(logits, teacher_logits[:, :WINDOW_TOKENS], targets, mask)["total"])
-        next_states.append(next_state.detach())
-        valid_tokens += int(mask.sum().item())
-    return torch.stack(losses).mean(), next_states, valid_tokens
+    source = torch.tensor([document["tokens"] for document in documents], dtype=torch.long)
+    input_start = window * WINDOW_TOKENS
+    input_ids = source[:, input_start : input_start + WINDOW_TOKENS]
+    targets = source[:, input_start + 1 : input_start + WINDOW_TOKENS + 1]
+    if window == 0:
+        state = model.initial_state(len(documents), device=torch.device("cpu"))
+    else:
+        if previous_states is None:
+            raise ValueError("window 1 requires previous detached window 0 states")
+        state = torch.cat(previous_states, dim=0)
+    next_state, logits = model.forward_window(input_ids, state)
+    teacher_logits = teacher_window_logits(teacher, source, window)
+    mask = torch.ones_like(targets, dtype=torch.bool)
+    loss = distillation_loss(logits, teacher_logits[:, :WINDOW_TOKENS], targets, mask)["total"]
+    next_states = [next_state[index : index + 1].detach() for index in range(len(documents))]
+    return loss, next_states, int(mask.sum().item())
 
 
 def evaluate_validation(model: OmegaCoreLM0R1Technical, documents: list[dict[str, Any]]) -> dict[str, Any]:
