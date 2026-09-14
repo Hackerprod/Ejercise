@@ -241,11 +241,21 @@ VARIANT_CONFIG = {
 
 
 def _preflight_source(dataset: Any, tokenizer: Any, device: torch.device) -> tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
-    text = str(dataset[0].get("text", "")).strip()
-    if not text:
-        raise ValueError("fixed dataset first record has no usable text")
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+    text = ""
+    for row in dataset:
+        candidate = str(row.get("text", "")).strip()
+        stripped_equals = candidate.strip("= ").strip()
+        is_header_only = candidate.startswith("=") and candidate.endswith("=") and len(stripped_equals) < len(candidate)
+        if not candidate or is_header_only or len(candidate) < 1600:
+            continue
+        token_count = len(tokenizer(candidate, add_special_tokens=False)["input_ids"])
+        if token_count >= 400:
+            text = candidate
+            break
+    if not text:
+        raise ValueError("fixed dataset has no single record long enough to cover both windows")
     encoded = tokenizer([text] * 8, padding="max_length", truncation=True, max_length=513, return_tensors="pt")
     source = encoded["input_ids"].to(device)
     attention = encoded.get("attention_mask", torch.ones_like(source)).to(device).bool()
