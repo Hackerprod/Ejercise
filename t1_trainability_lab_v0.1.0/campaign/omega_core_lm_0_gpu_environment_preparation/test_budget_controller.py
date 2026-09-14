@@ -16,9 +16,9 @@ from budget_controller import (
 
 def test_budget_and_confirmed_lifecycle() -> None:
     launched = datetime(2026, 9, 14, tzinfo=timezone.utc)
-    controller = SimulatedBudgetController(BudgetPolicy(max_hours=2.0, hourly_rate=0.17))
+    controller = SimulatedBudgetController(BudgetPolicy(max_hours=2.0, hourly_rate=0.49))
     controller.observe(PodObservation(
-        "pod-1", "RTX A4000 16GB", PodState.RUNNING, launched,
+        "pod-1", "NVIDIA L4", PodState.RUNNING, launched,
         "q4t3-vol", "6yrppoqpkz", "US-MO-2",
     ))
     decision = controller.evaluate(launched + timedelta(hours=1.5))
@@ -35,15 +35,15 @@ def test_budget_and_confirmed_lifecycle() -> None:
 
 def test_replacement_and_binding_changes_are_rejected() -> None:
     launched = datetime(2026, 9, 14, tzinfo=timezone.utc)
-    controller = SimulatedBudgetController()
+    controller = SimulatedBudgetController(BudgetPolicy(hourly_rate=0.49))
     observation = PodObservation(
-        "pod-1", "RTX A4000 16GB", PodState.RUNNING, launched,
+        "pod-1", "NVIDIA L4", PodState.RUNNING, launched,
         "q4t3-vol", "6yrppoqpkz", "US-MO-2",
     )
     controller.observe(observation)
     try:
         controller.observe(PodObservation(
-            "pod-2", "RTX A4000 16GB", PodState.RUNNING, launched,
+            "pod-2", "NVIDIA L4", PodState.RUNNING, launched,
             "q4t3-vol", "6yrppoqpkz", "US-MO-2",
         ))
     except ValueError as exc:
@@ -52,7 +52,7 @@ def test_replacement_and_binding_changes_are_rejected() -> None:
         raise AssertionError("replacement pod accepted")
     try:
         controller.observe(PodObservation(
-            "pod-1", "RTX A4000 16GB", PodState.RUNNING, launched,
+            "pod-1", "NVIDIA L4", PodState.RUNNING, launched,
             "other-volume", "other-id", "US-MO-2",
         ))
     except ValueError as exc:

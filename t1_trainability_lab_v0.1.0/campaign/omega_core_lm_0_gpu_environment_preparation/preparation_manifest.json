@@ -1,23 +1,44 @@
 {
-  "artifact_self_hash": "317b893b5ce5304d2dcf7aa02aaf46b7fb50298f79d9169df767028d397b938e",
+  "artifact_self_hash": "6317725921df225eb87b812c4a34d06f3545ce3e22da2f229f7d1b6312fa29a9",
   "base_image_verified": true,
   "derived_image_built": false,
-  "registry_image_available": "NOT_CHECKED_NO_PULL",
-  "runtime_integration_tests": "PREPARED_ONLY; local static/syntax and synthetic budget/runner checks passed; no Docker build or pod execution",
+  "derived_image_build": {
+    "status": "BLOCKED_OPERATIONALLY",
+    "reason": "Docker, Podman, Buildah, nerdctl, and Kaniko unavailable on laptop and VPS builder; no CI builder configured",
+    "dockerfile_ready": true,
+    "tests_inside_build": "NOT_RUN_BECAUSE_BUILDER_UNAVAILABLE",
+    "base_digest_preserved": true,
+    "host_private_keys_removed_during_build": "DECLARED_IN_DOCKERFILE_NOT_EXECUTED"
+  },
+  "registry_image_available": "BLOCKED_BUILD_ENGINE_UNAVAILABLE",
+  "runtime_integration_tests": "LOCAL_ONLY; syntax, runner, budget, and manifest checks passed; image-build tests not run because no builder is available",
   "volume_binding_prepared": true,
   "regional_gpu_quote": {
     "artifact": "regional_gpu_quote.json",
-    "status": "NO_A4000_QUOTE_IN_US_MO_2",
-    "queried_at_utc": "2026-09-14T06:43:33.593945+00:00",
+    "status": "L4_VISIBLE_BUT_HOST_QUOTE_INCOMPLETE",
+    "queried_at_utc": "2026-09-14T07:10:26.2990168Z",
     "volume": "q4t3-vol/6yrppoqpkz/US-MO-2",
-    "primary_candidate": "RTX A4000 16GB; global community quote $0.17/h Low, not region-compatible in current US-MO-2 availability response",
+    "primary_candidate": "NVIDIA L4 24GB; 1 GPU; SECURE; Low; listed effective price $0.49/GPU-hour",
     "regional_visible": "L4 Low and RTX PRO 6000 Low",
-    "artifact_sha256": "b2c41a16314f3e7e111b5811800ab9fcba3f2051563cd7a06b1564c5488a1168"
+    "quote_usable": false,
+    "missing": "per-offer CPU, RAM, additional storage, and allocatable count are not exposed by available read-only catalog tools",
+    "artifact_sha256": "8e197165c4fc1f40ccd0146f6101067834e89bb46a04c9b7971ba0b2890fe220"
   },
   "pod_created": false,
   "paid_runtime_authorized": false,
   "cuda_execution_validated": false,
   "scientific_pilot_started": false,
+  "budget_contract": {
+    "gpu": "NVIDIA L4",
+    "hourly_rate_required": true,
+    "hourly_rate_usd_per_gpu_hour": 0.49,
+    "hourly_rate_source": "regional_gpu_quote.json requested_offer.effective_price_usd_per_gpu_hour",
+    "max_hours_proposed": 2.0,
+    "paid_runtime_authorized": false,
+    "external_provider_action_executor_required": true,
+    "simulation_does_not_stop_or_release_billable_resources": true,
+    "replacement_or_volume_mutation_allowed": false
+  },
   "base_image": {
     "reference": "pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime@sha256:eee11b3b3872a8c838e35ef48f08b2d5def2080902c7f666831310ca1a0ef2be",
     "python_target": "3.12",
@@ -58,17 +79,19 @@
     "attach_only_when_pod_explicitly_approved": true
   },
   "files": {
-    "Dockerfile": {"sha256": "bc145337a40a975eb397a0aa99f004488b2a83271db277a2b60ab7c38775a43b", "bytes": 743},
+    "Dockerfile": {"sha256": "2ac9aaa3bc9f7adce330325369243b772430bc433fe8f3bfc587e8a02c2c311d", "bytes": 2508},
     "docker/sshd_config": {"sha256": "ae753fe3dd4897dc3c6a0c4a9e5fadc57069f7ecb52aedd640e7d11aa0bee13e", "bytes": 440},
     "docker/runpod-entrypoint.sh": {"sha256": "1f3a5479340a910a677cacead6e5aedf895a261d9b28c78f344760935b4c490e", "bytes": 650},
+    "docker/verify-image.sh": {"sha256": "829426caf97be78131bcdca34f16069349ffe29fc8a8c861078f91f6e3c4f2be", "bytes": 709},
     "requirements.lock": {"sha256": "38de8910f95cf6894d79e934ebb739a884392c37bc3af5930d59df8b0132d501", "bytes": 376},
     "volume-layout.md": {"sha256": "9d285a222bd889ef2d85485cf481054da2faf8c3e8d5a9718ac66632f32fec24", "bytes": 2691},
+    "image-build.md": {"sha256": "f2a3e5252533b6194f85499ae04e7f5dd18a92dfd2fc1554fe01e56b42f47bc0", "bytes": 998},
     "vps_control.py": {"sha256": "530f9489aaea01aeae593393a57d995c4fcc90d1121f5ecb4b07cf08e9e7c187", "bytes": 7152},
-    "omega_nominal_microbatch_runner.py": {"sha256": "4339e906fc982404ed1a0400911558b88b135426145ccb3c13fa9ebd18157455", "bytes": 11261},
-    "test_omega_nominal_microbatch_runner.py": {"sha256": "efda38f7ff9b16a378dc6e8b65b7d48ec1b296856ab7ede281164124f72a4be0", "bytes": 3389},
-    "regional_gpu_quote.json": {"sha256": "b2c41a16314f3e7e111b5811800ab9fcba3f2051563cd7a06b1564c5488a1168", "bytes": 1382},
-    "budget_controller.py": {"sha256": "4af53542e998a1ef3e996394086eabbd38e34ec0c749ac4842d15a4b1d737d04", "bytes": 8843},
-    "test_budget_controller.py": {"sha256": "733e83ead4fd7e6d391f4c032e852fac0a0eadc0d732f56e4f596f8dc9679e4c", "bytes": 2627}
+    "omega_nominal_microbatch_runner.py": {"sha256": "486ec6e691366e7d3febe9553744aa07b0a6f5b39c9579500d7996fde061c94c", "bytes": 19834},
+    "test_omega_nominal_microbatch_runner.py": {"sha256": "ef2e835760ae0cd046883ce7c36ebfcfd5d35cad00518ae6466c00bdba8bed00", "bytes": 5507},
+    "budget_controller.py": {"sha256": "ed2f4fad38357742f7805f4c5b5622148a970ad1341b380a95389c9b45d158e6", "bytes": 9253},
+    "test_budget_controller.py": {"sha256": "0564f5aea5a6cbd6f44398e5dab0182e10e1c4751877d7128b0cc1f031794d8c", "bytes": 2637},
+    "regional_gpu_quote.json": {"sha256": "8e197165c4fc1f40ccd0146f6101067834e89bb46a04c9b7971ba0b2890fe220", "bytes": 2819}
   },
   "vps_control": {
     "deployment": "not deployed",

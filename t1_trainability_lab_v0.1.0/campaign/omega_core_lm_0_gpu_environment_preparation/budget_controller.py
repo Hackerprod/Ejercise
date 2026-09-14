@@ -3,7 +3,10 @@
 
 This module creates no pod, calls no provider API, changes no volume, and
 cannot authorize spending. It emits lifecycle intents that a human/operator
-may reconcile against an independently observed provider state.
+may reconcile against an independently observed provider state. Before any
+real rental, an external operator or authorized controller must execute the
+RunPod action and confirm the provider state; this simulation never releases
+billable resources by itself.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from enum import Enum
 from typing import Any
 
 
-DEFAULT_GPU_TYPE = "RTX A4000 16GB"
+DEFAULT_GPU_TYPE = "NVIDIA L4"
 DEFAULT_MAX_HOURS = 2.0
 
 
@@ -40,9 +43,9 @@ class Intent(str, Enum):
 
 @dataclass(frozen=True)
 class BudgetPolicy:
+    hourly_rate: float
     gpu_type: str = DEFAULT_GPU_TYPE
     max_hours: float = DEFAULT_MAX_HOURS
-    hourly_rate: float = 0.17
     volume_name: str = "q4t3-vol"
     volume_id: str = "6yrppoqpkz"
     data_center: str = "US-MO-2"
@@ -87,7 +90,7 @@ class BudgetDecision:
 class SimulatedBudgetController:
     """Single-pod state machine; all provider mutations remain external."""
 
-    def __init__(self, policy: BudgetPolicy = BudgetPolicy()) -> None:
+    def __init__(self, policy: BudgetPolicy) -> None:
         self.policy = policy
         self._observation: PodObservation | None = None
         self._stop_confirmed = False
@@ -194,12 +197,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pod-id", default="future-a4000-1")
     parser.add_argument("--state", choices=[state.value for state in PodState], default=PodState.RUNNING.value)
+    parser.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE)
+    parser.add_argument("--hourly-rate", type=float, required=True, help="required rate from current regional offer")
     parser.add_argument("--launched-at", default="2026-09-14T00:00:00+00:00")
     parser.add_argument("--now", default=None)
     args = parser.parse_args()
-    controller = SimulatedBudgetController()
+    controller = SimulatedBudgetController(BudgetPolicy(hourly_rate=args.hourly_rate, gpu_type=args.gpu_type))
     controller.observe(PodObservation(
-        args.pod_id, DEFAULT_GPU_TYPE, PodState(args.state), _parse_time(args.launched_at),
+        args.pod_id, args.gpu_type, PodState(args.state), _parse_time(args.launched_at),
         "q4t3-vol", "6yrppoqpkz", "US-MO-2",
     ))
     now = _parse_time(args.now) if args.now else datetime.now(timezone.utc)
