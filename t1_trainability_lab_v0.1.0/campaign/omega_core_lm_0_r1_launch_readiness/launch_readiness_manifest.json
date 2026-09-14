@@ -1,7 +1,7 @@
 {
   "artifact": "launch_readiness_manifest.json",
   "status": "partial",
-  "blocking_reason": "image_publication_blocked",
+  "blocking_reason": "spend_authorization_and_runtime_host_verification_pending",
   "artifact_self_hash": null,
   "self_hash_status": "not_computed",
   "source_provenance": {
@@ -16,11 +16,16 @@
   },
   "pieces": {
     "image": {
-      "status": "blocked",
-      "publication": "blocked",
+      "status": "published",
+      "publication": "published",
       "local_identity": "sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7",
-      "published_digest": null,
-      "reason": "GHCR blocked"
+      "registry": "ghcr.io/hackerprod/omega-core-lm-0-r1",
+      "tag": "a3d7b47",
+      "published_digest": "ghcr.io/hackerprod/omega-core-lm-0-r1@sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7",
+      "digest_matches_local_validated_identity": true,
+      "private_visibility": "likely_private_unconfirmed_by_api",
+      "pull_verification": "pending_no_separate_read_credentials",
+      "reason": "Push confirmed live against the registry: an initial docker image inspect / RepoDigest was insufficient (a follow-up `docker manifest inspect` against ghcr.io returned 'manifest unknown', proving the first push had not actually landed); a retried background push completed and `docker manifest inspect` then returned the real OCI manifest from ghcr.io. See registry_publication_evidence.json for the full correction. GitHub Packages API was unavailable on the VPS, so private visibility is corroborated only by an unauthenticated manifest request returning HTTP 401, not by an authoritative API check."
     },
     "offer": {
       "status": "ready_for_planning",
@@ -95,7 +100,7 @@
     "pod_created": false,
     "q4t3_volume_touched": false,
     "q4t3_volume_deleted": false,
-    "registry_publish_attempted": false,
+    "registry_publish_attempted": true,
     "credentials_used": false,
     "cuda_preflight_executed": false,
     "spend_performed": false,

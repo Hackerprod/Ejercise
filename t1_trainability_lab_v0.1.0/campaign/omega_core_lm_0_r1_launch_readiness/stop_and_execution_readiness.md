@@ -32,6 +32,6 @@ RunPod documents container disks as temporary storage and network volumes as per
 
 ## Blockers
 
-- Derived image has local identity `sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7`, but published digest is pending because GHCR is blocked.
+- Derived image is published at `ghcr.io/hackerprod/omega-core-lm-0-r1:a3d7b47` with digest matching local identity `sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7`; private visibility and separate-read pull remain pending.
 - L4 secure stock is Low and allocatable count is not exposed by read-only results.
 - Exact host CPU/model and host RAM are post-allocation facts.

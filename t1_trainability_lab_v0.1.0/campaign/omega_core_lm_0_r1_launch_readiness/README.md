@@ -1,10 +1,10 @@
 # OMEGA CORE LM 0 R1 Launch Readiness
 
-**Status: PARTIAL.** Launch remains blocked by image publication. Read-only offer, budget proposal, stop procedure, and execution command are prepared. No Pod, registry, volume, credential, or CUDA action occurred.
+**Status: PARTIAL.** Image is published to the requested GHCR repository with a commit-bound tag, but private visibility and separate-read-credential pull verification remain pending. No Pod, volume mutation, or CUDA action occurred.
 
 ## Five Pieces
 
-1. **Image:** Local derived image identity is recorded; published digest is pending because GHCR is blocked.
+1. **Image:** Published as `ghcr.io/hackerprod/omega-core-lm-0-r1:a3d7b47`; digest matches the already validated local image. Package privacy and separate-read pull remain unverified.
 2. **Offer:** Current live secure L4 evidence is usable for planning at `$0.49/GPU-hour` in `US-MO-2`, with Low stock and no exposed allocatable count.
 3. **Budget:** Two-hour proposal is approximately `$0.9951` total, including approximate storage; spend authorization remains pending.
 4. **Stop:** `budget_controller.py` is simulation-only. External authorized operator must stop and verify provider state; `q4t3-vol` must never be deleted.
@@ -21,6 +21,6 @@
 
 ## Blockers
 
-- Publish derived image to an authorized registry and obtain provider-accepted digest.
+- Confirm package remains private on GitHub and, if available, perform a pull using separate read-only credentials.
 - Obtain later explicit spend authorization.
 - Confirm allocatable L4 and post-allocation host facts before any runtime action.

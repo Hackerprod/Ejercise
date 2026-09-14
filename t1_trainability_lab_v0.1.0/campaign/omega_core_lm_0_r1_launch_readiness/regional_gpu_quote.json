@@ -19,8 +19,13 @@
       },
       "image": {
         "local_identity": "sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7",
-        "published_digest": null,
-        "publication_status": "pending; GHCR blocked"
+        "registry": "ghcr.io/hackerprod/omega-core-lm-0-r1",
+        "tag": "a3d7b47",
+        "published_digest": "ghcr.io/hackerprod/omega-core-lm-0-r1@sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7",
+        "publication_status": "published; private visibility pending manual confirmation",
+        "digest_matches_validated_local_identity": true,
+        "pull_verification": "pending; no separate read-only credentials available",
+        "private_visibility_verification": "pending; GitHub Packages API unavailable on VPS"
       }
     },
     "live_evidence": {
@@ -74,7 +79,7 @@
     "exposed_limitations": [
       "Low stock is reported, but no allocatable count is exposed.",
       "Exact post-allocation host CPU/model and host RAM are not exposed.",
-      "Published image digest is pending because GHCR is blocked."
+      "Private package visibility and separate-credential pull verification remain pending."
     ]
   },
   "requestable_minima": {
@@ -108,8 +113,8 @@
     "base_cuda_runtime": "CUDA 12.8 / cuDNN 9 runtime base",
     "provider_host_requirement": "NVIDIA host driver/runtime compatible with the CUDA 12.8 image; verify after allocation",
     "cuda_compatible_for_planned_preflight": true,
-    "published_image_reference": null,
-    "publication_blocker": "GHCR publication is pending; no registry or credential action was taken"
+    "published_image_reference": "ghcr.io/hackerprod/omega-core-lm-0-r1@sha256:b6834274f18d9dceaa2f5983a9ebfa099d13a2265a6e607303ca1324284ce4e7",
+    "publication_blocker": "No image publication blocker remains; private visibility and separate-read pull verification are pending"
   },
   "volume_compatibility": {
     "compatible": true,
@@ -139,7 +144,7 @@
     "quote_usable_for_planning": true,
     "executable_offer": false,
     "executable_offer_blockers": [
-      "Image publication and provider-accepted image reference are pending.",
+      "Private package visibility and separate-read pull verification are pending.",
       "Later explicit spend authorization is required.",
       "Low stock, no count, and host exact CPU/model remain unresolved until allocation."
     ]
@@ -149,7 +154,7 @@
     "spend_performed": false,
     "volume_modified": false,
     "volume_deleted": false,
-    "registry_publish_attempted": false,
+    "registry_publish_attempted": true,
     "credentials_used": false
   }
 }
