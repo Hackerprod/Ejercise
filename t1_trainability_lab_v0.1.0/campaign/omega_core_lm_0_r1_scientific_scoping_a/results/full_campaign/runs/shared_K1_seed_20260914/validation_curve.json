@@ -1,0 +1,32 @@
+[
+  {
+    "finite": true,
+    "nll": 11.065996587276459,
+    "tokens": 4096,
+    "update": 0
+  },
+  {
+    "finite": true,
+    "nll": 7.31900817155838,
+    "tokens": 4096,
+    "update": 500
+  },
+  {
+    "finite": true,
+    "nll": 6.9077551662921906,
+    "tokens": 4096,
+    "update": 1000
+  },
+  {
+    "finite": true,
+    "nll": 6.788145989179611,
+    "tokens": 4096,
+    "update": 1500
+  },
+  {
+    "finite": true,
+    "nll": 6.70352765917778,
+    "tokens": 4096,
+    "update": 2000
+  }
+]
