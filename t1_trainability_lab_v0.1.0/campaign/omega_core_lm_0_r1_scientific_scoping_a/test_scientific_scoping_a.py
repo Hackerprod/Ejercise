@@ -17,6 +17,8 @@ from run_scientific_scoping_a import (  # noqa: E402
     MIN_AVAILABLE_BYTES,
     PHYSICAL_BATCH,
     SMOKE_BOUNDARIES,
+    SCOPE_B_PAIRS,
+    SCOPE_B_UPDATES,
     VARIANTS,
     TinyTeacher,
     WINDOW_TOKENS,
@@ -26,6 +28,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     _finite_gradients,
     build_manifest,
     build_pair_manifest,
+    canonical_hash,
     checkpoint_boundaries,
     classify_results,
     collect_all_eligible_documents,
@@ -42,6 +45,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     synthetic_documents,
     validate_policy,
     validate_resume_boundary,
+    verify_manifest_extension,
 )
 from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
     OmegaCoreLM0R1Technical,
@@ -96,6 +100,36 @@ def test_cycle_manifest_counts_wraps_and_evidence() -> None:
     assert manifest["pairs"][1]["document_indices"] == [8, 9, 0, 1, 2, 3, 4, 5]
 
 
+def test_scope_b_manifest_extension_preserves_canonical_prefix() -> None:
+    documents = synthetic_documents(10, 17)
+    _, old_manifest = build_manifest(documents, split_name="train", pair_count=FULL_PAIRS)
+    _, new_manifest = build_manifest(documents, split_name="train", pair_count=SCOPE_B_PAIRS)
+    evidence = verify_manifest_extension(
+        {"data_hashes": {"train_manifest": old_manifest["manifest_sha256"]}},
+        old_manifest,
+        new_manifest,
+    )
+    assert evidence["verified"]
+    assert evidence["old_pair_count"] == FULL_PAIRS
+    assert evidence["new_pair_count"] == SCOPE_B_PAIRS
+    assert evidence["prefix"]["byte_identical"]
+    assert evidence["prefix"]["old_pair_bytes_sha256"] == evidence["prefix"]["new_prefix_bytes_sha256"]
+
+
+def test_scope_b_manifest_extension_rejects_corrupted_prefix() -> None:
+    documents = synthetic_documents(10, 17)
+    _, old_manifest = build_manifest(documents, split_name="train", pair_count=FULL_PAIRS)
+    _, new_manifest = build_manifest(documents, split_name="train", pair_count=SCOPE_B_PAIRS)
+    new_manifest["cyclic_pairs"]["pairs"][0]["document_indices"][0] += 1
+    new_manifest["manifest_sha256"] = canonical_hash({key: value for key, value in new_manifest.items() if key != "manifest_sha256"})
+    with pytest.raises(ValueError, match="prefix"):
+        verify_manifest_extension(
+            {"data_hashes": {"train_manifest": old_manifest["manifest_sha256"]}},
+            old_manifest,
+            new_manifest,
+        )
+
+
 def test_validation_manifest_is_deterministic_and_separate() -> None:
     train = synthetic_documents(8, 17)
     validation = synthetic_documents(4, 17)
@@ -119,6 +153,10 @@ def test_schedule_and_checkpoint_boundaries() -> None:
         checkpoint_boundaries(7, 500)
     with pytest.raises(ValueError, match="boundary"):
         validate_resume_boundary(501, 500)
+
+
+def test_scope_b_first_resumed_schedule_is_pair_1000() -> None:
+    assert schedule(SCOPE_B_UPDATES)[FULL_UPDATES] == {"update": 2000, "window": 0, "pair": FULL_PAIRS}
 
 
 def test_classification_rule_has_no_gate_claim() -> None:
@@ -296,6 +334,51 @@ def test_curve_is_persisted_at_each_checkpoint_and_resume_deduplicates(tmp_path:
     assert [point["update"] for point in resumed["validation_curve"]] == [0, 2, 4]
     assert len([json.loads(line) for line in (run_dir / "ledger.jsonl").read_text().splitlines() if json.loads(line).get("record_type") == "update"]) == 4
     assert first["implementation_identity"]["implementation"] == "F"
+
+
+def test_scope_b_resume_accepts_extended_manifest_and_restores_state(tmp_path: Path) -> None:
+    documents = synthetic_documents(8, 17)
+    train, old_manifest = build_manifest(documents, split_name="train", pair_count=FULL_PAIRS)
+    _, extended_manifest = build_manifest(documents, split_name="train", pair_count=SCOPE_B_PAIRS)
+    validation, validation_manifest = build_manifest(synthetic_documents(2, 17), split_name="validation")
+    run_dir = tmp_path / "scope-b"
+    run_single(
+        run_dir=run_dir,
+        run_id="scope-b",
+        seed=20260913,
+        variant="shared_K1",
+        train_documents=train,
+        validation_documents=validation,
+        train_manifest=old_manifest,
+        validation_manifest=validation_manifest,
+        teacher=TinyTeacher(17),
+        total_updates=2,
+        checkpoint_interval=2,
+        smoke=True,
+        dimensions=(4, 1),
+    )
+    resumed = run_single(
+        run_dir=run_dir,
+        run_id="scope-b",
+        seed=20260913,
+        variant="shared_K1",
+        train_documents=train,
+        validation_documents=validation,
+        train_manifest=extended_manifest,
+        validation_manifest=validation_manifest,
+        teacher=TinyTeacher(17),
+        total_updates=4,
+        checkpoint_interval=2,
+        smoke=True,
+        dimensions=(4, 1),
+        resume_checkpoint=run_dir / "checkpoint_00002.pt",
+        old_train_manifest=old_manifest,
+    )
+    assert resumed["manifest_extension_evidence"]["verified"]
+    assert resumed["restoration_evidence"]["exact_equality"] == {"model": True, "optimizer": True, "torch_rng": True, "python_rng": True}
+    assert resumed["restoration_evidence"]["first_resumed_schedule"] == {"update": 2, "window": 0, "pair": 1}
+    assert [point["update"] for point in resumed["validation_curve"]] == [0, 2, 4]
+    assert [point["update"] for point in resumed["previous_validation_curve"]] == [0, 2]
 
 
 def test_fresh_single_run_selects_one_run_and_keeps_per_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

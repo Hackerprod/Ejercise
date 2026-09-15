@@ -13,6 +13,7 @@ import json
 import math
 import os
 import platform
+import pickle
 import random
 import subprocess
 import sys
@@ -57,6 +58,9 @@ SEEDS = (20260913, 20260914)
 FULL_UPDATES = 2000
 FULL_PAIRS = 1000
 FULL_BOUNDARIES = (0, 500, 1000, 1500, 2000)
+SCOPE_B_UPDATES = 5000
+SCOPE_B_PAIRS = 2500
+SCOPE_B_BOUNDARIES = (0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000)
 SMOKE_UPDATES = 4
 SMOKE_PAIRS = 2
 SMOKE_BOUNDARIES = (0, 2, 4)
@@ -331,6 +335,90 @@ def build_manifest(
     return chosen, manifest
 
 
+def _manifest_corpus_metadata(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in manifest.items() if key not in {"cyclic_pairs", "manifest_sha256"}}
+
+
+def _validated_pair_list(manifest: dict[str, Any], label: str, expected_count: int) -> list[dict[str, Any]]:
+    pair_manifest = manifest.get("cyclic_pairs")
+    if not isinstance(pair_manifest, dict):
+        raise ValueError(f"manifest extension verification failed: {label} cyclic_pairs is missing or malformed")
+    if pair_manifest.get("pair_count") != expected_count:
+        raise ValueError(
+            f"manifest extension verification failed: {label} pair count is {pair_manifest.get('pair_count')!r}, expected {expected_count}"
+        )
+    pairs = pair_manifest.get("pairs")
+    if not isinstance(pairs, list) or len(pairs) != expected_count:
+        raise ValueError(f"manifest extension verification failed: {label} pairs list is malformed")
+    required = {"pair", "start_offset", "document_indices", "document_keys", "window_0_and_window_1_share_documents", "wraps"}
+    for index, pair in enumerate(pairs):
+        if not isinstance(pair, dict) or not required.issubset(pair):
+            raise ValueError(f"manifest extension verification failed: malformed {label} pair prefix at index {index}")
+        if pair["pair"] != index:
+            raise ValueError(f"manifest extension verification failed: malformed {label} pair prefix at index {index}")
+        if not isinstance(pair["document_indices"], list) or len(pair["document_indices"]) != PHYSICAL_BATCH:
+            raise ValueError(f"manifest extension verification failed: malformed {label} pair prefix at index {index}")
+        if not isinstance(pair["document_keys"], list) or len(pair["document_keys"]) != PHYSICAL_BATCH:
+            raise ValueError(f"manifest extension verification failed: malformed {label} pair prefix at index {index}")
+    return pairs
+
+
+def verify_manifest_extension(
+    checkpoint_payload: dict[str, Any],
+    old_train_manifest: dict[str, Any],
+    new_train_manifest: dict[str, Any],
+    *,
+    expected_old_pair_count: int = FULL_PAIRS,
+    expected_new_pair_count: int = SCOPE_B_PAIRS,
+) -> dict[str, Any]:
+    """Prove that new train manifest is exact cyclic extension of checkpoint input."""
+    old_hash = old_train_manifest.get("manifest_sha256")
+    new_hash = new_train_manifest.get("manifest_sha256")
+    if not isinstance(old_hash, str) or not isinstance(new_hash, str):
+        raise ValueError("manifest extension verification failed: manifest hash is missing")
+    old_recomputed_hash = canonical_hash(_manifest_corpus_metadata(old_train_manifest) | {"cyclic_pairs": old_train_manifest.get("cyclic_pairs")})
+    new_recomputed_hash = canonical_hash(_manifest_corpus_metadata(new_train_manifest) | {"cyclic_pairs": new_train_manifest.get("cyclic_pairs")})
+    if old_hash != old_recomputed_hash:
+        raise ValueError("manifest extension verification failed: old train manifest hash is invalid")
+    if new_hash != new_recomputed_hash:
+        raise ValueError("manifest extension verification failed: new train manifest hash is invalid")
+    checkpoint_data_hashes = checkpoint_payload.get("data_hashes")
+    if not isinstance(checkpoint_data_hashes, dict):
+        raise ValueError("manifest extension verification failed: checkpoint data_hashes is missing or malformed")
+    checkpoint_hash = checkpoint_data_hashes.get("train_manifest")
+    if checkpoint_hash != old_hash:
+        raise ValueError("manifest extension verification failed: checkpoint old train_manifest hash mismatch")
+    old_metadata = _manifest_corpus_metadata(old_train_manifest)
+    new_metadata = _manifest_corpus_metadata(new_train_manifest)
+    if old_metadata != new_metadata:
+        raise ValueError("manifest extension verification failed: corpus/document metadata changed")
+    old_pairs = _validated_pair_list(old_train_manifest, "old", expected_old_pair_count)
+    new_pairs = _validated_pair_list(new_train_manifest, "new", expected_new_pair_count)
+    old_pair_bytes = canonical_bytes(old_pairs)
+    new_prefix_bytes = canonical_bytes(new_pairs[:expected_old_pair_count])
+    old_pair_hash = sha256_bytes(old_pair_bytes)
+    new_prefix_hash = sha256_bytes(new_prefix_bytes)
+    if old_pair_bytes != new_prefix_bytes:
+        raise ValueError("manifest extension verification failed: new cyclic pair prefix is not byte-identical")
+    return {
+        "verified": True,
+        "checkpoint_old_train_manifest_sha256": checkpoint_hash,
+        "old_manifest_sha256": old_hash,
+        "new_manifest_sha256": new_hash,
+        "old_pair_count": expected_old_pair_count,
+        "new_pair_count": expected_new_pair_count,
+        "corpus_metadata_unchanged": True,
+        "corpus_metadata_sha256": canonical_hash(old_metadata),
+        "prefix": {
+            "old_pair_bytes_sha256": old_pair_hash,
+            "new_prefix_bytes_sha256": new_prefix_hash,
+            "old_byte_length": len(old_pair_bytes),
+            "new_prefix_byte_length": len(new_prefix_bytes),
+            "byte_identical": True,
+        },
+    }
+
+
 def schedule(updates: int) -> list[dict[str, int]]:
     if updates < 0:
         raise ValueError("updates must be non-negative")
@@ -396,8 +484,25 @@ class AppendOnlyLedger:
 def _state_hashes(model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> dict[str, str]:
     return {
         "model_parameter_hash": parameter_hash(model),
-        "optimizer_state_hash": canonical_hash(optimizer.state_dict()),
+        "optimizer_state_hash": sha256_bytes(pickle.dumps(optimizer.state_dict(), protocol=4)),
     }
+
+
+def _rng_state_hashes(rng_states: dict[str, Any]) -> dict[str, str]:
+    return {
+        "torch_rng_hash": sha256_bytes(pickle.dumps(rng_states["torch"], protocol=4)),
+        "python_rng_hash": sha256_bytes(pickle.dumps(rng_states["python"], protocol=4)),
+    }
+
+
+def _state_equal(left: Any, right: Any) -> bool:
+    if torch.is_tensor(left) or torch.is_tensor(right):
+        return bool(torch.is_tensor(left) and torch.is_tensor(right) and torch.equal(left, right))
+    if isinstance(left, dict) or isinstance(right, dict):
+        return isinstance(left, dict) and isinstance(right, dict) and left.keys() == right.keys() and all(_state_equal(left[key], right[key]) for key in left)
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        return isinstance(left, type(right)) and len(left) == len(right) and all(_state_equal(a, b) for a, b in zip(left, right))
+    return left == right
 
 
 def _config_payload(*, variant: str, seed: int, smoke: bool, dimensions: tuple[int, int], integration_smoke: bool = False) -> dict[str, Any]:
@@ -642,11 +747,17 @@ def run_single(
     smoke: bool,
     dimensions: tuple[int, int],
     resume_checkpoint: Path | None = None,
+    old_train_manifest: dict[str, Any] | None = None,
     integration_smoke: bool = False,
+    max_updates: int | None = None,
 ) -> dict[str, Any]:
     validate_policy()
     if variant not in VARIANTS:
         raise ValueError(f"unsupported variant: {variant}")
+    if max_updates is not None and (max_updates < 0 or max_updates > total_updates):
+        raise ValueError("max_updates must be between zero and total_updates")
+    if old_train_manifest is not None and resume_checkpoint is None:
+        raise ValueError("old_train_manifest is only valid for an explicit resume")
     boundaries = checkpoint_boundaries(total_updates, checkpoint_interval)
     config = _config_payload(variant=variant, seed=seed, smoke=smoke, dimensions=dimensions, integration_smoke=integration_smoke)
     identity_hash = canonical_hash({"campaign_id": CAMPAIGN_ID, "run_id": run_id, "variant": variant, "seed": seed, "implementation_identity": implementation_identity()})
@@ -664,6 +775,8 @@ def run_single(
     segment = 0
     parent_checkpoint_hash: str | None = None
     previous_curve: list[dict[str, Any]] = []
+    manifest_extension_evidence: dict[str, Any] | None = None
+    restoration_evidence: dict[str, Any] | None = None
     if resume_checkpoint is None:
         set_seed(seed)
         model = make_f_model(vocab_size=TOKENIZER_VOCAB if not smoke else 17, dimensions=dimensions, variant=variant, memory_samples=memory_samples)
@@ -680,10 +793,23 @@ def run_single(
         _validate_f_checkpoint(payload)
         checkpoint_update = int(payload.get("update", -1))
         validate_resume_boundary(checkpoint_update, checkpoint_interval)
+        expected_data_position = {"next_update": checkpoint_update, "pair": checkpoint_update // 2}
+        if payload.get("data_position") != expected_data_position:
+            raise ValueError("resume identity mismatch for data_position")
+        if old_train_manifest is not None:
+            manifest_extension_evidence = verify_manifest_extension(payload, old_train_manifest, train_manifest)
         expected = {"run_id": run_id, "seed": seed, "identity_hash": identity_hash, "config_hash": canonical_hash(config), "data_hashes": data_hashes, "teacher_hash": teacher_hash}
+        if old_train_manifest is not None:
+            expected["data_hashes"] = {"train_manifest": train_manifest["manifest_sha256"], "validation_manifest": validation_manifest["manifest_sha256"]}
         for key, value in expected.items():
             if payload.get(key) != value:
+                if key == "data_hashes" and old_train_manifest is not None:
+                    continue
                 raise ValueError(f"resume identity mismatch for {key}")
+        if old_train_manifest is not None and payload.get("data_hashes", {}).get("validation_manifest") != validation_manifest["manifest_sha256"]:
+            raise ValueError("resume identity mismatch for validation_manifest")
+        if old_train_manifest is None and payload.get("data_hashes") != data_hashes:
+            raise ValueError("resume identity mismatch for data_hashes")
         if checkpoint_update >= total_updates:
             raise ValueError("resume checkpoint is not before requested end update")
         set_seed(seed)
@@ -694,6 +820,21 @@ def run_single(
         optimizer.load_state_dict(payload["optimizer"])
         torch.set_rng_state(payload["rng_states"]["torch"])
         random.setstate(payload["rng_states"]["python"])
+        restored_state_hashes = _state_hashes(model, optimizer)
+        restored_rng_hashes = _rng_state_hashes({"torch": torch.get_rng_state(), "python": random.getstate()})
+        restoration_evidence = {
+            "checkpoint_parent_hash": parent_checkpoint_hash,
+            "data_position": payload.get("data_position"),
+            "data_position_exact": payload.get("data_position") == expected_data_position,
+            "state_hashes": {**restored_state_hashes, **restored_rng_hashes},
+            "exact_equality": {
+                "model": _state_equal(model.state_dict(), payload["model"]),
+                "optimizer": _state_equal(optimizer.state_dict(), payload["optimizer"]),
+                "torch_rng": torch.equal(torch.get_rng_state(), payload["rng_states"]["torch"]),
+                "python_rng": random.getstate() == payload["rng_states"]["python"],
+            },
+            "first_resumed_schedule": schedule(total_updates)[checkpoint_update],
+        }
         segment = max((int(event.get("execution_segment", 0)) for event in _read_ledger(ledger_path)), default=0) + 1
         ledger.append({"record_type": "resume", "run_id": run_id, "execution_segment": segment, "update": checkpoint_update, "checkpoint_hash": parent_checkpoint_hash, "parent_checkpoint_hash": parent_checkpoint_hash, "preserved_prior_segments": True})
         curve = json.loads(curve_path.read_text(encoding="utf-8")) if curve_path.exists() else []
@@ -706,7 +847,8 @@ def run_single(
     start_update = 0 if resume_checkpoint is None else int(payload["update"])
     pair_states: list[torch.Tensor] | None = None
     model.train()
-    for item in schedule(total_updates)[start_update:]:
+    execution_end = total_updates if max_updates is None else max_updates
+    for item in schedule(total_updates)[start_update:execution_end]:
         update = item["update"]
         pair_start = item["pair"] * PHYSICAL_BATCH
         documents = [train_documents[(pair_start + offset) % len(train_documents)] for offset in range(PHYSICAL_BATCH)]
@@ -799,6 +941,12 @@ def run_single(
         },
         "finite_safety": {"checks": finite_checks, "all_passed": all(all(item.values()) for item in finite_checks)},
     }
+    if resume_checkpoint is not None:
+        result["parent_checkpoint_hash"] = parent_checkpoint_hash
+        result["previous_validation_curve"] = previous_curve
+        result["manifest_extension_evidence"] = manifest_extension_evidence
+        result["restoration_evidence"] = restoration_evidence
+        result["executed_through_update"] = start_update if not finite_checks else max(int(item["update"]) for item in finite_checks)
     _write_json(run_dir / "run_result.json", result)
     return result
 
@@ -835,7 +983,7 @@ def run_smoke_resume(output_dir: Path) -> dict[str, Any]:
     return report
 
 
-def _load_real_documents(*, integration_smoke: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], torch.nn.Module]:
+def _load_real_documents(*, pair_count: int | None = None, integration_smoke: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], torch.nn.Module]:
     validate_policy()
     from datasets import DownloadConfig, load_dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -852,7 +1000,8 @@ def _load_real_documents(*, integration_smoke: bool = False) -> tuple[list[dict[
     validation_dataset = load_dataset(DATASET_ID, DATASET_CONFIG, split="validation", revision=DATASET_REVISION, download_config=download_config)
     all_train = collect_all_eligible_documents(train_dataset, tokenizer)
     all_validation = collect_all_eligible_documents(validation_dataset, tokenizer)
-    train_documents, train_manifest = build_manifest(all_train, split_name="train", pair_count=SMOKE_PAIRS if integration_smoke else FULL_PAIRS)
+    effective_pair_count = SMOKE_PAIRS if integration_smoke else FULL_PAIRS if pair_count is None else pair_count
+    train_documents, train_manifest = build_manifest(all_train, split_name="train", pair_count=effective_pair_count)
     train_keys = {(item["full_text_sha256"], item["retained_513_token_sha256"]) for item in train_documents}
     validation_candidates, validation_manifest = build_manifest(all_validation, split_name="validation", excluded_keys=train_keys)
     if len(validation_candidates) < VALIDATION_DOCUMENTS:
@@ -1067,6 +1216,108 @@ def run_resume(output_dir: Path, checkpoint: Path, run_id: str, seed: int, varia
     return report
 
 
+def _load_scope_b_inputs() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], torch.nn.Module, dict[str, Any]]:
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents(pair_count=SCOPE_B_PAIRS)
+    _, old_train_manifest = build_manifest(train_documents, split_name="train", pair_count=FULL_PAIRS)
+    return train_documents, validation_documents, train_manifest, validation_manifest, teacher, old_train_manifest
+
+
+def run_scope_b(output_dir: Path, checkpoint: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+    """Continue one A checkpoint with explicitly verified 1000-to-2500 pair extension."""
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher, old_train_manifest = _load_scope_b_inputs()
+    checkpoint = checkpoint.resolve()
+    checkpoint_payload, _ = load_checkpoint(checkpoint)
+    extension_evidence = verify_manifest_extension(checkpoint_payload, old_train_manifest, train_manifest)
+    result = run_single(
+        run_dir=checkpoint.parent,
+        run_id=run_id,
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=SCOPE_B_UPDATES,
+        checkpoint_interval=500,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=checkpoint,
+        old_train_manifest=old_train_manifest,
+    )
+    report = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-b-resume-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "scope": "B",
+        "mode": "authorized_scope_b_resume",
+        "campaign_started": True,
+        "checkpoint": checkpoint.as_posix(),
+        "parent_checkpoint_hash": result["parent_checkpoint_hash"],
+        "manifest_extension_evidence": extension_evidence,
+        "restoration_evidence": result["restoration_evidence"],
+        "prior_validation_curve": result["previous_validation_curve"],
+        "run": result,
+        "source_hashes": source_hashes(),
+        "freeze_hash_claim": False,
+    }
+    _write_hashed_json(output_dir / "scope_b_resume_report.json", report, "report_self_hash")
+    return report
+
+
+def run_scope_b_smoke(output_dir: Path, checkpoint: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+    """Run two uncheckpointed B updates in isolated output using a real A checkpoint."""
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher, old_train_manifest = _load_scope_b_inputs()
+    checkpoint = checkpoint.resolve()
+    checkpoint_payload, _ = load_checkpoint(checkpoint)
+    extension_evidence = verify_manifest_extension(checkpoint_payload, old_train_manifest, train_manifest)
+    run_dir = output_dir / "scope_b_smoke" / run_id / "runs" / f"{variant}_seed_{seed}"
+    prior_curve_path = checkpoint.parent / "validation_curve.json"
+    if not prior_curve_path.is_file():
+        raise FileNotFoundError(f"scope B smoke requires prior validation curve: {prior_curve_path}")
+    prior_curve = json.loads(prior_curve_path.read_text(encoding="utf-8"))
+    if [int(point["update"]) for point in prior_curve] != list(FULL_BOUNDARIES):
+        raise ValueError("scope B smoke requires validation curve points 0 through 2000")
+    _write_json(run_dir / "validation_curve.json", prior_curve)
+    result = run_single(
+        run_dir=run_dir,
+        run_id=run_id,
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=SCOPE_B_UPDATES,
+        checkpoint_interval=500,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=checkpoint,
+        old_train_manifest=old_train_manifest,
+        max_updates=FULL_UPDATES + 2,
+    )
+    report = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-b-bounded-smoke-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "scope": "B",
+        "mode": "bounded_scope_b_smoke",
+        "campaign_started": False,
+        "real_data_loaded": True,
+        "total_updates": SCOPE_B_UPDATES,
+        "uncheckpointed_tail_updates": 2,
+        "checkpoint": checkpoint.as_posix(),
+        "parent_checkpoint_hash": result["parent_checkpoint_hash"],
+        "manifest_extension_evidence": extension_evidence,
+        "restoration_evidence": result["restoration_evidence"],
+        "prior_validation_curve": result["previous_validation_curve"],
+        "run": result,
+        "source_hashes": source_hashes(),
+        "no_canonical_a_artifacts_modified": True,
+    }
+    _write_hashed_json(output_dir / "scope_b_smoke_report.json", report, "report_self_hash")
+    return report
+
+
 def run_fresh(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
     """Run one authorized campaign run from its initial state."""
     train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents()
@@ -1107,6 +1358,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--integration-smoke-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--integration-smoke-phase", choices=("initial", "resume"), help=argparse.SUPPRESS)
     parser.add_argument("--integration-smoke-run-id", help=argparse.SUPPRESS)
+    parser.add_argument("--scope-b", action="store_true", help="Resume an A checkpoint with verified 1000-to-2500 pair extension")
+    parser.add_argument("--scope-b-smoke", action="store_true", help="Run bounded isolated B continuation smoke")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-smoke", action="store_true", help="Required authorization after smoke review")
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -1115,7 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "results")
     args = parser.parse_args(argv)
-    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child)) > 1:
+    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child, args.scope_b, args.scope_b_smoke)) > 1:
         raise SystemExit("choose one execution mode")
     args.output_dir = args.output_dir.resolve()
     if args.smoke:
@@ -1132,6 +1385,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.integration_smoke:
         print(json.dumps(run_integration_smoke(args.output_dir, args.integration_smoke_run_id), indent=2, sort_keys=True))
+        return 0
+    if args.scope_b_smoke:
+        if not (args.resume_checkpoint and args.run_id and args.seed is not None and args.variant):
+            parser.error("scope B smoke requires --resume-checkpoint --run-id --seed and --variant")
+        print(json.dumps(run_scope_b_smoke(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
+    if args.scope_b:
+        if not (args.full and args.confirm_smoke and args.resume_checkpoint and args.run_id and args.seed in SEEDS and args.variant):
+            parser.error("scope B requires --full --confirm-smoke --resume-checkpoint --run-id --seed and --variant")
+        print(json.dumps(run_scope_b(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
         return 0
     if args.resume_checkpoint is not None:
         if not (args.full and args.confirm_smoke and args.run_id and args.seed in SEEDS and args.variant):
