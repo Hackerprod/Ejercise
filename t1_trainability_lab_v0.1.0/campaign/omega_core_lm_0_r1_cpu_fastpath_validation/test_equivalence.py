@@ -297,6 +297,37 @@ def test_complete_two_window_adamw_cycle(rounds: int) -> None:
     adamw_cycle(rounds)
 
 
+def test_report_hook_requires_actual_equivalence_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    import conftest
+    from types import SimpleNamespace
+
+    calls: list[tuple[object, int]] = []
+    monkeypatch.setattr(conftest, "_write_report", lambda session, exitstatus: calls.append((session, exitstatus)))
+
+    step2_config = SimpleNamespace(_step1_equivalence_executed=False)
+    step2_session = SimpleNamespace(config=step2_config)
+    step2_tracker = conftest._Step1ExecutionTracker(step2_config)
+    step2_tracker.pytest_runtest_logreport(
+        SimpleNamespace(when="call", path=UNIT_DIR / "test_step2_benchmark.py")
+    )
+    conftest.pytest_sessionfinish(step2_session, 0)
+    assert calls == []
+
+    equivalence_config = SimpleNamespace(_step1_equivalence_executed=False)
+    equivalence_session = SimpleNamespace(config=equivalence_config)
+    equivalence_tracker = conftest._Step1ExecutionTracker(equivalence_config)
+    equivalence_tracker.pytest_runtest_logreport(
+        SimpleNamespace(when="setup", path=UNIT_DIR / "test_equivalence.py")
+    )
+    conftest.pytest_sessionfinish(equivalence_session, 0)
+    assert calls == []
+    equivalence_tracker.pytest_runtest_logreport(
+        SimpleNamespace(when="call", path=UNIT_DIR / "test_equivalence.py")
+    )
+    conftest.pytest_sessionfinish(equivalence_session, 0)
+    assert calls == [(equivalence_session, 0)]
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -338,4 +369,6 @@ def _write_report(session: pytest.Session, exitstatus: int) -> None:
     unsigned = dict(report)
     unsigned["artifact_self_hash"] = "__SELF_HASH__"
     report["artifact_self_hash"] = hashlib.sha256((json.dumps(unsigned, indent=2, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
-    (UNIT_DIR / "step1_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Write bytes so Windows does not translate LF to CRLF after hashing.
+    report_bytes = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    (UNIT_DIR / "step1_report.json").write_bytes(report_bytes)

@@ -1,5 +1,5 @@
 {
-  "artifact_self_hash": "c2bc61957e68644548ee6784b7bdf9fcc9de1cef70d68d63260bc207967da4dd",
+  "artifact_self_hash": "59612dc4da7156cb3631d1cb5d4d19bfd5e897ddd6e5a718ffa9fc37b68fc735",
   "benchmarks_run": false,
   "environment": {
     "cuda_visible_devices": null,
@@ -1729,17 +1729,17 @@
   "schema": "omega-core-lm-0-r1-cpu-fastpath-validation-step1-v1",
   "source_identity": {
     "candidate_sha256": "044f342fce9544df955afe7600017967d639f6f882c7d4d0e25da7dbeb18bf11",
-    "conftest_sha256": "6b1aca40968229afa79af185d02f02344b6dcf2fd005ff65e9cfb2bdbeb32958",
+    "conftest_sha256": "79d99a099e5448cf5a5e0d685b270b5002dd1ff33dcb29792cce3b21a7ae83ce",
     "identity_note": "Own Step 1 source hashes; no old freeze or T0 hashes claimed.",
     "proposal_read_only_reference_sha256": "44d76bfef43a4c5df84bc2bc5f4e0e8c22374ab79f00eefed0dba7db4ee9846e",
     "readme_sha256": "33477752b0a630f715b76b66809dfa5352d43911c5feb89b6de7d5cd48cb554a",
     "reference_baseline_sha256": "bb6d86ca2d1185efd1f359d187c0207384aaf301f17fb7290845c31dc091f2d4",
-    "test_sha256": "0ef22db1e25f57279f048efdd7041af4ed55bead989039339a85596ad6eb6e1c"
+    "test_sha256": "c934432353fcc77c70cb81e55e05284999d19dad9e27721ddf4bd608d14a8436"
   },
   "speed_measurement_run": false,
   "status": "passed",
   "step": 1,
   "step2_authorized": false,
   "step_name": "complete equivalence gate",
-  "test_count": 11
+  "test_count": 12
 }
