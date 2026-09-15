@@ -32,6 +32,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     forward_window_adapter,
     implementation_identity,
     is_level_one_header,
+    main,
     make_f_model,
     memory_guard,
     NumericalSafetyError,
@@ -295,3 +296,44 @@ def test_curve_is_persisted_at_each_checkpoint_and_resume_deduplicates(tmp_path:
     assert [point["update"] for point in resumed["validation_curve"]] == [0, 2, 4]
     assert len([json.loads(line) for line in (run_dir / "ledger.jsonl").read_text().splitlines() if json.loads(line).get("record_type") == "update"]) == 4
     assert first["implementation_identity"]["implementation"] == "F"
+
+
+def test_fresh_single_run_selects_one_run_and_keeps_per_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    load_calls = 0
+    run_calls: list[dict[str, object]] = []
+
+    def fake_load_real_documents() -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object], dict[str, object], object]:
+        nonlocal load_calls
+        load_calls += 1
+        return [], [], {"manifest_sha256": "train"}, {"manifest_sha256": "validation"}, object()
+
+    def fake_run_single(**kwargs: object) -> dict[str, object]:
+        run_calls.append(kwargs)
+        return {
+            "run_id": kwargs["run_id"],
+            "seed": kwargs["seed"],
+            "variant": kwargs["variant"],
+            "run_dir": str(kwargs["run_dir"]),
+        }
+
+    monkeypatch.setattr("run_scientific_scoping_a._load_real_documents", fake_load_real_documents)
+    monkeypatch.setattr("run_scientific_scoping_a.run_single", fake_run_single)
+    monkeypatch.setattr("run_scientific_scoping_a.run_full", lambda output_dir: pytest.fail("fresh CLI selected full campaign"))
+
+    output_dir = tmp_path / "results"
+    k1_id = "shared_K1_seed_20260913"
+    k4_id = "shared_K4_seed_20260913"
+    assert main(["--run-id", k1_id, "--seed", "20260913", "--variant", "shared_K1", "--full", "--confirm-smoke", "--output-dir", str(output_dir)]) == 0
+    assert main(["--run-id", k4_id, "--seed", "20260913", "--variant", "shared_K4", "--full", "--confirm-smoke", "--output-dir", str(output_dir)]) == 0
+
+    assert load_calls == 2
+    assert len(run_calls) == 2
+    assert all(call["resume_checkpoint"] is None for call in run_calls)
+    assert [(call["run_id"], call["seed"], call["variant"], call["run_dir"]) for call in run_calls] == [
+        (k1_id, 20260913, "shared_K1", output_dir / "runs" / k1_id),
+        (k4_id, 20260913, "shared_K4", output_dir / "runs" / k4_id),
+    ]
+    k1_report = json.loads((output_dir / f"fresh_report_{k1_id}.json").read_text())
+    k4_report = json.loads((output_dir / f"fresh_report_{k4_id}.json").read_text())
+    assert k1_report["run"]["run_id"] == k1_id
+    assert k4_report["run"]["run_id"] == k4_id

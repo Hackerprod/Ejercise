@@ -1067,6 +1067,38 @@ def run_resume(output_dir: Path, checkpoint: Path, run_id: str, seed: int, varia
     return report
 
 
+def run_fresh(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+    """Run one authorized campaign run from its initial state."""
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents()
+    result = run_single(
+        run_dir=output_dir / "runs" / run_id,
+        run_id=run_id,
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=FULL_UPDATES,
+        checkpoint_interval=500,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=None,
+    )
+    report = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-a-fresh-run-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "mode": "authorized_fresh_run",
+        "campaign_started": True,
+        "run": result,
+        "source_hashes": source_hashes(),
+        "freeze_hash_claim": False,
+    }
+    _write_hashed_json(output_dir / f"fresh_report_{run_id}.json", report, "report_self_hash")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=CAMPAIGN_ID)
     parser.add_argument("--smoke", action="store_true")
@@ -1105,6 +1137,11 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.full and args.confirm_smoke and args.run_id and args.seed in SEEDS and args.variant):
             parser.error("resume requires --full --confirm-smoke --run-id --seed and --variant")
         print(json.dumps(run_resume(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
+    if args.full and args.confirm_smoke and any(value is not None for value in (args.run_id, args.seed, args.variant)):
+        if not (args.run_id and args.seed in SEEDS and args.variant):
+            parser.error("fresh run requires --full --confirm-smoke --run-id --seed and --variant")
+        print(json.dumps(run_fresh(args.output_dir, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
         return 0
     if args.full and args.confirm_smoke:
         print(json.dumps(run_full(args.output_dir), indent=2, sort_keys=True))
