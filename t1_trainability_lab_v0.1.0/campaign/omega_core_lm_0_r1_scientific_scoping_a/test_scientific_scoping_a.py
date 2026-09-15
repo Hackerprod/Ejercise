@@ -22,6 +22,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     VARIANTS,
     TinyTeacher,
     WINDOW_TOKENS,
+    _validate_scope_b_continue_checkpoint,
     _batch_loss,
     _checkpoint_payload,
     _config_payload,
@@ -41,6 +42,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     NumericalSafetyError,
     save_checkpoint,
     run_single,
+    run_scope_b_continue,
     schedule,
     synthetic_documents,
     validate_policy,
@@ -379,6 +381,123 @@ def test_scope_b_resume_accepts_extended_manifest_and_restores_state(tmp_path: P
     assert resumed["restoration_evidence"]["first_resumed_schedule"] == {"update": 2, "window": 0, "pair": 1}
     assert [point["update"] for point in resumed["validation_curve"]] == [0, 2, 4]
     assert [point["update"] for point in resumed["previous_validation_curve"]] == [0, 2]
+
+
+def test_scope_b_continue_uses_exact_b_identity_and_no_extension_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    documents = synthetic_documents(8, 17)
+    train, b_manifest = build_manifest(documents, split_name="train", pair_count=SCOPE_B_PAIRS)
+    validation, validation_manifest = build_manifest(synthetic_documents(2, 17), split_name="validation")
+    checkpoint_payload = {
+        "update": FULL_UPDATES + 500,
+        "data_position": {"next_update": FULL_UPDATES + 500, "pair": (FULL_UPDATES + 500) // 2},
+        "data_hashes": {
+            "train_manifest": b_manifest["manifest_sha256"],
+            "validation_manifest": validation_manifest["manifest_sha256"],
+        },
+    }
+    loaded = []
+    run_calls: list[dict[str, object]] = []
+
+    def fake_load_real_documents(*, pair_count: int | None = None):
+        loaded.append(pair_count)
+        return train, validation, b_manifest, validation_manifest, TinyTeacher(17)
+
+    def fake_run_single(**kwargs: object) -> dict[str, object]:
+        run_calls.append(kwargs)
+        return {
+            "parent_checkpoint_hash": "run-parent-hash",
+            "restoration_evidence": {"exact_equality": True},
+            "previous_validation_curve": [],
+        }
+
+    monkeypatch.setattr("run_scientific_scoping_a._load_real_documents", fake_load_real_documents)
+    monkeypatch.setattr("run_scientific_scoping_a.load_checkpoint", lambda path: (checkpoint_payload, "parent-hash"))
+    monkeypatch.setattr("run_scientific_scoping_a.verify_manifest_extension", lambda *args, **kwargs: pytest.fail("extension verification was rerun"))
+    monkeypatch.setattr("run_scientific_scoping_a.run_single", fake_run_single)
+
+    report = run_scope_b_continue(tmp_path / "report", tmp_path / "checkpoint_02500.pt", "scope-b", 20260913, "shared_K1")
+
+    assert loaded == [SCOPE_B_PAIRS]
+    assert len(run_calls) == 1
+    assert run_calls[0]["total_updates"] == SCOPE_B_UPDATES
+    assert run_calls[0]["resume_checkpoint"] == (tmp_path / "checkpoint_02500.pt").resolve()
+    assert run_calls[0]["old_train_manifest"] is None
+    assert report["mode"] == "authorized_scope_b_continue"
+    assert report["parent_checkpoint_hash"] == "parent-hash"
+    assert report["checkpoint_update"] == 2500
+    assert report["manifest_identity_evidence"]["train_manifest_exact_match"]
+    assert report["manifest_identity_evidence"]["validation_manifest_exact_match"]
+    assert report["extension_verification"]["old_to_new_extension_verification_rerun"] is False
+    assert report["extension_verification"]["normal_exact_hash_identity_validation_active"] is True
+
+
+@pytest.mark.parametrize(
+    "wrong_field",
+    [
+        "train_manifest",
+        "validation_manifest",
+    ],
+)
+def test_scope_b_continue_rejects_non_b_manifest_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wrong_field: str,
+) -> None:
+    train, b_manifest = build_manifest(synthetic_documents(8, 17), split_name="train", pair_count=SCOPE_B_PAIRS)
+    _, a_manifest = build_manifest(synthetic_documents(8, 17), split_name="train", pair_count=FULL_PAIRS)
+    validation, validation_manifest = build_manifest(synthetic_documents(2, 17), split_name="validation")
+    checkpoint_train_hash = a_manifest["manifest_sha256"] if wrong_field == "train_manifest" else b_manifest["manifest_sha256"]
+    checkpoint_validation_hash = "wrong-validation-hash" if wrong_field == "validation_manifest" else validation_manifest["manifest_sha256"]
+    payload = {
+        "update": 2500,
+        "data_position": {"next_update": 2500, "pair": 1250},
+        "data_hashes": {"train_manifest": checkpoint_train_hash, "validation_manifest": checkpoint_validation_hash},
+    }
+    monkeypatch.setattr("run_scientific_scoping_a._load_real_documents", lambda *, pair_count: (train, validation, b_manifest, validation_manifest, TinyTeacher(17)))
+    monkeypatch.setattr("run_scientific_scoping_a.load_checkpoint", lambda path: (payload, "parent-hash"))
+
+    with pytest.raises(ValueError, match=wrong_field):
+        run_scope_b_continue(tmp_path / "report", tmp_path / "checkpoint_02500.pt", "scope-b", 20260913, "shared_K1")
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [(2000, "update >= 2500"), (2501, "boundary")],
+)
+def test_scope_b_continue_requires_b_update_and_boundary(update: int, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _validate_scope_b_continue_checkpoint(
+            {"update": update, "data_position": {"next_update": update, "pair": update // 2}}
+        )
+
+
+def test_scope_b_continue_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def fake_continue(*args: object) -> dict[str, object]:
+        calls.append(args)
+        return {"mode": "authorized_scope_b_continue"}
+
+    monkeypatch.setattr("run_scientific_scoping_a.run_scope_b_continue", fake_continue)
+    checkpoint = tmp_path / "checkpoint_02500.pt"
+    assert main([
+        "--scope-b-continue",
+        "--full",
+        "--confirm-smoke",
+        "--resume-checkpoint",
+        str(checkpoint),
+        "--run-id",
+        "scope-b",
+        "--seed",
+        "20260913",
+        "--variant",
+        "shared_K1",
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]) == 0
+    assert len(calls) == 1
+    assert calls[0][1] == checkpoint
+    assert json.loads(capsys.readouterr().out)["mode"] == "authorized_scope_b_continue"
 
 
 def test_fresh_single_run_selects_one_run_and_keeps_per_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

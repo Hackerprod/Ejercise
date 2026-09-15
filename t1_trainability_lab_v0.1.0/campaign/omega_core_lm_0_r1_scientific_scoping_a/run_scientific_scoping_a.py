@@ -60,6 +60,7 @@ FULL_PAIRS = 1000
 FULL_BOUNDARIES = (0, 500, 1000, 1500, 2000)
 SCOPE_B_UPDATES = 5000
 SCOPE_B_PAIRS = 2500
+SCOPE_B_CONTINUE_MIN_UPDATE = 2500
 SCOPE_B_BOUNDARIES = (0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000)
 SMOKE_UPDATES = 4
 SMOKE_PAIRS = 2
@@ -1264,6 +1265,85 @@ def run_scope_b(output_dir: Path, checkpoint: Path, run_id: str, seed: int, vari
     return report
 
 
+def _validate_scope_b_continue_checkpoint(checkpoint_payload: dict[str, Any]) -> int:
+    checkpoint_update = int(checkpoint_payload.get("update", -1))
+    if checkpoint_update < SCOPE_B_CONTINUE_MIN_UPDATE:
+        raise ValueError("SCOPE-B continuation requires checkpoint update >= 2500")
+    validate_resume_boundary(checkpoint_update, 500)
+    expected_data_position = {"next_update": checkpoint_update, "pair": checkpoint_update // 2}
+    if checkpoint_payload.get("data_position") != expected_data_position:
+        raise ValueError("SCOPE-B continuation checkpoint has invalid data_position")
+    return checkpoint_update
+
+
+def run_scope_b_continue(output_dir: Path, checkpoint: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+    """Continue an already-B checkpoint without rerunning A-to-B extension proof."""
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents(pair_count=SCOPE_B_PAIRS)
+    checkpoint = checkpoint.resolve()
+    checkpoint_payload, checkpoint_hash = load_checkpoint(checkpoint)
+    checkpoint_update = _validate_scope_b_continue_checkpoint(checkpoint_payload)
+    checkpoint_data_hashes = checkpoint_payload.get("data_hashes")
+    if not isinstance(checkpoint_data_hashes, dict):
+        raise ValueError("SCOPE-B continuation checkpoint data_hashes is missing or malformed")
+    expected_train_hash = train_manifest["manifest_sha256"]
+    expected_validation_hash = validation_manifest["manifest_sha256"]
+    if checkpoint_data_hashes.get("train_manifest") != expected_train_hash:
+        raise ValueError("SCOPE-B continuation checkpoint train_manifest hash does not match current B manifest")
+    if checkpoint_data_hashes.get("validation_manifest") != expected_validation_hash:
+        raise ValueError("SCOPE-B continuation checkpoint validation_manifest hash does not match current validation manifest")
+    identity_evidence = {
+        "checkpoint_update": checkpoint_update,
+        "checkpoint_train_manifest_sha256": checkpoint_data_hashes["train_manifest"],
+        "current_b_train_manifest_sha256": expected_train_hash,
+        "train_manifest_exact_match": True,
+        "checkpoint_validation_manifest_sha256": checkpoint_data_hashes["validation_manifest"],
+        "current_validation_manifest_sha256": expected_validation_hash,
+        "validation_manifest_exact_match": True,
+    }
+    result = run_single(
+        run_dir=checkpoint.parent,
+        run_id=run_id,
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=SCOPE_B_UPDATES,
+        checkpoint_interval=500,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=checkpoint,
+        old_train_manifest=None,
+    )
+    report = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-b-continuation-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "scope": "B",
+        "mode": "authorized_scope_b_continue",
+        "campaign_started": True,
+        "checkpoint": checkpoint.as_posix(),
+        "parent_checkpoint_hash": checkpoint_hash,
+        "checkpoint_update": checkpoint_update,
+        "manifest_identity_evidence": identity_evidence,
+        "extension_verification": {
+            "status": "reused_from_checkpoint_already_b_identity",
+            "old_to_new_extension_verification_rerun": False,
+            "checkpoint_already_identifies_b_manifest": True,
+            "normal_exact_hash_identity_validation_active": True,
+            "statement": "Old-to-new extension verification is reused from the checkpoint's already-B identity; it is not rerun or bypassed. Normal exact hash identity validation remains active.",
+        },
+        "restoration_evidence": result["restoration_evidence"],
+        "prior_validation_curve": result["previous_validation_curve"],
+        "run": result,
+        "source_hashes": source_hashes(),
+        "freeze_hash_claim": False,
+    }
+    _write_hashed_json(output_dir / "scope_b_continue_report.json", report, "report_self_hash")
+    return report
+
+
 def run_scope_b_smoke(output_dir: Path, checkpoint: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
     """Run two uncheckpointed B updates in isolated output using a real A checkpoint."""
     train_documents, validation_documents, train_manifest, validation_manifest, teacher, old_train_manifest = _load_scope_b_inputs()
@@ -1359,6 +1439,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--integration-smoke-phase", choices=("initial", "resume"), help=argparse.SUPPRESS)
     parser.add_argument("--integration-smoke-run-id", help=argparse.SUPPRESS)
     parser.add_argument("--scope-b", action="store_true", help="Resume an A checkpoint with verified 1000-to-2500 pair extension")
+    parser.add_argument("--scope-b-continue", action="store_true", help="Continue an already-B checkpoint with exact manifest identity")
     parser.add_argument("--scope-b-smoke", action="store_true", help="Run bounded isolated B continuation smoke")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-smoke", action="store_true", help="Required authorization after smoke review")
@@ -1368,7 +1449,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "results")
     args = parser.parse_args(argv)
-    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child, args.scope_b, args.scope_b_smoke)) > 1:
+    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child, args.scope_b, args.scope_b_continue, args.scope_b_smoke)) > 1:
         raise SystemExit("choose one execution mode")
     args.output_dir = args.output_dir.resolve()
     if args.smoke:
@@ -1390,6 +1471,11 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.resume_checkpoint and args.run_id and args.seed is not None and args.variant):
             parser.error("scope B smoke requires --resume-checkpoint --run-id --seed and --variant")
         print(json.dumps(run_scope_b_smoke(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
+    if args.scope_b_continue:
+        if not (args.full and args.confirm_smoke and args.resume_checkpoint and args.run_id and args.seed in SEEDS and args.variant):
+            parser.error("scope B continuation requires --full --confirm-smoke --resume-checkpoint --run-id --seed and --variant")
+        print(json.dumps(run_scope_b_continue(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
         return 0
     if args.scope_b:
         if not (args.full and args.confirm_smoke and args.resume_checkpoint and args.run_id and args.seed in SEEDS and args.variant):
