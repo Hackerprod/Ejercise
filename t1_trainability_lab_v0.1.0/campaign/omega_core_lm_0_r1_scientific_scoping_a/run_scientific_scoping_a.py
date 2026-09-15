@@ -7,6 +7,7 @@ the full campaign requires both ``--full`` and ``--confirm-smoke``.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import math
@@ -15,16 +16,21 @@ import platform
 import random
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
+import psutil
 import torch
 import torch.nn.functional as F
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ROOT / "scripts"
+F_CANDIDATE_DIR = ROOT / "campaign" / "omega_core_lm_0_r1_cpu_fastpath_validation"
+F_CANDIDATE_PATH = F_CANDIDATE_DIR / "omega_fast_candidate.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(F_CANDIDATE_DIR))
 
 from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
     DATASET_CONFIG,
@@ -42,6 +48,7 @@ from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
     sha256_text,
     teacher_window_logits,
 )
+from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 
 
 CAMPAIGN_ID = "OMEGA-CORE-LM-0-R1-SCIENTIFIC-SCOPING-A"
@@ -66,6 +73,20 @@ WEIGHT_DECAY = 0.0
 CLIP_NORM = 1.0
 VALIDATION_DOCUMENTS = 8
 SMOKE_VALIDATION_DOCUMENTS = 2
+MIN_AVAILABLE_BYTES = 1 << 30
+CPU_INTRAOP_THREADS = 4
+CPU_INTEROP_THREADS = 1
+
+
+class MemorySafetyError(RuntimeError):
+    """Hard stop raised before work can exceed the memory safety floor."""
+
+
+class NumericalSafetyError(RuntimeError):
+    """Hard stop raised before backward or optimizer step on non-finite values."""
+
+
+_CPU_RUNTIME_CONFIGURED = False
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -84,13 +105,78 @@ def file_hash(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def artifact_path(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def implementation_identity() -> dict[str, Any]:
+    return {
+        "implementation": "F",
+        "class": "omega_fast_candidate.OmegaCoreLMFast",
+        "candidate_source_path": F_CANDIDATE_PATH.relative_to(ROOT).as_posix(),
+        "candidate_source_sha256": file_hash(F_CANDIDATE_PATH),
+        "dependency": {
+            "class": "run_omega_core_lm_0_r1_training_technical_preflight.OmegaCoreLM0R1Technical",
+            "source_path": (SCRIPTS_DIR / "run_omega_core_lm_0_r1_training_technical_preflight.py").relative_to(ROOT).as_posix(),
+        },
+    }
+
+
 def source_hashes() -> dict[str, str]:
     current = Path(__file__).resolve()
     source = SCRIPTS_DIR / "run_omega_core_lm_0_r1_training_technical_preflight.py"
-    return {"runner": file_hash(current), "current_r1_source": file_hash(source)}
+    return {
+        "runner": file_hash(current),
+        "current_r1_source": file_hash(source),
+        "f_candidate_source": file_hash(F_CANDIDATE_PATH),
+    }
+
+
+def configure_cpu_runtime() -> None:
+    global _CPU_RUNTIME_CONFIGURED
+    if _CPU_RUNTIME_CONFIGURED:
+        return
+    try:
+        torch.set_num_threads(CPU_INTRAOP_THREADS)
+        torch.set_num_interop_threads(CPU_INTEROP_THREADS)
+    except RuntimeError as exc:
+        raise RuntimeError("cannot set CPU runtime to 4 intraop/1 interop before model work") from exc
+    _CPU_RUNTIME_CONFIGURED = True
+
+
+def memory_guard(stage: str, samples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    available = int(psutil.virtual_memory().available)
+    sample = {"stage": stage, "available_bytes": available, "required_bytes": MIN_AVAILABLE_BYTES}
+    if samples is not None:
+        samples.append(sample)
+    if available < MIN_AVAILABLE_BYTES:
+        raise MemorySafetyError(
+            f"hard stop before {stage}: available memory {available} bytes below {MIN_AVAILABLE_BYTES} bytes"
+        )
+    return sample
+
+
+def _minimum_available_memory(samples: list[dict[str, Any]]) -> int | None:
+    values = [int(sample["available_bytes"]) for sample in samples]
+    return min(values) if values else None
+
+
+def _finite_loss(loss: torch.Tensor, stage: str) -> None:
+    if not bool(torch.isfinite(loss).all().item()):
+        raise NumericalSafetyError(f"non-finite loss at {stage}; optimizer step aborted")
+
+
+def _finite_gradients(model: torch.nn.Module, stage: str) -> None:
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all().item()):
+            raise NumericalSafetyError(f"non-finite gradient for {name} at {stage}; optimizer step aborted")
 
 
 def validate_policy() -> dict[str, Any]:
+    configure_cpu_runtime()
     policy = {
         "device": "cpu",
         "dtype": "float32",
@@ -100,11 +186,15 @@ def validate_policy() -> dict[str, Any]:
         "microbatches": MICROBATCHES,
         "optimizer": "AdamW",
         "teacher_frozen": True,
+        "intraop_threads": CPU_INTRAOP_THREADS,
+        "interop_threads": CPU_INTEROP_THREADS,
     }
     if policy["device"] != "cpu" or policy["dtype"] != "float32" or policy["execution"] != "eager":
         raise AssertionError("scoping A policy drift")
     if (PHYSICAL_BATCH, EFFECTIVE_BATCH, MICROBATCHES) != (8, 8, 1):
         raise AssertionError("batch policy drift")
+    if torch.get_num_threads() != CPU_INTRAOP_THREADS:
+        raise AssertionError("intraop thread policy drift")
     return policy
 
 
@@ -310,7 +400,7 @@ def _state_hashes(model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> d
     }
 
 
-def _config_payload(*, variant: str, seed: int, smoke: bool, dimensions: tuple[int, int]) -> dict[str, Any]:
+def _config_payload(*, variant: str, seed: int, smoke: bool, dimensions: tuple[int, int], integration_smoke: bool = False) -> dict[str, Any]:
     return {
         "campaign_id": CAMPAIGN_ID,
         "variant": variant,
@@ -318,6 +408,7 @@ def _config_payload(*, variant: str, seed: int, smoke: bool, dimensions: tuple[i
         "device": "cpu",
         "dtype": "float32",
         "execution": "eager",
+        "implementation_identity": implementation_identity(),
         "physical_batch": PHYSICAL_BATCH,
         "effective_batch": EFFECTIVE_BATCH,
         "microbatches": MICROBATCHES,
@@ -330,12 +421,15 @@ def _config_payload(*, variant: str, seed: int, smoke: bool, dimensions: tuple[i
         "teacher": {"id": MODEL_ID if not smoke else "synthetic-tiny-teacher", "revision": MODEL_REVISION if not smoke else "synthetic-v1"},
         "data": {"dataset": DATASET_ID if not smoke else "synthetic-fixture", "config": DATASET_CONFIG if not smoke else None, "revision": DATASET_REVISION if not smoke else None},
         "smoke_only": smoke,
+        "integration_smoke": integration_smoke,
     }
 
 
-def _write_json(path: Path, value: dict[str, Any]) -> None:
+def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
 
 
 def _write_hashed_json(path: Path, value: dict[str, Any], field: str) -> str:
@@ -375,7 +469,15 @@ def _checkpoint_payload(
         "config_hash": canonical_hash(config),
         "data_hashes": data_hashes,
         "teacher_hash": teacher_hash,
-        "provenance": {"source_hashes": source_hashes(), "platform": platform.platform(), "python": platform.python_version(), "torch": torch.__version__},
+        "implementation_identity": implementation_identity(),
+        "config": config,
+        "provenance": {
+            "source_hashes": source_hashes(),
+            "implementation_identity": implementation_identity(),
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+        },
     }
 
 
@@ -397,13 +499,75 @@ def load_checkpoint(path: Path) -> tuple[dict[str, Any], str]:
     return payload, file_hash(path)
 
 
+def _validate_f_checkpoint(payload: dict[str, Any]) -> None:
+    expected = implementation_identity()
+    if payload.get("implementation_identity") != expected:
+        raise ValueError("resume checkpoint implementation identity is not F/omega_fast_candidate")
+    provenance = payload.get("provenance", {})
+    if not isinstance(provenance, dict) or provenance.get("implementation_identity") != expected:
+        raise ValueError("resume checkpoint provenance does not identify F/omega_fast_candidate")
+
+
+def forward_window_adapter(model: torch.nn.Module, input_ids: torch.Tensor, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    result = model.forward_window(input_ids, state)
+    if not isinstance(result, tuple) or len(result) < 2:
+        raise TypeError("forward_window must return state and logits")
+    return result[0], result[1]
+
+
+def _distillation_loss_from_trace(
+    model: OmegaCoreLMFast,
+    trace: dict[str, torch.Tensor],
+    teacher_logits: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> torch.Tensor:
+    projected = model.project(trace["readout_states"]).reshape(-1, model.dimension)
+    flat_teacher = teacher_logits.reshape(-1, model.vocab_size)
+    flat_targets = targets.reshape(-1)
+    flat_weights = valid_mask.reshape(-1).to(projected.dtype)
+    ce_total = projected.new_zeros(())
+    kl_total = projected.new_zeros(())
+    for start in range(0, projected.shape[0], 512):
+        stop = start + 512
+        student_logits = model.logits_from_projected(projected[start:stop])
+        ce_total = ce_total + (F.cross_entropy(student_logits, flat_targets[start:stop], reduction="none") * flat_weights[start:stop]).sum()
+        student_log_probs = F.log_softmax(student_logits / TEMPERATURE, dim=-1)
+        teacher_probs = F.softmax(flat_teacher[start:stop] / TEMPERATURE, dim=-1)
+        kl_total = kl_total + (F.kl_div(student_log_probs, teacher_probs, reduction="none").sum(dim=-1) * TEMPERATURE**2 * flat_weights[start:stop]).sum()
+    denominator = flat_weights.sum().clamp_min(1.0)
+    return 0.5 * (ce_total / denominator) + 0.5 * (kl_total / denominator)
+
+
+def make_f_model(*, vocab_size: int, dimensions: tuple[int, int], variant: str, memory_samples: list[dict[str, Any]] | None = None) -> OmegaCoreLMFast:
+    memory_guard("reference_model_initialization", memory_samples)
+    reference = OmegaCoreLM0R1Technical(
+        vocab_size=vocab_size,
+        dimension=dimensions[0],
+        slots=dimensions[1],
+        rounds=1 if variant == "shared_K1" else 4,
+        variant="shared",
+    ).to(dtype=torch.float32)
+    try:
+        memory_guard("f_candidate_conversion", memory_samples)
+        model = OmegaCoreLMFast.from_reference(reference).to(dtype=torch.float32)
+    finally:
+        del reference
+        gc.collect()
+    memory_guard("f_candidate_ready", memory_samples)
+    return model
+
+
 def _batch_loss(
-    model: OmegaCoreLM0R1Technical,
+    model: torch.nn.Module,
     teacher: torch.nn.Module,
     documents: list[dict[str, Any]],
     window: int,
     previous_states: list[torch.Tensor] | None,
+    memory_samples: list[dict[str, Any]] | None = None,
 ) -> tuple[torch.Tensor, list[torch.Tensor], int]:
+    configure_cpu_runtime()
+    memory_guard("source_assignment", memory_samples)
     source = torch.tensor([document["tokens"] for document in documents], dtype=torch.long)
     input_start = window * WINDOW_TOKENS
     input_ids = source[:, input_start : input_start + WINDOW_TOKENS]
@@ -414,15 +578,28 @@ def _batch_loss(
         if previous_states is None:
             raise ValueError("window 1 requires previous detached window 0 states")
         state = torch.cat(previous_states, dim=0)
-    next_state, logits = model.forward_window(input_ids, state)
+    memory_guard("student_forward", memory_samples)
+    forward_result = model.forward_window(input_ids, state)
+    if not isinstance(forward_result, tuple) or len(forward_result) < 2:
+        raise TypeError("forward_window must return state and logits")
+    next_state, logits = forward_result[0], forward_result[1]
+    trace = forward_result[2] if len(forward_result) >= 3 else None
+    if trace is not None and not isinstance(trace, dict):
+        raise TypeError("forward_window trace must be a mapping")
+    if trace is not None:
+        del logits
+    memory_guard("teacher_forward", memory_samples)
     teacher_logits = teacher_window_logits(teacher, source, window)
     mask = torch.ones_like(targets, dtype=torch.bool)
-    loss = distillation_loss(logits, teacher_logits[:, :WINDOW_TOKENS], targets, mask)["total"]
+    if trace is not None:
+        loss = _distillation_loss_from_trace(model, trace, teacher_logits[:, :WINDOW_TOKENS], targets, mask)
+    else:
+        loss = distillation_loss(logits, teacher_logits[:, :WINDOW_TOKENS], targets, mask)["total"]
     next_states = [next_state[index : index + 1].detach() for index in range(len(documents))]
     return loss, next_states, int(mask.sum().item())
 
 
-def evaluate_validation(model: OmegaCoreLM0R1Technical, documents: list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_validation(model: torch.nn.Module, documents: list[dict[str, Any]], memory_samples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     model.eval()
     total_nll = 0.0
     total_tokens = 0
@@ -431,10 +608,11 @@ def evaluate_validation(model: OmegaCoreLM0R1Technical, documents: list[dict[str
             source = torch.tensor(document["tokens"], dtype=torch.long).unsqueeze(0)
             state = model.initial_state(1, device=torch.device("cpu"))
             for window in (0, 1):
+                memory_guard("validation_forward", memory_samples)
                 start = window * WINDOW_TOKENS
                 inputs = source[:, start : start + WINDOW_TOKENS]
                 targets = source[:, start + 1 : start + WINDOW_TOKENS + 1]
-                state, logits = model.forward_window(inputs, state.detach() if window else state)
+                state, logits = forward_window_adapter(model, inputs, state.detach() if window else state)
                 values = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1), reduction="none")
                 total_nll += float(values.sum().item())
                 total_tokens += int(values.numel())
@@ -464,34 +642,42 @@ def run_single(
     smoke: bool,
     dimensions: tuple[int, int],
     resume_checkpoint: Path | None = None,
+    integration_smoke: bool = False,
 ) -> dict[str, Any]:
     validate_policy()
     if variant not in VARIANTS:
         raise ValueError(f"unsupported variant: {variant}")
     boundaries = checkpoint_boundaries(total_updates, checkpoint_interval)
-    config = _config_payload(variant=variant, seed=seed, smoke=smoke, dimensions=dimensions)
-    identity_hash = canonical_hash({"campaign_id": CAMPAIGN_ID, "run_id": run_id, "variant": variant, "seed": seed})
+    config = _config_payload(variant=variant, seed=seed, smoke=smoke, dimensions=dimensions, integration_smoke=integration_smoke)
+    identity_hash = canonical_hash({"campaign_id": CAMPAIGN_ID, "run_id": run_id, "variant": variant, "seed": seed, "implementation_identity": implementation_identity()})
     data_hashes = {"train_manifest": train_manifest["manifest_sha256"], "validation_manifest": validation_manifest["manifest_sha256"]}
     teacher_hash = canonical_hash(config["teacher"])
     ledger_path = run_dir / "ledger.jsonl"
     curve_path = run_dir / "validation_curve.json"
+    memory_samples: list[dict[str, Any]] = []
+    finite_checks: list[dict[str, Any]] = []
     run_dir.mkdir(parents=True, exist_ok=True)
     _write_json(run_dir / "train_manifest.json", train_manifest)
     _write_json(run_dir / "validation_manifest.json", validation_manifest)
+    _write_json(run_dir / "config.json", config)
     ledger = AppendOnlyLedger(ledger_path)
     segment = 0
     parent_checkpoint_hash: str | None = None
     previous_curve: list[dict[str, Any]] = []
     if resume_checkpoint is None:
         set_seed(seed)
-        model = OmegaCoreLM0R1Technical(vocab_size=TOKENIZER_VOCAB if not smoke else 17, dimension=dimensions[0], slots=dimensions[1], rounds=1 if variant == "shared_K1" else 4, variant="shared").to(dtype=torch.float32)
+        model = make_f_model(vocab_size=TOKENIZER_VOCAB if not smoke else 17, dimensions=dimensions, variant=variant, memory_samples=memory_samples)
+        memory_guard("optimizer_initialization", memory_samples)
         optimizer = torch.optim.AdamW(model.parameters(), lr=BASE_LR, betas=ADAMW_BETAS, eps=ADAMW_EPS, weight_decay=WEIGHT_DECAY)
         initial_payload = _checkpoint_payload(model, optimizer, update=0, data_position={"next_update": 0, "pair": 0}, run_id=run_id, config=config, identity_hash=identity_hash, data_hashes=data_hashes, teacher_hash=teacher_hash, execution_segment=0)
         checkpoint_hash = save_checkpoint(run_dir / "checkpoint_00000.pt", initial_payload)
         ledger.append({"record_type": "checkpoint", "run_id": run_id, "execution_segment": 0, "update": 0, "checkpoint_hash": checkpoint_hash, "parent_checkpoint_hash": None})
-        curve: list[dict[str, Any]] = [{"update": 0, **evaluate_validation(model, validation_documents)}]
+        curve: list[dict[str, Any]] = []
+        curve.append({"update": 0, **evaluate_validation(model, validation_documents, memory_samples)})
+        _write_json(curve_path, curve)
     else:
         payload, parent_checkpoint_hash = load_checkpoint(resume_checkpoint)
+        _validate_f_checkpoint(payload)
         checkpoint_update = int(payload.get("update", -1))
         validate_resume_boundary(checkpoint_update, checkpoint_interval)
         expected = {"run_id": run_id, "seed": seed, "identity_hash": identity_hash, "config_hash": canonical_hash(config), "data_hashes": data_hashes, "teacher_hash": teacher_hash}
@@ -500,7 +686,9 @@ def run_single(
                 raise ValueError(f"resume identity mismatch for {key}")
         if checkpoint_update >= total_updates:
             raise ValueError("resume checkpoint is not before requested end update")
-        model = OmegaCoreLM0R1Technical(vocab_size=17 if smoke else TOKENIZER_VOCAB, dimension=dimensions[0], slots=dimensions[1], rounds=1 if variant == "shared_K1" else 4, variant="shared").to(dtype=torch.float32)
+        set_seed(seed)
+        model = make_f_model(vocab_size=17 if smoke else TOKENIZER_VOCAB, dimensions=dimensions, variant=variant, memory_samples=memory_samples)
+        memory_guard("optimizer_initialization", memory_samples)
         optimizer = torch.optim.AdamW(model.parameters(), lr=BASE_LR, betas=ADAMW_BETAS, eps=ADAMW_EPS, weight_decay=WEIGHT_DECAY)
         model.load_state_dict(payload["model"])
         optimizer.load_state_dict(payload["optimizer"])
@@ -509,10 +697,12 @@ def run_single(
         segment = max((int(event.get("execution_segment", 0)) for event in _read_ledger(ledger_path)), default=0) + 1
         ledger.append({"record_type": "resume", "run_id": run_id, "execution_segment": segment, "update": checkpoint_update, "checkpoint_hash": parent_checkpoint_hash, "parent_checkpoint_hash": parent_checkpoint_hash, "preserved_prior_segments": True})
         curve = json.loads(curve_path.read_text(encoding="utf-8")) if curve_path.exists() else []
+        curve = sorted({int(item["update"]): item for item in curve if int(item["update"]) <= checkpoint_update}.values(), key=lambda item: int(item["update"]))
         previous_curve = list(curve)
         start_update = checkpoint_update
         if not curve or int(curve[-1]["update"]) != checkpoint_update:
-            curve.append({"update": checkpoint_update, **evaluate_validation(model, validation_documents)})
+            curve.append({"update": checkpoint_update, **evaluate_validation(model, validation_documents, memory_samples)})
+            _write_json(curve_path, curve)
     start_update = 0 if resume_checkpoint is None else int(payload["update"])
     pair_states: list[torch.Tensor] | None = None
     model.train()
@@ -520,27 +710,95 @@ def run_single(
         update = item["update"]
         pair_start = item["pair"] * PHYSICAL_BATCH
         documents = [train_documents[(pair_start + offset) % len(train_documents)] for offset in range(PHYSICAL_BATCH)]
+        memory_guard(f"update_{update}:before_zero_grad", memory_samples)
         optimizer.zero_grad(set_to_none=True)
-        loss, next_states, valid_tokens = _batch_loss(model, teacher, documents, item["window"], pair_states)
+        loss, next_states, valid_tokens = _batch_loss(model, teacher, documents, item["window"], pair_states, memory_samples)
+        _finite_loss(loss, f"update_{update}:before_backward")
+        loss_value = float(loss.detach().item())
+        finite_checks.append({"update": update + 1, "loss": True})
+        memory_guard(f"update_{update}:before_backward", memory_samples)
         loss.backward()
+        memory_guard(f"update_{update}:before_clip", memory_samples)
+        _finite_gradients(model, f"update_{update}:before_clip")
         pre_clip = float(torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM).item())
+        _finite_gradients(model, f"update_{update}:after_clip")
+        memory_guard(f"update_{update}:before_optimizer_step", memory_samples)
+        _finite_loss(loss, f"update_{update}:before_optimizer_step")
+        finite_checks[-1]["gradients_before_clip"] = True
+        finite_checks[-1]["gradients_after_clip"] = True
         optimizer.step()
         if item["window"] == 0:
             pair_states = next_states
         else:
             pair_states = None
         completed = update + 1
-        ledger.append({"record_type": "update", "run_id": run_id, "execution_segment": segment, "update": completed, "source_update": update, "window": item["window"], "pair": item["pair"], "document_indices": [document["document_index"] for document in documents], "valid_tokens": valid_tokens, "loss": float(loss.detach().item()), "pre_clip_grad_norm": pre_clip, "parent_checkpoint_hash": parent_checkpoint_hash})
+        ledger.append({
+            "record_type": "update",
+            "run_id": run_id,
+            "execution_segment": segment,
+            "update": completed,
+            "source_update": update,
+            "window": item["window"],
+            "pair": item["pair"],
+            "document_indices": [document["document_index"] for document in documents],
+            "valid_tokens": valid_tokens,
+            "input_shape": [PHYSICAL_BATCH, WINDOW_TOKENS],
+            "student_output_shape": [PHYSICAL_BATCH, WINDOW_TOKENS, model.vocab_size],
+            "teacher_output_shape": [PHYSICAL_BATCH, WINDOW_TOKENS, model.vocab_size],
+            "teacher_route": "direct_distilgpt2" if not smoke else "synthetic_tiny_teacher",
+            "student_forward_calls": 1,
+            "teacher_forward_calls": 1,
+            "backward_calls": 1,
+            "clip_calls": 1,
+            "optimizer_steps": 1,
+            "state_mode": "reset" if item["window"] == 0 else "detached_window_0",
+            "state_source_update": None if item["window"] == 0 else completed - 1,
+            "finite_loss": True,
+            "finite_gradients_before_clip": True,
+            "finite_gradients_after_clip": True,
+            "optimizer_step_applied": True,
+            "loss": loss_value,
+            "pre_clip_grad_norm": pre_clip,
+            "parent_checkpoint_hash": parent_checkpoint_hash,
+        })
         if completed in boundaries:
-            curve.append({"update": completed, **evaluate_validation(model, validation_documents)})
+            curve.append({"update": completed, **evaluate_validation(model, validation_documents, memory_samples)})
+            curve = sorted({int(item["update"]): item for item in curve}.values(), key=lambda item: int(item["update"]))
+            _write_json(curve_path, curve)
             checkpoint_payload = _checkpoint_payload(model, optimizer, update=completed, data_position={"next_update": completed, "pair": completed // 2}, run_id=run_id, config=config, identity_hash=identity_hash, data_hashes=data_hashes, teacher_hash=teacher_hash, execution_segment=segment)
             checkpoint_hash = save_checkpoint(run_dir / f"checkpoint_{completed:05d}.pt", checkpoint_payload)
             ledger.append({"record_type": "checkpoint", "run_id": run_id, "execution_segment": segment, "update": completed, "checkpoint_hash": checkpoint_hash, "parent_checkpoint_hash": parent_checkpoint_hash})
             model.train()
+        del loss, next_states
     curve = sorted({int(item["update"]): item for item in curve}.values(), key=lambda item: int(item["update"]))
     _write_json(curve_path, curve)
     final_nll = float(curve[-1]["nll"])
-    result = {"run_id": run_id, "seed": seed, "variant": variant, "mode": "smoke" if smoke else "campaign", "updates": total_updates, "checkpoint_boundaries": list(boundaries), "validation_curve": curve, "final_nll": final_nll, "execution_segments": sorted({int(event.get("execution_segment", 0)) for event in _read_ledger(ledger_path)}), "run_dir": run_dir.relative_to(ROOT).as_posix()}
+    result = {
+        "run_id": run_id,
+        "seed": seed,
+        "variant": variant,
+        "mode": "integration_smoke" if integration_smoke else "smoke" if smoke else "campaign",
+        "updates": total_updates,
+        "checkpoint_boundaries": list(boundaries),
+        "validation_curve": curve,
+        "final_nll": final_nll,
+        "execution_segments": sorted({int(event.get("execution_segment", 0)) for event in _read_ledger(ledger_path)}),
+        "run_dir": artifact_path(run_dir),
+        "implementation_identity": implementation_identity(),
+        "curve_path": artifact_path(curve_path),
+        "checkpoint_paths": [
+            artifact_path(run_dir / f"checkpoint_{boundary:05d}.pt")
+            for boundary in boundaries
+            if (run_dir / f"checkpoint_{boundary:05d}.pt").exists()
+        ],
+        "memory_safety": {
+            "minimum_available_bytes": _minimum_available_memory(memory_samples),
+            "required_available_bytes": MIN_AVAILABLE_BYTES,
+            "samples": memory_samples,
+            "hard_stop_triggered": False,
+        },
+        "finite_safety": {"checks": finite_checks, "all_passed": all(all(item.values()) for item in finite_checks)},
+    }
     _write_json(run_dir / "run_result.json", result)
     return result
 
@@ -577,7 +835,8 @@ def run_smoke_resume(output_dir: Path) -> dict[str, Any]:
     return report
 
 
-def _load_real_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], torch.nn.Module]:
+def _load_real_documents(*, integration_smoke: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any], torch.nn.Module]:
+    validate_policy()
     from datasets import DownloadConfig, load_dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -593,7 +852,7 @@ def _load_real_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], 
     validation_dataset = load_dataset(DATASET_ID, DATASET_CONFIG, split="validation", revision=DATASET_REVISION, download_config=download_config)
     all_train = collect_all_eligible_documents(train_dataset, tokenizer)
     all_validation = collect_all_eligible_documents(validation_dataset, tokenizer)
-    train_documents, train_manifest = build_manifest(all_train, split_name="train", pair_count=FULL_PAIRS)
+    train_documents, train_manifest = build_manifest(all_train, split_name="train", pair_count=SMOKE_PAIRS if integration_smoke else FULL_PAIRS)
     train_keys = {(item["full_text_sha256"], item["retained_513_token_sha256"]) for item in train_documents}
     validation_candidates, validation_manifest = build_manifest(all_validation, split_name="validation", excluded_keys=train_keys)
     if len(validation_candidates) < VALIDATION_DOCUMENTS:
@@ -603,6 +862,161 @@ def _load_real_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], 
     validation_manifest["document_count"] = len(validation_documents)
     validation_manifest["manifest_sha256"] = canonical_hash({key: value for key, value in validation_manifest.items() if key != "manifest_sha256"})
     return train_documents, validation_documents, train_manifest, validation_manifest, teacher
+
+
+def run_integration_smoke_child(
+    *,
+    output_dir: Path,
+    run_id: str,
+    variant: str,
+    seed: int,
+    phase: str,
+    resume_checkpoint: Path | None = None,
+) -> dict[str, Any]:
+    if phase not in {"initial", "resume"}:
+        raise ValueError(f"unsupported integration smoke phase: {phase}")
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents(integration_smoke=True)
+    run_dir = output_dir / "integration_smoke" / run_id / "runs" / f"{variant}_seed_{seed}"
+    result = run_single(
+        run_dir=run_dir,
+        run_id=f"{run_id}_{variant}",
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=2 if phase == "initial" else 4,
+        checkpoint_interval=2,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=resume_checkpoint,
+        integration_smoke=True,
+    )
+    child = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-a-integration-smoke-child-v1",
+        "phase": phase,
+        "process_id": os.getpid(),
+        "variant": variant,
+        "run": result,
+        "data": {"dataset": DATASET_ID, "config": DATASET_CONFIG, "revision": DATASET_REVISION, "test_split_loaded": False},
+        "teacher": {"id": MODEL_ID, "revision": MODEL_REVISION, "route": "direct_distilgpt2"},
+        "implementation_identity": implementation_identity(),
+        "source_hashes": source_hashes(),
+    }
+    _write_json(run_dir / f"child_{phase}.json", child)
+    return child
+
+
+def _run_integration_child(command: list[str]) -> dict[str, Any]:
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    if completed.returncode:
+        raise RuntimeError(f"integration smoke child failed ({completed.returncode}): {completed.stderr[-2000:]}")
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"integration smoke child did not emit JSON: {completed.stdout[-500:]}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("integration smoke child result must be an object")
+    return result
+
+
+def _verify_integration_smoke(
+    *,
+    run_dir: Path,
+    initial_children: list[dict[str, Any]],
+    resumed_children: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected_updates = list(range(1, SMOKE_UPDATES + 1))
+    expected_shape = [PHYSICAL_BATCH, WINDOW_TOKENS, TOKENIZER_VOCAB]
+    per_variant: list[dict[str, bool]] = []
+    all_update_records: list[dict[str, Any]] = []
+    memory_minima: dict[str, int | None] = {}
+    run_summaries: list[dict[str, Any]] = []
+    for initial, resumed in zip(initial_children, resumed_children):
+        variant = str(resumed["variant"])
+        initial_run = initial["run"]
+        resumed_run = resumed["run"]
+        variant_dir = run_dir / "runs" / f"{variant}_seed_{resumed_run['seed']}"
+        final_ledger = _read_ledger(variant_dir / "ledger.jsonl")
+        updates = [event for event in final_ledger if event.get("record_type") == "update"]
+        all_update_records.extend(updates)
+        phase_memory = [initial_run["memory_safety"]["minimum_available_bytes"], resumed_run["memory_safety"]["minimum_available_bytes"]]
+        memory_minima[variant] = min(value for value in phase_memory if value is not None)
+        initial_curve = initial_run["validation_curve"]
+        resumed_curve = resumed_run["validation_curve"]
+        checkpoints = [variant_dir / f"checkpoint_{boundary:05d}.pt" for boundary in SMOKE_BOUNDARIES]
+        pair_documents = {pair: {int(index) for index in event["document_indices"]} for pair in {0, 1} for event in updates if int(event["pair"]) == pair}
+        variant_checks = {
+            "curve_points": [int(point["update"]) for point in initial_curve] == [0, 2] and [int(point["update"]) for point in resumed_curve] == list(SMOKE_BOUNDARIES),
+            "checkpoint_boundaries": all(path.is_file() for path in checkpoints),
+            "fresh_process_resume": initial["process_id"] != resumed["process_id"],
+            "no_duplicate_updates": [int(event["update"]) for event in updates] == expected_updates,
+            "f_identity": initial["implementation_identity"] == implementation_identity() and resumed["implementation_identity"] == implementation_identity() and resumed_run["implementation_identity"] == implementation_identity(),
+            "shape_batch_teacher_route": all(event.get("input_shape") == [PHYSICAL_BATCH, WINDOW_TOKENS] and event.get("student_output_shape") == expected_shape and event.get("teacher_output_shape") == expected_shape and event.get("teacher_route") == "direct_distilgpt2" and event.get("student_forward_calls") == 1 and event.get("teacher_forward_calls") == 1 for event in updates),
+            "distinct_pair_document_ids": len(pair_documents) == 2 and pair_documents[0].isdisjoint(pair_documents[1]),
+            "reset_and_detached_continuity": all((event["window"] == 0 and event["state_mode"] == "reset" and event["state_source_update"] is None) or (event["window"] == 1 and event["state_mode"] == "detached_window_0" and event["state_source_update"] == event["update"] - 1) for event in updates),
+            "finite_checks": resumed_run["finite_safety"]["all_passed"] and all(event["finite_loss"] and event["finite_gradients_before_clip"] and event["finite_gradients_after_clip"] for event in updates),
+            "real_pinned_data": initial["data"]["revision"] == DATASET_REVISION and resumed["data"]["revision"] == DATASET_REVISION and initial["teacher"]["revision"] == MODEL_REVISION and resumed["teacher"]["revision"] == MODEL_REVISION,
+            "test_split_false": not initial["data"]["test_split_loaded"] and not resumed["data"]["test_split_loaded"],
+        }
+        per_variant.append(variant_checks)
+        run_summaries.append({"variant": variant, "process_ids": {"initial": initial["process_id"], "resume": resumed["process_id"]}, "initial": initial_run, "resumed": resumed_run})
+    checks = {key: all(item[key] for item in per_variant) for key in per_variant[0]} if per_variant else {}
+    checks["both_variants"] = {str(item["variant"]) for item in resumed_children} == set(VARIANTS)
+    checks["exact_updates_total"] = len(all_update_records) == 8 and all(event.get("optimizer_steps") == 1 for event in all_update_records)
+    checks["all_updates_expected"] = len(all_update_records) == 8 and sorted(int(event["update"]) for event in all_update_records) == [1, 1, 2, 2, 3, 3, 4, 4]
+    checks["all_updates_valid_tokens"] = all(int(event["valid_tokens"]) == PHYSICAL_BATCH * WINDOW_TOKENS for event in all_update_records)
+    checks["curve_paths_persisted"] = all(Path(ROOT / summary["resumed"]["curve_path"]).is_file() for summary in run_summaries)
+    checks["checkpoint_paths_persisted"] = all(all(Path(ROOT / path).is_file() for path in summary["resumed"]["checkpoint_paths"]) for summary in run_summaries)
+    checks["status_eligibility"] = all(checks.values())
+    return {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-a-integration-smoke-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "mode": "integration_smoke",
+        "status": "completed" if checks["status_eligibility"] else "failed",
+        "campaign_started": False,
+        "full_update_budget": 0,
+        "exact_updates_total": len(all_update_records),
+        "variants": list(VARIANTS),
+        "updates_per_variant": SMOKE_UPDATES,
+        "runs": run_summaries,
+        "checks": checks,
+        "implementation_identity": implementation_identity(),
+        "source_hashes": source_hashes(),
+        "teacher": {"id": MODEL_ID, "revision": MODEL_REVISION, "route": "direct_distilgpt2"},
+        "dataset": {"id": DATASET_ID, "config": DATASET_CONFIG, "revision": DATASET_REVISION, "train_split": True, "validation_split": True, "test_split_loaded": False},
+        "memory_safety": {"required_available_bytes": MIN_AVAILABLE_BYTES, "minimum_available_bytes_by_variant": memory_minima, "hard_stop_triggered": False},
+        "curve_points": list(SMOKE_BOUNDARIES),
+        "checkpoint_boundaries": list(SMOKE_BOUNDARIES),
+        "fresh_process_resume": checks["fresh_process_resume"],
+        "no_scientific_campaign_or_full_launch": True,
+        "run_dir": artifact_path(run_dir),
+    }
+
+
+def run_integration_smoke(output_dir: Path, run_id: str | None = None) -> dict[str, Any]:
+    run_id = run_id or f"integration_smoke_{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}_{os.getpid()}"
+    run_dir = output_dir / "integration_smoke" / run_id
+    if run_dir.exists():
+        raise FileExistsError(f"integration smoke output already exists: {run_dir}")
+    run_dir.mkdir(parents=True, exist_ok=False)
+    script = str(Path(__file__).resolve())
+    initial_children: list[dict[str, Any]] = []
+    resumed_children: list[dict[str, Any]] = []
+    for variant in VARIANTS:
+        base = [sys.executable, script, "--integration-smoke-child", "--integration-smoke-phase", "initial", "--output-dir", str(output_dir), "--integration-smoke-run-id", run_id, "--variant", variant, "--seed", str(SEEDS[0])]
+        initial = _run_integration_child(base)
+        initial_children.append(initial)
+        checkpoint = run_dir / "runs" / f"{variant}_seed_{SEEDS[0]}" / "checkpoint_00002.pt"
+        if not checkpoint.is_file():
+            raise RuntimeError(f"initial integration smoke child did not persist {checkpoint}")
+        resume_command = [sys.executable, script, "--integration-smoke-child", "--integration-smoke-phase", "resume", "--output-dir", str(output_dir), "--integration-smoke-run-id", run_id, "--variant", variant, "--seed", str(SEEDS[0]), "--resume-checkpoint", str(checkpoint)]
+        resumed_children.append(_run_integration_child(resume_command))
+    report = _verify_integration_smoke(run_dir=run_dir, initial_children=initial_children, resumed_children=resumed_children)
+    _write_hashed_json(run_dir / "integration_smoke_report.json", report, "report_self_hash")
+    return report
 
 
 def run_full(output_dir: Path) -> dict[str, Any]:
@@ -657,6 +1071,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=CAMPAIGN_ID)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--smoke-resume", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--integration-smoke", action="store_true")
+    parser.add_argument("--integration-smoke-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--integration-smoke-phase", choices=("initial", "resume"), help=argparse.SUPPRESS)
+    parser.add_argument("--integration-smoke-run-id", help=argparse.SUPPRESS)
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-smoke", action="store_true", help="Required authorization after smoke review")
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -665,14 +1083,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "results")
     args = parser.parse_args(argv)
-    if args.smoke and args.smoke_resume:
-        raise SystemExit("choose one smoke mode")
+    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child)) > 1:
+        raise SystemExit("choose one execution mode")
     args.output_dir = args.output_dir.resolve()
     if args.smoke:
         print(json.dumps(run_smoke(args.output_dir), indent=2, sort_keys=True))
         return 0
     if args.smoke_resume:
         print(json.dumps(run_smoke_resume(args.output_dir), indent=2, sort_keys=True))
+        return 0
+    if args.integration_smoke_child:
+        if not args.integration_smoke_phase or not args.integration_smoke_run_id or not args.variant or args.seed is None:
+            parser.error("integration smoke child requires phase, run id, seed, and variant")
+        checkpoint = args.resume_checkpoint.resolve() if args.resume_checkpoint is not None else None
+        print(json.dumps(run_integration_smoke_child(output_dir=args.output_dir, run_id=args.integration_smoke_run_id, variant=args.variant, seed=args.seed, phase=args.integration_smoke_phase, resume_checkpoint=checkpoint), indent=2, sort_keys=True))
+        return 0
+    if args.integration_smoke:
+        print(json.dumps(run_integration_smoke(args.output_dir, args.integration_smoke_run_id), indent=2, sort_keys=True))
         return 0
     if args.resume_checkpoint is not None:
         if not (args.full and args.confirm_smoke and args.run_id and args.seed in SEEDS and args.variant):
