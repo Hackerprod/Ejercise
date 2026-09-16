@@ -1,0 +1,80 @@
+# Ideas para más adelante (OMEGA)
+
+Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas futuras del proyecto, no durante SCOPE-A/B/C/campaña confirmatoria actual. Cada entrada debe re-evaluarse (¿sigue siendo relevante? ¿ya se volvió obsoleta?) antes de proponérsela a Sol.
+
+---
+
+## Despliegue / inferencia eficiente (post-confirmación)
+
+### MNN (Alibaba) como alternativa a T0-TR-X
+- **Qué es**: motor de inferencia (no entrenamiento) — importa ONNX/TensorFlow/Caffe/TorchScript, corre con kernels ARM/x64 escritos a mano, cuantización, footprint mínimo (~800KB Android). Tiene `MNN-Train` pero es secundario, no pensado para investigación con autograd custom.
+- **Por qué no aplica ahora**: SCOPE-A/B/C necesitan control total del training loop (AdamW, continuidad de estado, pérdida CE+KL propia) sobre la arquitectura exacta de F — MNN-Train no está armado para eso.
+- **Por qué sí después**: si OMEGA pasa la campaña confirmatoria, MNN es una alternativa ya madura a construir `T0-TR-X` desde cero (el puente C++ nativo con AVX2 que Sol dejó en HOLD) — exportar el modelo entrenado a ONNX y correr por MNN en vez de reinventar kernels.
+- **Fuente**: https://github.com/alibaba/MNN
+- **Agregado**: 2026-09-15, durante SCOPE-B.
+- **Detalle verificado (2026-09-15)**: MNN tiene un formato de tokenizer binario `.mtok` (precomputación en Python + carga zero-copy en C++, tablas de vocabulario con `StringRef` directo al buffer, sin parseo de texto ni Unicode en runtime). Real, documentado, marcado como el formato recomendado (vs `.txt` legacy). Prioridad BAJA para OMEGA: ataca el costo de tokenizar, que no es el cuello de botella actual (el readout/backward sí lo son) — anotado para cuando llegue la etapa de despliegue, no antes.
+
+---
+
+### MNN-Compress / HQQ para que el core viva en caché
+- **Qué es**: `MNNConvert --hqq` integra Half-Quadratic Quantization — cuantización asimétrica, sin datos de calibración, combinable con block-wise quantization. Verificado real (no en el wiki de tokenizer, en release notes de MNN-Compress).
+- **Por qué importa para OMEGA específicamente**: el argumento no es "modelo más chico" — es cambio de régimen de memoria. Si el core recurrente hoy pesa ~1.8MiB y el L2/core disponible es ~2MiB (números de ejemplo, hay que medir los reales), estamos al borde de spill/cache-miss. Bajar a ~0.9MiB no es "ahorrar la mitad", es la diferencia entre core residente en caché y core que constantemente falla a L3/RAM. Eso pesa más que el típico argumento de "INT4 ocupa menos".
+- **Por qué no ahora**: cuantizar el core ahora metería ruido numérico exactamente en la parte que SCOPE-A/B/C están tratando de medir (¿la profundidad K ayuda?). Haría esto DESPUÉS de que la arquitectura se valide en FP32, no antes — mismo principio que ya aplicamos para descartar FP16/BF16 en toda esta campaña.
+- **Ojo**: sin calibración es una ventaja real (pipeline más simple), pero calibración-free no significa error-free — igual habría que medirlo con el mismo gate de tolerancia que usamos en todo lo demás, no asumir que "es HQQ entonces está bien".
+- **Fuente**: https://github.com/alibaba/MNN (release notes de MNN-Compress)
+- **Agregado**: 2026-09-15, durante SCOPE-B.
+
+---
+
+## Direcciones de investigación (no son herramientas, son preguntas)
+
+### Rediseño del vocabulario/readout de OMEGA
+- **La pregunta**: ¿por qué gastar todo el cómputo recurrente barato del core para terminar cada token con un readout plano de 50,257 clases? Ya sabemos por T0-TR-P que el readout es solo ~8% del tiempo de cómputo, pero domina la memoria (25.7MB FP32, la matriz de parámetros más grande del modelo por lejos).
+- **Por qué es una idea real y no humo**: no depende de ningún repo externo — sale directo de datos que ya medimos nosotros mismos en esta campaña (T0-TR-P). Un readout jerárquico/factorizado podría atacar velocidad de entrenamiento, velocidad de inferencia Y tamaño del núcleo simultáneamente, sin tocar la propiedad recurrente que SCOPE-A/B/C están validando ahora.
+- **Cuándo perseguirla**: solo si K4 termina confirmándose (no tiene sentido optimizar el readout de una arquitectura que todavía no probó que aprende). Es investigación de arquitectura nueva, no una optimización de implementación — necesitaría su propia unidad tipo CPU-FASTPATH-VALIDATION, con equivalencia numérica y benchmark separados del experimento actual.
+- **Agregado**: 2026-09-15, durante SCOPE-B (surgida de una instancia paralela de Sol, pero la pregunta en sí no depende de ningún repo de terceros).
+- **Referencia verificada (2026-09-15)**: revisé 3 candidatos de "vocab pruning" sugeridos por un resumen de Copilot — 2 no aplican (Pruned-BPE-Tokenizer reordena tokens SIN reducir V; BPE-knockout mejora segmentación morfológica, no memoria, sin código). El más cercano es `chamsechan/llm-vocab-pruner`: sí reduce la capa de salida `[V,H]` para generación en un solo idioma, pero no es plug-and-play acá — la pérdida KL de OMEGA necesita la distribución completa de 50,257 clases del teacher, así que reducir las clases del estudiante exigiría también marginalizar la distribución del teacher al mismo subconjunto.
+
+- **Reencuadre correcto del problema (2026-09-15)**: "podar/reducir vocabulario" es el enfoque EQUIVOCADO — cualquier técnica que cambie el espacio de IDs de tokens rompe la comparación KL contra el teacher (que sigue emitiendo sobre las 50,257 clases originales, sin re-entrenar). El enfoque correcto es reducir el CONTEO DE PARÁMETROS de la matriz `[50257,128]` SIN tocar el espacio de tokens — dos familias reales, y son DISTINTAS en cuánto riesgo agregan:
+
+  - **Factorización estilo ALBERT (tied embedding factorizada)** — la más segura de las dos. Descompone `[V,H]` en `codes[V,r] @ up[r,H]`. La salida sigue siendo un vector denso `[*, 50257]` sobre el MISMO espacio de tokens — la pérdida KL contra el teacher queda automáticamente compatible, sin marginalizar nada, sin rediseñar la loss. Con `r=32`: `50257×32 + 32×128 = 1,612,320` parámetros (verificado a mano), contra los `6,432,896` originales — una reducción real del ~75%, no del "modelo más chico" en general, sino específicamente de ESE tensor. Precedente real encontrado: `RajKVyas/charkha` (repo chico, 1 star, "research code not production", sin pesos publicados) tiene un flag `--embed-factor` que implementa exactamente esto — y resulta ser, coincidentemente, un modelo con **core recurrente-en-profundidad**, arquitectónicamente cercano en espíritu a OMEGA. No es código para importar (muy inmaduro), pero confirma que la técnica es implementable fuera de un Transformer estándar.
+  - **Adaptive softmax** (Grave et al. 2016, fairseq) — agrupa vocabulario por frecuencia en shortlist+clusters de cola con proyecciones de distinto tamaño. También reduce parámetros reales, PERO su salida no es un softmax plano de 50,257 — es jerárquica/agrupada, así que SÍ necesita trabajo extra para hacerla compatible con una pérdida KL completa contra el teacher (justo la parte que Copilot marcó como "no trivial" — correcto para esta técnica, pero Copilot lo mezcló como si aplicara igual a la factorización ALBERT, que no lo necesita).
+
+  **Conclusión**: si se persigue esto, empezar por factorización ALBERT-style, no por adaptive softmax — mismo beneficio de memoria, cero fricción con la pérdida de destilación existente. No hay paquete listo (Copilot lo estimó en ~200-300 líneas propias; hasta acá encontramos ejemplos de referencia como charkha, no una librería reusable). Cuidado con código generado sin correr: el snippet que propuso Copilot tenía un bug real de shapes en el `einsum` (`nn.Linear(rank,H).weight` es `[H,r]`, no `[r,H]` como asumía) y un error aritmético (afirmó ~2.7M parámetros resultantes, el cálculo real da 1.61M) — verificar SIEMPRE antes de confiar, incluso en matemática simple.
+
+  **Corrección de encuadre (2026-09-15, feedback del usuario)**: que `charkha` sea inmaduro NO dice nada sobre si la TÉCNICA (factorización ALBERT-style) es válida — ALBERT es un paper establecido, no algo exótico. Lo que hay que validar no es "¿la idea funciona en general?" (ya se sabe que sí, en Transformers), es "¿aguanta bajo el setup exacto de OMEGA?" (candidato F, pérdida CE+KL específica, calendario causal, gate de tolerancia 1e-5) — una validación mucho más barata y acotada que inventar la técnica desde cero.
+
+  **Prioridad propuesta si K4 se confirma**: antes de comprometer más horas de entrenamiento a escala confirmatoria (SCOPE-C, campaña de 15×20k), correr una unidad acotada tipo CPU-FASTPATH-VALIDATION (equivalencia numérica + benchmark chico) para esta factorización — mismo patrón ya usado con el candidato F. Es la misma lógica de costo que ya usó Sol para autorizar T0-TRAINING-PROBE: horas invertidas ahora en validar pueden ahorrar días después, porque CADA corrida futura (SCOPE-C, la confirmatoria, cualquier variante arquitectónica que venga) paga el costo de memoria del readout una y otra vez. No es una decisión mía para tomar sola — hay que proponérsela a Sol en el mismo momento en que se reporte el resultado de K4/SCOPE-B(C), no antes.
+
+  **RESUELTO (2026-09-16, MD/170.md, Addendum 202) — no re-proponer desde cero**: se propuso a Sol al cerrar SCOPE-B (PROMISING-B). Decisión: SCOPE-C corre PRIMERO tal cual estaba autorizado; la factorización queda registrada como investigación independiente `OMEGA-CORE-LM-0-ER32-DESIGN`, diseño autorizado ya, pero su benchmark/entrenamiento van DESPUÉS de SCOPE-C — explícito "no ejecutar ambos trabajos intensivos simultáneamente en esta laptop". Sol corrigió 2 cosas que esta nota tenía mal: (1) en R1 el embedding de entrada y el readout de salida son el MISMO parámetro (tied) — factorizar afecta ambos a la vez, no son 2 ahorros independientes; (2) el gate de equivalencia NO puede ser "R1_libre ≈ R1_factorizado ≤1e-5" (son familias de parámetros distintas) — el gate correcto es equivalencia interna explícito-vs-eficiente DE LA VARIANTE FACTORIZADA, y ni superando eso queda "resuelto con 6 updates técnicos": conservar la NLL de R1 exige entrenar y comparar, no solo equivalencia+benchmark. Próximo paso (después de SCOPE-C): registrar el diseño formal `OMEGA-CORE-LM-0-ER32-DESIGN` con sus 3 preguntas separadas (Corrección/Coste/Calidad).
+
+  **Investigación extensa recibida por Telegram (2026-09-15), verificada por subagente con el mismo rigor** — documento de calidad real, aritmética exacta en todas sus tablas (recalculada de forma independiente), aporta piezas nuevas que valen la pena fusionar acá (no reemplazan lo de arriba, lo afinan):
+
+  - **Criterio de éxito más preciso que "bajar el tamaño en MB"**: propone medir `R_survival = (C_posthead − C_warm)/(C_cold − C_warm)` — es decir, no importa cuántos bytes se ahorran en abstracto, importa si el head comprimido sobrevive en caché SIN desalojar al núcleo recurrente antes del siguiente token. Es un objetivo más falsable que "que pese menos de X MB" y hay que adoptarlo como la métrica real de éxito de cualquier intento de compresión del readout, en vez de inventar un número de MB objetivo a ciegas.
+  - **Variante concreta: factorización low-rank + INT8 híbrida** (`r=32`, matriz `A` en INT8, matriz `B` en FP32) ≈1.73MB, ~14.9× de compresión — verificado a mano: `50257×34 + 32×128×4 = 1,725,122 bytes ≈ 1.73MB`, exacto. Sigue siendo compatible con la pérdida CE+KL sin marginalizar nada (el estudiante sigue emitiendo las 50,257 clases completas) — sencillamente es la misma familia de ALBERT-factorización de arriba pero con un factor en precisión mixta. Ojo: mezclar precisión mixta acá reintroduce parte de la discusión de FP32-only que ya se aplicó en toda esta campaña — habría que gatear esto con el mismo criterio de tolerancia que T0-TR-C, no asumir que "es solo la matriz A" hace que no importe.
+  - **Precedente académico real y más específico que charkha**: *Slim Embedding Layers* (Li et al., AAAI 2018, arXiv:1711.09873) — VERIFICADO real (arXiv + AAAI + una patente de EE.UU. corroborada, US11030997B2, asignada a Baidu, con título idéntico al paper). Diseñado explícitamente para el problema de memoria de la capa de salida en LMs recurrentes — reporta números reales de CPU (0.7s vs 2.7s). Al ser una patente de Baidu, si algún día esto se lleva a algo productivo/publicado habría que revisar el alcance de esa patente, no es solo curiosidad técnica.
+  - **Segundo precedente real**: Chen et al. (ACL 2016, compresión por base dispersa/sparse-basis) — paper verificado real, con `zomux/neuralcompressor` (85 stars, real, de 2018) como implementación funcional. Hay un segundo repo citado (`chenych11/lm`) que el documento presenta como "implementación oficial" del método, pero el subagente NO pudo confirmar que su contenido (carpetas real/stat/test/utils, sin README) coincida con el método citado — tratar esa atribución específica como NO confirmada, no como validada.
+  - **Ya cubierto, no duplicar**: HQQ, llama.cpp y T-MAC aparecen también en este documento y están descritos correctamente (T-MAC con su stack pesado de build CMake/TVM es una advertencia real, no exagerada) — ya están cubiertos arriba, no repetir. El rechazo de CoVE en este documento coincide exactamente con el rechazo ya registrado en este archivo.
+
+### Cómputo recurrente adaptativo (activation sparsity por ronda)
+- **La idea**: no todas las posiciones del estado necesitan la misma cantidad de cómputo en cada ronda — una máscara aprendida podría reducir progresivamente qué porción del workspace se actualiza en rondas tardías (round 1 completo, round 4 solo una fracción).
+- **Repo que la inspiró**: `alibaba/EfficientAI` (LaRoSa, "training-free activation sparsity", ICML 2025) — VERIFICADO real, pero repo chico y temprano (52 stars, 12 commits, benchmarks marcados "in progress" en su propio README). No es una librería lista para usar, es una dirección de investigación con precedente publicado.
+- **Por qué no ahora**: introducir sparsity ahora directamente arruinaría el experimento K1 vs K4 que está corriendo — cambiaría qué se está midiendo.
+- **Nivel de confianza**: MEDIO. La dirección conceptual es sólida (cómputo adaptativo por profundidad existe en la literatura), pero el repo específico de EfficientAI no está maduro — tratarlo como referencia/inspiración, no como código a importar.
+- **Agregado**: 2026-09-15, durante SCOPE-B.
+
+---
+
+## Descartado tras revisión — no agregar sin nueva justificación
+
+Revisé estos dos repos que una instancia paralela de Sol propuso y decidí NO agregarlos como ideas accionables — quedan acá documentados para no re-investigarlos de cero si vuelven a aparecer:
+
+- **`alibaba/rtp-llm`**: real y maduro (1.3k stars, en producción en Taobao/Tmall), pero es un motor de inferencia GPU/Transformer (PagedAttention, FlashAttention/Decoding, CUDA). La propia instancia paralela reconoció que PagedAttention no aplica a OMEGA. Lo único que quedó como "transferible" fue "el principio de administración jerárquica de memoria" — demasiado vago para ser accionable, no es una técnica concreta que se pueda estudiar o portar.
+- **`alibaba/tair-kvcache`**: real y activo (256 stars), pero es un sistema de orquestación de metadatos DISTRIBUIDO multi-nodo (HF3FS, Mooncake, NFS) para servir LLMs a escala de datacenter. Es sobre-ingeniería total para el problema real de OMEGA (un proceso, una laptop, un modelo de ~7M parámetros). Interesante como lectura conceptual sobre políticas de promoción/expulsión de caché SI algún día OMEGA tiene memoria externa a escala de producción — pero eso está a varias etapas de distancia de donde estamos ahora. No vale la pena estudiarlo en profundidad todavía.
+
+---
+
+## Cómo usar este archivo
+- Agregar entradas con fecha y contexto (qué se estaba haciendo cuando surgió la idea).
+- No proponerle nada de acá a Sol sin re-verificar que sigue siendo técnicamente válido (versiones, disponibilidad, etc.) — el mismo criterio que se usa para todo lo demás en esta campaña.
+- Mover una idea de acá a una Addendum real de `T1.5_Spec_MIX_O.md` solo cuando efectivamente se decida perseguirla.
