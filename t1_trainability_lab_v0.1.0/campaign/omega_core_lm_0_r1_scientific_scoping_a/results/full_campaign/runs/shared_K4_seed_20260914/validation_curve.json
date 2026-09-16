@@ -28,5 +28,41 @@
     "nll": 6.6425913870334625,
     "tokens": 4096,
     "update": 2000
+  },
+  {
+    "finite": true,
+    "nll": 6.598548978567123,
+    "tokens": 4096,
+    "update": 2500
+  },
+  {
+    "finite": true,
+    "nll": 6.536977082490921,
+    "tokens": 4096,
+    "update": 3000
+  },
+  {
+    "finite": true,
+    "nll": 6.460550159215927,
+    "tokens": 4096,
+    "update": 3500
+  },
+  {
+    "finite": true,
+    "nll": 6.4842369556427,
+    "tokens": 4096,
+    "update": 4000
+  },
+  {
+    "finite": true,
+    "nll": 6.388070583343506,
+    "tokens": 4096,
+    "update": 4500
+  },
+  {
+    "finite": true,
+    "nll": 6.350005060434341,
+    "tokens": 4096,
+    "update": 5000
   }
 ]
