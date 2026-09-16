@@ -19,6 +19,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     SMOKE_BOUNDARIES,
     SCOPE_B_PAIRS,
     SCOPE_B_UPDATES,
+    SCOPE_C_SEED,
     VARIANTS,
     TinyTeacher,
     WINDOW_TOKENS,
@@ -43,6 +44,7 @@ from run_scientific_scoping_a import (  # noqa: E402
     save_checkpoint,
     run_single,
     run_scope_b_continue,
+    run_scope_c,
     schedule,
     synthetic_documents,
     validate_policy,
@@ -498,6 +500,75 @@ def test_scope_b_continue_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: 
     assert len(calls) == 1
     assert calls[0][1] == checkpoint
     assert json.loads(capsys.readouterr().out)["mode"] == "authorized_scope_b_continue"
+
+
+def test_scope_c_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def fake_scope_c(*args: object) -> dict[str, object]:
+        calls.append(args)
+        return {"mode": "authorized_scope_c_fresh_run"}
+
+    monkeypatch.setattr("run_scientific_scoping_a.run_scope_c", fake_scope_c)
+    output_dir = tmp_path / "output"
+    assert main([
+        "--scope-c",
+        "--full",
+        "--confirm-smoke",
+        "--run-id",
+        "scope-c",
+        "--seed",
+        str(SCOPE_C_SEED),
+        "--variant",
+        "shared_K1",
+        "--output-dir",
+        str(output_dir),
+    ]) == 0
+    assert calls == [(output_dir.resolve(), "scope-c", SCOPE_C_SEED, "shared_K1")]
+    assert json.loads(capsys.readouterr().out)["mode"] == "authorized_scope_c_fresh_run"
+
+
+@pytest.mark.parametrize("seed", [20260913, 20260914])
+def test_scope_c_cli_rejects_existing_seeds(seed: int, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--scope-c", "--full", "--confirm-smoke", "--run-id", "scope-c", "--seed", str(seed), "--variant", "shared_K1"])
+    assert "scope C requires exact seed 20260915" in capsys.readouterr().err
+
+
+def test_scope_c_cli_rejects_scope_c_seed_without_scope_c(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--full", "--confirm-smoke", "--run-id", "fresh", "--seed", str(SCOPE_C_SEED), "--variant", "shared_K1"])
+    assert "fresh run requires" in capsys.readouterr().err
+
+
+def test_scope_c_uses_initial_run_single_path_and_scope_b_schedule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_calls: list[dict[str, object]] = []
+
+    def fake_load_real_documents() -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object], dict[str, object], object]:
+        return [], [], {"manifest_sha256": "train"}, {"manifest_sha256": "validation"}, object()
+
+    def fake_run_single(**kwargs: object) -> dict[str, object]:
+        run_calls.append(kwargs)
+        return {"run_id": kwargs["run_id"]}
+
+    monkeypatch.setattr("run_scientific_scoping_a._load_real_documents", fake_load_real_documents)
+    monkeypatch.setattr("run_scientific_scoping_a.run_single", fake_run_single)
+    monkeypatch.setattr("run_scientific_scoping_a.source_hashes", lambda: {})
+
+    report = run_scope_c(tmp_path, "scope-c", SCOPE_C_SEED, "shared_K4")
+
+    assert len(run_calls) == 1
+    assert run_calls[0]["run_dir"] == tmp_path / "runs" / "scope-c"
+    assert run_calls[0]["run_id"] == "scope-c"
+    assert run_calls[0]["seed"] == SCOPE_C_SEED
+    assert run_calls[0]["variant"] == "shared_K4"
+    assert run_calls[0]["total_updates"] == SCOPE_B_UPDATES
+    assert run_calls[0]["checkpoint_interval"] == 500
+    assert run_calls[0]["resume_checkpoint"] is None
+    assert run_calls[0]["smoke"] is False
+    assert run_calls[0]["dimensions"] == (128, 8)
+    assert "old_train_manifest" not in run_calls[0]
+    assert report["mode"] == "authorized_scope_c_fresh_run"
 
 
 def test_fresh_single_run_selects_one_run_and_keeps_per_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

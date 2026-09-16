@@ -55,6 +55,7 @@ from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 CAMPAIGN_ID = "OMEGA-CORE-LM-0-R1-SCIENTIFIC-SCOPING-A"
 VARIANTS = ("shared_K1", "shared_K4")
 SEEDS = (20260913, 20260914)
+SCOPE_C_SEED = 20260915
 FULL_UPDATES = 2000
 FULL_PAIRS = 1000
 FULL_BOUNDARIES = (0, 500, 1000, 1500, 2000)
@@ -1430,6 +1431,41 @@ def run_fresh(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[st
     return report
 
 
+def run_scope_c(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+    """Run one authorized Scope-C run from its initial state."""
+    if seed != SCOPE_C_SEED:
+        raise ValueError("Scope-C requires exact seed 20260915")
+    train_documents, validation_documents, train_manifest, validation_manifest, teacher = _load_real_documents()
+    result = run_single(
+        run_dir=output_dir / "runs" / run_id,
+        run_id=run_id,
+        seed=seed,
+        variant=variant,
+        train_documents=train_documents,
+        validation_documents=validation_documents,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        total_updates=SCOPE_B_UPDATES,
+        checkpoint_interval=500,
+        smoke=False,
+        dimensions=(128, 8),
+        resume_checkpoint=None,
+    )
+    report = {
+        "schema": "omega-core-lm-0-r1-scientific-scoping-a-scope-c-run-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "scope": "C",
+        "mode": "authorized_scope_c_fresh_run",
+        "campaign_started": True,
+        "run": result,
+        "source_hashes": source_hashes(),
+        "freeze_hash_claim": False,
+    }
+    _write_hashed_json(output_dir / f"scope_c_report_{run_id}.json", report, "report_self_hash")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=CAMPAIGN_ID)
     parser.add_argument("--smoke", action="store_true")
@@ -1441,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope-b", action="store_true", help="Resume an A checkpoint with verified 1000-to-2500 pair extension")
     parser.add_argument("--scope-b-continue", action="store_true", help="Continue an already-B checkpoint with exact manifest identity")
     parser.add_argument("--scope-b-smoke", action="store_true", help="Run bounded isolated B continuation smoke")
+    parser.add_argument("--scope-c", action="store_true", help="Run a fresh Scope-C seed at the 5000-update schedule")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-smoke", action="store_true", help="Required authorization after smoke review")
     parser.add_argument("--resume-checkpoint", type=Path)
@@ -1449,7 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "results")
     args = parser.parse_args(argv)
-    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child, args.scope_b, args.scope_b_continue, args.scope_b_smoke)) > 1:
+    if sum(bool(value) for value in (args.smoke, args.smoke_resume, args.integration_smoke, args.integration_smoke_child, args.scope_b, args.scope_b_continue, args.scope_b_smoke, args.scope_c)) > 1:
         raise SystemExit("choose one execution mode")
     args.output_dir = args.output_dir.resolve()
     if args.smoke:
@@ -1481,6 +1518,13 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.full and args.confirm_smoke and args.resume_checkpoint and args.run_id and args.seed in SEEDS and args.variant):
             parser.error("scope B requires --full --confirm-smoke --resume-checkpoint --run-id --seed and --variant")
         print(json.dumps(run_scope_b(args.output_dir, args.resume_checkpoint, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
+    if args.scope_c:
+        if not (args.full and args.confirm_smoke and args.run_id and args.seed is not None and args.variant):
+            parser.error("scope C requires --full --confirm-smoke --run-id --seed and --variant")
+        if args.seed != SCOPE_C_SEED:
+            parser.error("scope C requires exact seed 20260915")
+        print(json.dumps(run_scope_c(args.output_dir, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
         return 0
     if args.resume_checkpoint is not None:
         if not (args.full and args.confirm_smoke and args.run_id and args.seed in SEEDS and args.variant):
