@@ -62,6 +62,22 @@ def test_frozen_baseline_loader_reads_exact_updates_and_delta(tmp_path: Path) ->
     ]
 
 
+def test_frozen_baseline_loader_selects_required_prefix_from_full_r1_curve(tmp_path: Path) -> None:
+    full_updates = tuple(range(0, 5001, 500))
+    for seed in runner.SEEDS:
+        for variant in ("shared_K1", "shared_K4"):
+            path = tmp_path / f"{variant}_seed_{seed}" / "validation_curve.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps([{"update": update, "nll": float(update), "tokens": 4096} for update in full_updates]),
+                encoding="utf-8",
+            )
+    baselines = runner.load_frozen_r1_baselines(tmp_path)
+    assert baselines[20260913]["K1"]["selected_updates"] == [0, 500, 1000, 1500, 2000]
+    assert baselines[20260913]["K1"]["ignored_extra_updates"] == [2500, 3000, 3500, 4000, 4500, 5000]
+    assert [point["update"] for point in baselines[20260914]["K4"]["curve"]] == [0, 500, 1000, 1500, 2000]
+
+
 def test_baseline_loader_rejects_duplicate_or_misaligned_points(tmp_path: Path) -> None:
     for seed in runner.SEEDS:
         for variant in ("shared_K1", "shared_K4"):

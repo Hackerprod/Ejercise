@@ -148,9 +148,16 @@ def load_frozen_r1_baselines(results_root: Path | None = None, *, updates: tuple
                 if not math.isfinite(float(point["nll"])):
                     raise QualityScopingError(f"non-finite R1 NLL: {path}")
                 points[update] = {"update": update, "nll": float(point["nll"]), "tokens": int(point.get("tokens", 0))}
-            if tuple(sorted(points)) != updates:
-                raise QualityScopingError(f"R1 curve updates do not match frozen boundaries: {path}")
-            per_seed[key] = {"path": path.as_posix(), "sha256": file_hash(path), "curve": [points[update] for update in updates]}
+            missing = [update for update in updates if update not in points]
+            if missing:
+                raise QualityScopingError(f"R1 curve is missing required updates {missing}: {path}")
+            per_seed[key] = {
+                "path": path.as_posix(),
+                "sha256": file_hash(path),
+                "curve": [points[update] for update in updates],
+                "selected_updates": list(updates),
+                "ignored_extra_updates": [update for update in sorted(points) if update not in updates],
+            }
         per_seed["delta_R1"] = [
             {"update": update, "delta": per_seed["K1"]["curve"][index]["nll"] - per_seed["K4"]["curve"][index]["nll"]}
             for index, update in enumerate(updates)
