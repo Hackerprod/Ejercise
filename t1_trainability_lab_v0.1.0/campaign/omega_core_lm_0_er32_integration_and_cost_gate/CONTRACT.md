@@ -64,6 +64,11 @@ Reports use `results/<run-id>/integration_report.json`, `cost_report.json`,
 `inference_report.json`, and `ledger.jsonl`. JSON artifacts are self-hashed and reread before
 being accepted. No result directory has been created by Phase 2 implementation work.
 
+The six technical training updates intentionally reuse the same two approved source windows
+(`source[:, :256]` and `source[:, 256:512]`) for each 0/1 pair. This is a deliberate cost-only
+benchmark simplification: NLL is not interpreted as linguistic quality, and the run does not
+claim corpus traversal equivalence with A/B/C.
+
 ## Provenance
 
 Source provenance is the current on-disk implementation paths above plus
