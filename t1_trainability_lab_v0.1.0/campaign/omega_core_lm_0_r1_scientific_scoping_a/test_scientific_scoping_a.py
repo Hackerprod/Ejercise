@@ -503,10 +503,10 @@ def test_scope_b_continue_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: 
 
 
 def test_scope_c_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    def fake_scope_c(*args: object) -> dict[str, object]:
-        calls.append(args)
+    def fake_scope_c(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append((args, kwargs))
         return {"mode": "authorized_scope_c_fresh_run"}
 
     monkeypatch.setattr("run_scientific_scoping_a.run_scope_c", fake_scope_c)
@@ -524,7 +524,35 @@ def test_scope_c_cli_routes_explicit_mode(tmp_path: Path, monkeypatch: pytest.Mo
         "--output-dir",
         str(output_dir),
     ]) == 0
-    assert calls == [(output_dir.resolve(), "scope-c", SCOPE_C_SEED, "shared_K1")]
+    assert calls == [((output_dir.resolve(), "scope-c", SCOPE_C_SEED, "shared_K1"), {"resume_checkpoint": None})]
+    assert json.loads(capsys.readouterr().out)["mode"] == "authorized_scope_c_fresh_run"
+
+
+def test_scope_c_cli_forwards_resume_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_scope_c(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append((args, kwargs))
+        return {"mode": "authorized_scope_c_fresh_run"}
+
+    monkeypatch.setattr("run_scientific_scoping_a.run_scope_c", fake_scope_c)
+    checkpoint = tmp_path / "checkpoint_02500.pt"
+    assert main([
+        "--scope-c",
+        "--full",
+        "--confirm-smoke",
+        "--resume-checkpoint",
+        str(checkpoint),
+        "--run-id",
+        "scope-c",
+        "--seed",
+        str(SCOPE_C_SEED),
+        "--variant",
+        "shared_K4",
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]) == 0
+    assert calls == [(((tmp_path / "output").resolve(), "scope-c", SCOPE_C_SEED, "shared_K4"), {"resume_checkpoint": checkpoint})]
     assert json.loads(capsys.readouterr().out)["mode"] == "authorized_scope_c_fresh_run"
 
 
@@ -555,7 +583,8 @@ def test_scope_c_uses_initial_run_single_path_and_scope_b_schedule(tmp_path: Pat
     monkeypatch.setattr("run_scientific_scoping_a.run_single", fake_run_single)
     monkeypatch.setattr("run_scientific_scoping_a.source_hashes", lambda: {})
 
-    report = run_scope_c(tmp_path, "scope-c", SCOPE_C_SEED, "shared_K4")
+    checkpoint = tmp_path / "checkpoint_02500.pt"
+    report = run_scope_c(tmp_path, "scope-c", SCOPE_C_SEED, "shared_K4", resume_checkpoint=checkpoint)
 
     assert len(run_calls) == 1
     assert run_calls[0]["run_dir"] == tmp_path / "runs" / "scope-c"
@@ -564,7 +593,7 @@ def test_scope_c_uses_initial_run_single_path_and_scope_b_schedule(tmp_path: Pat
     assert run_calls[0]["variant"] == "shared_K4"
     assert run_calls[0]["total_updates"] == SCOPE_B_UPDATES
     assert run_calls[0]["checkpoint_interval"] == 500
-    assert run_calls[0]["resume_checkpoint"] is None
+    assert run_calls[0]["resume_checkpoint"] is checkpoint
     assert run_calls[0]["smoke"] is False
     assert run_calls[0]["dimensions"] == (128, 8)
     assert "old_train_manifest" not in run_calls[0]

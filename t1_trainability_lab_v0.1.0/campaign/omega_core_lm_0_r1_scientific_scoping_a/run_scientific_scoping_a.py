@@ -1431,7 +1431,7 @@ def run_fresh(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[st
     return report
 
 
-def run_scope_c(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[str, Any]:
+def run_scope_c(output_dir: Path, run_id: str, seed: int, variant: str, resume_checkpoint: Path | None = None) -> dict[str, Any]:
     """Run one authorized Scope-C run from its initial state."""
     if seed != SCOPE_C_SEED:
         raise ValueError("Scope-C requires exact seed 20260915")
@@ -1450,7 +1450,7 @@ def run_scope_c(output_dir: Path, run_id: str, seed: int, variant: str) -> dict[
         checkpoint_interval=500,
         smoke=False,
         dimensions=(128, 8),
-        resume_checkpoint=None,
+        resume_checkpoint=resume_checkpoint,
     )
     report = {
         "schema": "omega-core-lm-0-r1-scientific-scoping-a-scope-c-run-report-v1",
@@ -1524,7 +1524,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("scope C requires --full --confirm-smoke --run-id --seed and --variant")
         if args.seed != SCOPE_C_SEED:
             parser.error("scope C requires exact seed 20260915")
-        print(json.dumps(run_scope_c(args.output_dir, args.run_id, args.seed, args.variant), indent=2, sort_keys=True))
+        checkpoint = args.resume_checkpoint if args.resume_checkpoint is not None else None
+        print(json.dumps(run_scope_c(args.output_dir, args.run_id, args.seed, args.variant, resume_checkpoint=checkpoint), indent=2, sort_keys=True))
         return 0
     if args.resume_checkpoint is not None:
         if not (args.full and args.confirm_smoke and args.run_id and args.seed in SEEDS and args.variant):
