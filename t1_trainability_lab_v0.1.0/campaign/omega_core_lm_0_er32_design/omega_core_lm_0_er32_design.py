@@ -84,8 +84,8 @@ class OmegaCoreLM0ER32(nn.Module):
     def reset_parameters(self) -> None:
         """Use fresh factor parameters and standard reference-style rest init."""
 
-        nn.init.normal_(self.C, mean=0.0, std=1.0 / math.sqrt(self.rank))
-        nn.init.normal_(self.U, mean=0.0, std=1.0 / math.sqrt(self.dimension))
+        nn.init.normal_(self.C, mean=0.0, std=1.0)
+        nn.init.normal_(self.U, mean=0.0, std=1.0 / math.sqrt(self.rank))
         self.token_projection.reset_parameters()
         self.state_projection.reset_parameters()
         self.shared_block.update.reset_parameters()

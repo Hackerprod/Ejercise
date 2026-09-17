@@ -31,15 +31,23 @@ fixtures. That core is held constant between explicit and efficient views;
 factorization is the sole variable in their comparisons. It is not a claim to
 replace the approved production recurrent implementation.
 
-## Fresh Initialization
+## Synthetic Fixture Initialization
 
-`OmegaCoreLM0ER32.fresh(seed=...)` is the only initialization entry point
-intended for future synthetic or production setup. It uses a deterministic
-seed inside `torch.random.fork_rng`, so initialization does not consume the
-caller's global RNG stream. Non-factorized components retain the normal
-PyTorch reference initialization convention. `C` and `U` receive fresh,
-seeded factor initialization; no post-hoc factorization of A/B/C checkpoints is
-permitted.
+`OmegaCoreLM0ER32.fresh(seed=...)` is a synthetic fixture-only factory. It uses
+a deterministic seed inside `torch.random.fork_rng`, so initialization does not
+consume the caller's CPU RNG stream. `fork_rng(devices=[])` does not cover other
+devices; this determinism claim is CPU-only. Non-factorized fixture components
+retain the normal PyTorch reference initialization convention.
+
+`C` uses standard deviation `1.0`, and `U` uses standard deviation
+`1/sqrt(rank)`. Therefore each effective embedding component in `E = C @ U`
+has marginal variance `1.0`, matching the R1 `nn.Embedding` marginal variance
+convention. This is not full matrix equivalence: ER32 remains rank-restricted.
+
+Future R1 integration needs a separate factory. It must copy non-factorized
+components (prelude, SlotMix, RMSNorm, and depth modulation) by explicit
+correspondence from a freshly initialized same-seed reference, never from A/B/C
+checkpoints or by post-hoc factorization.
 
 This design unit does not call fresh initialization for any real campaign
 configuration and does not run real initialization or training.
@@ -56,16 +64,22 @@ compare:
 - clipped gradients;
 - one AdamW update, including `exp_avg` and `exp_avg_sq` moments;
 - K1 and K4;
-- state and mask transfer from window 0 to window 1.
+- state and mask transfer from window 0 to window 1;
+- an integrated nominal two-window AdamW update, including both step counters;
+- a negative no-detach check showing window 1 would retain window 0's graph.
 
 The predeclared comparison tolerance is `atol=1e-4, rtol=1e-4`. This allows
 FP32 operation-order differences between `C @ U` followed by one projection
-and two direct projections. The views are comparable, not bit-identical; no
-test or claim asserts bit identity.
+and two direct projections. The views are comparable, not bit-identical; exact
+equality is required only for fresh CPU RNG preservation and identical fresh
+weights.
 
 ## Metrics and Future Matrix
 
 No campaign runs are performed here. Future comparison table has four cells:
+
+Synthetic fixture values and equivalence checks are not integrated OMEGA ER32
+performance benchmarks and must not be presented as such.
 
 | Variant | K1 | K4 |
 |---|---:|---:|

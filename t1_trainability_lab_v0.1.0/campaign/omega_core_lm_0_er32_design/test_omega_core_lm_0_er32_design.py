@@ -163,9 +163,120 @@ def test_fresh_seed_is_deterministic_and_preserves_global_rng_stream() -> None:
     torch.manual_seed(31415)
     expected = torch.rand(4)
     torch.manual_seed(31415)
+    rng_before = torch.get_rng_state()
     first = OmegaCoreLM0ER32.fresh(seed=9, vocab_size=VOCAB, rank=RANK, dimension=DIMENSION, slots=SLOTS, rounds=1)
+    rng_after = torch.get_rng_state()
     actual = torch.rand(4)
     second = OmegaCoreLM0ER32.fresh(seed=9, vocab_size=VOCAB, rank=RANK, dimension=DIMENSION, slots=SLOTS, rounds=1)
-    assert_close(actual, expected)
+    assert torch.equal(rng_before, rng_after)
+    assert torch.equal(actual, expected)
     for name, parameter in first.named_parameters():
-        assert_close(parameter, dict(second.named_parameters())[name])
+        assert torch.equal(parameter, dict(second.named_parameters())[name])
+
+
+def test_factor_initialization_matches_embedding_marginal_variance() -> None:
+    model = OmegaCoreLM0ER32.fresh(
+        seed=20260917,
+        vocab_size=4096,
+        rank=32,
+        dimension=64,
+        slots=SLOTS,
+        rounds=1,
+    )
+    effective_embedding = model.C @ model.U
+    marginal_variance = effective_embedding.var(dim=0, unbiased=False).mean()
+    torch.testing.assert_close(marginal_variance, torch.ones_like(marginal_variance), atol=0.1, rtol=0.1)
+
+
+def _run_nominal_two_window_update(model: OmegaCoreLM0ER32) -> dict[str, object]:
+    tokens_zero = torch.tensor([[1, 8], [2, 3]], dtype=torch.long)
+    mask_zero = torch.tensor([[True, False], [True, True]])
+    tokens_one = torch.tensor([[4, 5], [6, 7]], dtype=torch.long)
+    mask_one = torch.ones_like(tokens_one, dtype=torch.bool)
+    teacher_zero = torch.linspace(-0.7, 0.8, steps=tokens_zero.numel() * VOCAB).view(2, 2, VOCAB)
+    teacher_one = torch.linspace(0.8, -0.7, steps=tokens_one.numel() * VOCAB).view(2, 2, VOCAB)
+    targets_zero = torch.tensor([[2, 3], [5, 6]], dtype=torch.long)
+    targets_one = torch.tensor([[7, 8], [9, 10]], dtype=torch.long)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=3e-4,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.0,
+    )
+
+    state_zero, logits_zero, _ = model(tokens_zero, model.initial_state(2), mask_zero)
+    loss_zero = ce_kl_loss(logits_zero, teacher_zero, targets_zero, mask_zero)["total"]
+    loss_zero.backward()
+    clip_grad_norm_(model.parameters(), max_norm=1.0)
+    optimizer.step()
+    state_zero = state_zero.detach()
+
+    optimizer.zero_grad()
+    state_one, logits_one, _ = model(tokens_one, state_zero, mask_one)
+    loss_one = ce_kl_loss(logits_one, teacher_one, targets_one, mask_one)["total"]
+    loss_one.backward()
+    clip_grad_norm_(model.parameters(), max_norm=1.0)
+    gradients = {name: parameter.grad.detach().clone() for name, parameter in model.named_parameters()}
+    optimizer.step()
+
+    parameters = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
+    optimizer_state = {
+        name: {
+            key: value.detach().clone() if isinstance(value, torch.Tensor) else value
+            for key, value in optimizer.state[parameter].items()
+        }
+        for name, parameter in model.named_parameters()
+    }
+    return {
+        "losses": (loss_zero.detach(), loss_one.detach()),
+        "states": (state_zero, state_one.detach()),
+        "gradients": gradients,
+        "parameters": parameters,
+        "optimizer_state": optimizer_state,
+    }
+
+
+@pytest.mark.parametrize("rounds", [1, 4])
+def test_nominal_two_window_causal_training_matches_explicit_and_efficient(rounds: int) -> None:
+    explicit, efficient = make_pair(rounds)
+    expected = _run_nominal_two_window_update(explicit)
+    actual = _run_nominal_two_window_update(efficient)
+
+    for expected_loss, actual_loss in zip(expected["losses"], actual["losses"]):
+        assert_close(expected_loss, actual_loss)
+    for expected_state, actual_state in zip(expected["states"], actual["states"]):
+        assert_close(expected_state, actual_state)
+    for name, expected_gradient in expected["gradients"].items():
+        assert_close(expected_gradient, actual["gradients"][name])
+    for name, expected_parameter in expected["parameters"].items():
+        assert_close(expected_parameter, actual["parameters"][name])
+    for name, expected_state in expected["optimizer_state"].items():
+        actual_state = actual["optimizer_state"][name]
+        for key in ("exp_avg", "exp_avg_sq"):
+            assert_close(expected_state[key], actual_state[key])
+        assert expected_state["step"] == actual_state["step"]
+        assert expected_state["step"] == 2.0
+
+
+def test_two_window_without_detach_reaches_window_zero_graph() -> None:
+    model = OmegaCoreLM0ER32.fresh(
+        seed=20260917,
+        vocab_size=VOCAB,
+        rank=RANK,
+        dimension=DIMENSION,
+        slots=SLOTS,
+        rounds=4,
+    )
+    tokens_zero = torch.tensor([[1, 8], [2, 3]], dtype=torch.long)
+    tokens_one = torch.tensor([[4, 5], [6, 7]], dtype=torch.long)
+    state_zero = model(tokens_zero, model.initial_state(2))[0]
+    state_zero.retain_grad()
+    state_one = model(tokens_one, state_zero)[0]
+    state_one.sum().backward()
+
+    assert state_zero.requires_grad
+    assert state_zero.grad_fn is not None
+    assert state_one.requires_grad
+    assert state_zero.grad is not None
