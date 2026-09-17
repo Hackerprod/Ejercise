@@ -566,6 +566,7 @@ def aggregate_training_metrics(results: Iterable[dict[str, Any]]) -> dict[str, A
 
     f_k1, f_k4, er_k1, er_k4 = value("F", 1), value("F", 4), value("ER32", 1), value("ER32", 4)
     er_total = er_k1 + er_k4
+    f_total = f_k1 + f_k4
     joint_tokens = 2048 * 4
     return {
         "by_combination": by_combination,
@@ -574,10 +575,11 @@ def aggregate_training_metrics(results: Iterable[dict[str, Any]]) -> dict[str, A
         "joint_K1_K4": {"F": f_k1 + f_k4, "ER32": er_total},
         "valid_tokens_per_second": {
             **{key: value["valid_tokens_per_second"] for key, value in by_combination.items()},
-            "F_joint_K1_K4": joint_tokens / (f_k1 + f_k4) if f_k1 + f_k4 > 0 else 0.0,
+            "F_joint_K1_K4": joint_tokens / f_total if f_total > 0 else 0.0,
             "ER32_joint_K1_K4": joint_tokens / er_total if er_total > 0 else 0.0,
         },
-        "R_train": (f_k1 + f_k4) / er_total if er_total > 0 else float("inf"),
+        "R_train": er_total / f_total if f_total > 0 else float("inf"),
+        "R_train_formula": "T_ER32_total / T_F_total",
     }
 
 
@@ -632,16 +634,21 @@ def aggregate_inference_metrics(results: Iterable[dict[str, Any]]) -> dict[str, 
     for result in results:
         key = f"{result['config']}_K{result['rounds']}"
         by_combination[key] = {"mode_a_tokens_per_second": float(result["mode_a"]["tokens_per_second"]), "mode_a_ms_per_token": float(result["mode_a"]["ms_per_token"]), "mode_b_tokens_per_second": float(result["mode_b"]["mean_tokens_per_second"]), "mode_b_seconds_per_window": float(result["mode_b"]["mean_seconds_per_window"]), "steady_state_rss_bytes": int(result["steady_state_rss_bytes"])}
-    ratios: dict[str, float] = {}
+    time_cost_ratios: dict[str, float] = {}
     for rounds in (1, 4):
         f, er = by_combination[f"F_K{rounds}"], by_combination[f"ER32_K{rounds}"]
-        ratios[f"K{rounds}_mode_a"] = er["mode_a_tokens_per_second"] / f["mode_a_tokens_per_second"]
-        ratios[f"K{rounds}_mode_b"] = er["mode_b_tokens_per_second"] / f["mode_b_tokens_per_second"]
-    return {"by_combination": by_combination, "ER32_over_F": ratios}
+        time_cost_ratios[f"K{rounds}_mode_a"] = er["mode_a_ms_per_token"] / f["mode_a_ms_per_token"]
+        time_cost_ratios[f"K{rounds}_mode_b"] = er["mode_b_seconds_per_window"] / f["mode_b_seconds_per_window"]
+    return {
+        "by_combination": by_combination,
+        "ratio_semantics": "ER32_time / F_time",
+        "time_cost_fields": {"mode_a": "ms_per_token", "mode_b": "mean_seconds_per_window"},
+        "ER32_over_F_time_cost": time_cost_ratios,
+    }
 
 
 def classify_inference_cost(metrics: dict[str, Any], threshold: float = GATE_THRESHOLD, rss_limit: int = RSS_ANOMALY_BYTES) -> dict[str, Any]:
-    ratios = metrics["ER32_over_F"]
+    ratios = metrics["ER32_over_F_time_cost"]
     anomaly = any(metrics["by_combination"][f"ER32_K{rounds}"]["steady_state_rss_bytes"] - metrics["by_combination"][f"F_K{rounds}"]["steady_state_rss_bytes"] > rss_limit for rounds in (1, 4))
     if anomaly:
         classification, hold = "MEMORY_RUNTIME_ANOMALY", "QUALITY_SCOPING_HOLD"
@@ -649,7 +656,13 @@ def classify_inference_cost(metrics: dict[str, Any], threshold: float = GATE_THR
         classification, hold = "INFERENCE_COST_REGRESSION", "QUALITY_SCOPING_HOLD"
     else:
         classification, hold = "PASS", "ELIGIBLE"
-    return {"classification": classification, "threshold": threshold, "ratios": ratios, "quality_scoping": hold}
+    return {
+        "classification": classification,
+        "threshold": threshold,
+        "ratio_semantics": "ER32_time / F_time",
+        "ratios": ratios,
+        "quality_scoping": hold,
+    }
 
 
 def global_gate_status(gates: dict[str, Any]) -> str:
@@ -725,6 +738,135 @@ def build_inference_report(
     }
 
 
+TIMING_DEFINITION_NOTE = (
+    "Ledger total_seconds is captured before append/fsync; cost_report training totals are "
+    "captured after append/fsync. Small differences are expected and do not justify mutating "
+    "raw evidence or rerunning the benchmark."
+)
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return value
+
+
+def _repair_source_hashes(run_dir: Path) -> dict[str, str]:
+    names = ("integration_report.json", "cost_report.json", "inference_report.json", "ledger.jsonl")
+    return {name: sha256_file(run_dir / name) for name in names if (run_dir / name).is_file()}
+
+
+def build_analysis_repair(run_dir: Path) -> dict[str, Any]:
+    """Derive corrected Gate V/VI analysis from existing reports without execution."""
+
+    cost_report = _read_json_object(run_dir / "cost_report.json")
+    inference_report = _read_json_object(run_dir / "inference_report.json")
+
+    training = cost_report["training"]
+    joint = training["joint_K1_K4"]
+    f_total = float(joint["F"])
+    er_total = float(joint["ER32"])
+    if f_total <= 0 or er_total <= 0:
+        raise ValueError("training report has non-positive joint timing")
+    old_training_ratio = f_total / er_total
+    corrected_training_ratio = er_total / f_total
+    corrected_training_gate = classify_training_cost({"R_train": corrected_training_ratio})
+
+    by_combination = inference_report["inference"]["by_combination"]
+    old_inference_ratios: dict[str, float] = {}
+    corrected_inference_ratios: dict[str, float] = {}
+    inference_metrics: dict[str, Any] = {
+        "by_combination": by_combination,
+        "ratio_semantics": "ER32_time / F_time",
+        "time_cost_fields": {"mode_a": "ms_per_token", "mode_b": "mean_seconds_per_window"},
+    }
+    inference_metrics["ER32_over_F_time_cost"] = corrected_inference_ratios
+    inference_details: dict[str, Any] = {}
+    for rounds in (1, 4):
+        f = by_combination[f"F_K{rounds}"]
+        er = by_combination[f"ER32_K{rounds}"]
+        mode_a_key = f"K{rounds}_mode_a"
+        mode_b_key = f"K{rounds}_mode_b"
+        old_inference_ratios[mode_a_key] = float(er["mode_a_tokens_per_second"]) / float(f["mode_a_tokens_per_second"])
+        old_inference_ratios[mode_b_key] = float(er["mode_b_tokens_per_second"]) / float(f["mode_b_tokens_per_second"])
+        corrected_inference_ratios[mode_a_key] = float(er["mode_a_ms_per_token"]) / float(f["mode_a_ms_per_token"])
+        corrected_inference_ratios[mode_b_key] = float(er["mode_b_seconds_per_window"]) / float(f["mode_b_seconds_per_window"])
+        inference_details[mode_a_key] = {
+            "old_formula": "ER32_tokens_per_second / F_tokens_per_second",
+            "corrected_formula": "ER32_ms_per_token / F_ms_per_token",
+            "old_metric": old_inference_ratios[mode_a_key],
+            "corrected_metric": corrected_inference_ratios[mode_a_key],
+            "raw": {
+                "F_throughput": float(f["mode_a_tokens_per_second"]),
+                "ER32_throughput": float(er["mode_a_tokens_per_second"]),
+                "F_ms_per_token": float(f["mode_a_ms_per_token"]),
+                "ER32_ms_per_token": float(er["mode_a_ms_per_token"]),
+            },
+        }
+        inference_details[mode_b_key] = {
+            "old_formula": "ER32_mean_tokens_per_second / F_mean_tokens_per_second",
+            "corrected_formula": "ER32_mean_seconds_per_window / F_mean_seconds_per_window",
+            "old_metric": old_inference_ratios[mode_b_key],
+            "corrected_metric": corrected_inference_ratios[mode_b_key],
+            "raw": {
+                "F_throughput": float(f["mode_b_tokens_per_second"]),
+                "ER32_throughput": float(er["mode_b_tokens_per_second"]),
+                "F_seconds_per_window": float(f["mode_b_seconds_per_window"]),
+                "ER32_seconds_per_window": float(er["mode_b_seconds_per_window"]),
+            },
+        }
+    corrected_inference_gate = classify_inference_cost(inference_metrics)
+
+    original_training_gate = cost_report["gates"][GATE_NAMES["V"]]
+    original_inference_gate = inference_report["gates"][GATE_NAMES["VI"]]
+    source_artifact_hashes = _repair_source_hashes(run_dir)
+    return {
+        "schema": "er32-cost-gate-analysis-repair-v1",
+        "artifact": "analysis_repair",
+        "run_id": cost_report.get("run_id", run_dir.name),
+        "benchmark_rerun": False,
+        "raw_measurements_unchanged": True,
+        "source_artifact_sha256s": source_artifact_hashes,
+        "source_report_self_hashes": {
+            "cost_report": cost_report.get("artifact_self_hash"),
+            "inference_report": inference_report.get("artifact_self_hash"),
+        },
+        "timing_definition_note": TIMING_DEFINITION_NOTE,
+        "gate_V_training_cost": {
+            "old_formula": "R_train = T_F_total / T_ER32_total",
+            "corrected_formula": "R_train = T_ER32_total / T_F_total",
+            "raw_measurements_seconds": {"T_F_total": f_total, "T_ER32_total": er_total},
+            "old_metric": old_training_ratio,
+            "corrected_metric": corrected_training_ratio,
+            "original_gate": original_training_gate,
+            "recalculated_gate": corrected_training_gate,
+        },
+        "gate_VI_inference_cost": {
+            "old_formula": "throughput ratio ER32/F",
+            "corrected_formula": "time-cost ratio ER32_time / F_time",
+            "time_fields": {"mode_a": "ms_per_token", "mode_b": "mean_seconds_per_window"},
+            "old_metrics": old_inference_ratios,
+            "corrected_metrics": corrected_inference_ratios,
+            "per_mode": inference_details,
+            "original_gate": original_inference_gate,
+            "recalculated_gate": corrected_inference_gate,
+        },
+        "recalculated_gate_classifications": {
+            GATE_NAMES["V"]: corrected_training_gate,
+            GATE_NAMES["VI"]: corrected_inference_gate,
+        },
+    }
+
+
+def write_analysis_repair(run_dir: Path) -> tuple[str, str]:
+    """Write only analysis_repair.json, refusing overwrite and verifying its self-hash."""
+
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"run directory does not exist: {run_dir}")
+    return write_self_hashed_json(run_dir / "analysis_repair.json", build_analysis_repair(run_dir))
+
+
 def execute_phase2(output_root: Path) -> dict[str, Any]:
     run_id, run_dir = new_run_dir(output_root)
     ledger_path = run_dir / "ledger.jsonl"
@@ -751,6 +893,7 @@ def execute_phase2(output_root: Path) -> dict[str, Any]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="explicitly authorize real technical execution")
+    parser.add_argument("--repair-analysis", action="store_true", help="derive analysis_repair.json from an existing run")
     parser.add_argument("--output-root", type=Path, default=UNIT_DIR / "results")
     parser.add_argument("--child-training", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--child-inference", action="store_true", help=argparse.SUPPRESS)
@@ -764,6 +907,17 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.repair_analysis:
+        if args.run_dir is None:
+            print(json.dumps({"status": "refused", "reason": "--repair-analysis requires --run-dir"}, sort_keys=True))
+            return 2
+        try:
+            artifact_hash, file_hash = write_analysis_repair(args.run_dir)
+        except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            print(json.dumps({"status": "refused", "reason": str(error)}, sort_keys=True))
+            return 2
+        print(json.dumps({"status": "repaired", "artifact": str(args.run_dir / "analysis_repair.json"), "artifact_self_hash": artifact_hash, "artifact_file_sha256": file_hash, "benchmark_rerun": False, "raw_measurements_unchanged": True}, sort_keys=True))
+        return 0
     if not args.execute:
         print(json.dumps({"status": "refused", "reason": "real ER32 cost-gate execution requires explicit --execute"}, sort_keys=True))
         return 2

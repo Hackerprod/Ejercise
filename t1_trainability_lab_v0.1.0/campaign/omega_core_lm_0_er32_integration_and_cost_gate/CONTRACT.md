@@ -2,9 +2,9 @@
 
 This directory contains **Phase 1 plus Phase 2 code** for
 `OMEGA-CORE-LM-0-ER32-INTEGRATION-AND-COST-GATE`. Phase 1 covers Gates I and II with synthetic
-CPU FP32 tests. Phase 2 defines the real technical/inference gate, schema, and synthetic unit
-tests, but Phase 2 has **not been executed**. Gate execution remains pending user review and
-explicit launch authorization.
+CPU FP32 tests. The authorized Phase 2 run is preserved under
+`results/20260917T154901Z-0fb4048b/`. Its raw evidence remains unchanged; later semantic
+analysis repairs correct Gate V/VI formulas without rerunning the benchmark.
 
 ## Authoritative Contract
 
@@ -17,8 +17,8 @@ explicit launch authorization.
 5. `TRAINING_COST`
 6. `INFERENCE_COST`
 
-Phase 1 tests criteria 1 and 2. Phase 2 implementation covers criteria 3 through 6 when
-explicitly launched. No quality, `delta_K`, or quality-scoping decision is made;
+Phase 1 tests criteria 1 and 2. Phase 2 execution covers criteria 3 through 6. No quality,
+`delta_K`, or quality-scoping decision is made;
 `delta_K <= 0.10` remains pending.
 
 ## Frozen Test Contract
@@ -62,7 +62,29 @@ Training and inference combinations launch in separate fresh child processes. Th
 refuses execution; real execution requires explicit `--execute` and parent-issued child tokens.
 Reports use `results/<run-id>/integration_report.json`, `cost_report.json`,
 `inference_report.json`, and `ledger.jsonl`. JSON artifacts are self-hashed and reread before
-being accepted. No result directory has been created by Phase 2 implementation work.
+being accepted. `analysis_repair.json` is a separate write-once, self-hashed semantic analysis
+artifact; it reads existing cost/inference reports and never overwrites raw evidence.
+
+## Semantic Analysis Repair
+
+The repair path corrects only formula orientation:
+
+- Gate V uses `T_ER32_total / T_F_total`, retaining threshold `1.25` and
+  `COST_REGRESSION`/`QUALITY_SCOPING_HOLD` semantics.
+- Gate VI uses `ER32_time / F_time`: `ms_per_token` for Mode A and
+  `mean_seconds_per_window` for Mode B. RSS anomaly classification is unchanged.
+- `benchmark_rerun` is `false` and `raw_measurements_unchanged` is `true`.
+- Existing source artifact SHA256 values, old/corrected formulas, corrected metrics, and
+  recalculated Gate V/VI classifications are recorded in `analysis_repair.json`.
+- The command refuses overwrite and verifies the new artifact by rereading its self-hash:
+
+```text
+python run_er32_cost_gate.py --repair-analysis --run-dir results/<run-id>
+```
+
+The timing note is explicit: ledger `total_seconds` is captured before append/fsync, while
+report training totals are captured after append/fsync. This known definition difference does
+not authorize raw mutation or benchmark rerun.
 
 The six technical training updates intentionally reuse the same two approved source windows
 (`source[:, :256]` and `source[:, 256:512]`) for each 0/1 pair. This is a deliberate cost-only
@@ -74,4 +96,5 @@ claim corpus traversal equivalence with A/B/C.
 Source provenance is the current on-disk implementation paths above plus
 `run_omega_core_lm_0_r1_training_technical_preflight.py` for test-only fresh R1 reference setup.
 Phase 1 creates no result directory, report self-hash, corpus manifest, teacher cache, or git
-metadata. Phase 2 defines report provenance without executing or creating those artifacts.
+metadata. Phase 2 raw reports and ledger are historical evidence; repair provenance is added
+only through `analysis_repair.json`.

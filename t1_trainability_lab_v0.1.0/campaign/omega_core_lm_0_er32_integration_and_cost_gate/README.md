@@ -1,9 +1,9 @@
 # ER32 Integration and Cost Gate, Phases 1-2
 
 Phase 1 proves ER32 structural integration and explicit-vs-efficient equivalence against the
-real CPU fastpath. Phase 2 implementation adds the isolated technical/inference runner, report
-schema, and synthetic orchestration tests. Phase 2 benchmarks are implemented but **not
-executed**; execution remains pending user review and explicit launch authorization.
+real CPU fastpath. Phase 2 adds the isolated technical/inference runner, report schema, and
+synthetic orchestration tests. The authorized raw Phase 2 run is preserved; Gate V/VI semantic
+analysis was repaired without benchmark rerun.
 
 ## Quick Path
 
@@ -13,6 +13,7 @@ From repository root:
 python -m pytest t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/test_er32_integration.py
 python -m pytest t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/test_er32_cost_gate.py
 python -m py_compile t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/run_er32_cost_gate.py t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/test_er32_cost_gate.py
+python t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/run_er32_cost_gate.py --repair-analysis --run-dir t1_trainability_lab_v0.1.0/campaign/omega_core_lm_0_er32_integration_and_cost_gate/results/<run-id>
 ```
 
 ## Phase 1 Gates
@@ -41,18 +42,21 @@ The CLI is safe by default:
 python run_er32_cost_gate.py
 ```
 
-prints refusal and launches nothing. The real gate is intentionally not launched in this phase;
-`--execute` is an explicit future authorization boundary.
+prints refusal and launches nothing. `--execute` launches real benchmark children only when
+explicitly authorized. `--repair-analysis --run-dir <existing>` is safe analysis-only mode: it
+reads existing reports, writes only `analysis_repair.json`, refuses overwrite, and launches no
+benchmark, child, corpus, or teacher.
 
 ## Explicit Boundary
 
 All six criteria in `MD/174.md` remain authoritative: integration correspondence,
 explicit-efficient equivalence, persistent footprint, memory safety, training cost, and
-inference cost. Only first two are evaluated here. No quality or `delta_K` decision is made;
-`delta_K <= 0.10` remains pending.
+inference cost. This repair does not alter the quality contract: no quality or `delta_K`
+decision is made and `delta_K <= 0.10` remains pending.
 
-The directory contains Phase 2 runner/schema/tests, but no Phase 2 results directory. Real
-approved corpus and teacher inputs remain unused until review and explicit launch authorization.
+The directory contains Phase 2 runner/schema/tests and preserved Phase 2 results. The repair
+artifact preserves raw source files byte-for-byte and records their SHA256 values. No benchmark
+rerun, corpus load, or teacher load is part of semantic repair.
 
 ## Provenance and Restrictions
 

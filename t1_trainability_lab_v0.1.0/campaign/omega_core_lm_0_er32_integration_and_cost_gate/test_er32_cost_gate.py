@@ -36,12 +36,20 @@ def _training_result(config: str, rounds: int, *, status: str = "completed", sec
     }
 
 
-def _inference_result(config: str, rounds: int, mode_a: float = 100.0, mode_b: float = 100.0, rss: int = 1000) -> dict[str, object]:
+def _inference_result(
+    config: str,
+    rounds: int,
+    mode_a_tps: float = 100.0,
+    mode_b_tps: float = 100.0,
+    rss: int = 1000,
+    mode_a_ms: float = 10.0,
+    mode_b_seconds: float = 2.56,
+) -> dict[str, object]:
     return {
         "config": config,
         "rounds": rounds,
-        "mode_a": {"tokens_per_second": mode_a, "ms_per_token": 10.0},
-        "mode_b": {"mean_tokens_per_second": mode_b, "mean_seconds_per_window": 2.56},
+        "mode_a": {"tokens_per_second": mode_a_tps, "ms_per_token": mode_a_ms},
+        "mode_b": {"mean_tokens_per_second": mode_b_tps, "mean_seconds_per_window": mode_b_seconds},
         "steady_state_rss_bytes": rss,
     }
 
@@ -119,8 +127,48 @@ def test_gate_classifications_and_thresholds() -> None:
         _inference_result("F", 1), _inference_result("F", 4), _inference_result("ER32", 1, 80, 80), _inference_result("ER32", 4, 80, 80)
     ])
     assert runner.classify_inference_cost(metrics)["classification"] == "PASS"
-    metrics["ER32_over_F"]["K1_mode_a"] = 2.0
+    metrics["ER32_over_F_time_cost"]["K1_mode_a"] = 2.0
     assert runner.classify_inference_cost(metrics)["classification"] == "INFERENCE_COST_REGRESSION"
+
+
+def test_training_cost_ratio_canaries_use_er32_over_f_time() -> None:
+    faster = runner.aggregate_training_metrics([
+        _training_result("F", 1, seconds=2.5),
+        _training_result("F", 4, seconds=2.5),
+        _training_result("ER32", 1, seconds=1.75),
+        _training_result("ER32", 4, seconds=1.75),
+    ])
+    slower = runner.aggregate_training_metrics([
+        _training_result("F", 1, seconds=2.5),
+        _training_result("F", 4, seconds=2.5),
+        _training_result("ER32", 1, seconds=3.25),
+        _training_result("ER32", 4, seconds=3.25),
+    ])
+    assert faster["R_train"] == pytest.approx(0.70)
+    assert runner.classify_training_cost(faster)["classification"] == "PASS"
+    assert slower["R_train"] == pytest.approx(1.30)
+    assert runner.classify_training_cost(slower)["classification"] == "COST_REGRESSION"
+
+
+def test_inference_cost_ratio_canaries_use_time_fields_not_throughput() -> None:
+    faster = runner.aggregate_inference_metrics([
+        _inference_result("F", 1, mode_a_tps=100.0, mode_b_tps=100.0, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("F", 4, mode_a_tps=100.0, mode_b_tps=100.0, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("ER32", 1, mode_a_tps=2000.0, mode_b_tps=1.0, mode_a_ms=7.0, mode_b_seconds=1.4),
+        _inference_result("ER32", 4, mode_a_tps=2000.0, mode_b_tps=1.0, mode_a_ms=7.0, mode_b_seconds=1.4),
+    ])
+    slower = runner.aggregate_inference_metrics([
+        _inference_result("F", 1, mode_a_tps=100.0, mode_b_tps=100.0, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("F", 4, mode_a_tps=100.0, mode_b_tps=100.0, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("ER32", 1, mode_a_tps=1.0, mode_b_tps=2000.0, mode_a_ms=13.0, mode_b_seconds=2.6),
+        _inference_result("ER32", 4, mode_a_tps=1.0, mode_b_tps=2000.0, mode_a_ms=13.0, mode_b_seconds=2.6),
+    ])
+    assert faster["ER32_over_F_time_cost"]["K1_mode_a"] == pytest.approx(0.70)
+    assert faster["ER32_over_F_time_cost"]["K1_mode_b"] == pytest.approx(0.70)
+    assert runner.classify_inference_cost(faster)["classification"] == "PASS"
+    assert slower["ER32_over_F_time_cost"]["K1_mode_a"] == pytest.approx(1.30)
+    assert slower["ER32_over_F_time_cost"]["K1_mode_b"] == pytest.approx(1.30)
+    assert runner.classify_inference_cost(slower)["classification"] == "INFERENCE_COST_REGRESSION"
 
 
 def test_memory_safety_guard_is_inconclusive_not_er32_fail() -> None:
@@ -139,9 +187,51 @@ def test_persistent_footprint_requires_exact_reduction() -> None:
 def test_inference_metric_aggregation_and_memory_anomaly() -> None:
     results = [_inference_result("F", 1, rss=1000), _inference_result("F", 4, rss=1000), _inference_result("ER32", 1, rss=1000), _inference_result("ER32", 4, rss=1000)]
     metrics = runner.aggregate_inference_metrics(results)
-    assert metrics["ER32_over_F"]["K1_mode_a"] == 1.0
+    assert metrics["ER32_over_F_time_cost"]["K1_mode_a"] == 1.0
     results[-1]["steady_state_rss_bytes"] = 1000 + runner.RSS_ANOMALY_BYTES + 1
     assert runner.classify_inference_cost(runner.aggregate_inference_metrics(results))["classification"] == "MEMORY_RUNTIME_ANOMALY"
+
+
+def test_analysis_repair_derives_values_once_and_preserves_sources(tmp_path: Path) -> None:
+    training = runner.aggregate_training_metrics([
+        _training_result("F", 1, seconds=2.5),
+        _training_result("F", 4, seconds=2.5),
+        _training_result("ER32", 1, seconds=1.75),
+        _training_result("ER32", 4, seconds=1.75),
+    ])
+    inference = runner.aggregate_inference_metrics([
+        _inference_result("F", 1, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("F", 4, mode_a_ms=10.0, mode_b_seconds=2.0),
+        _inference_result("ER32", 1, mode_a_ms=7.0, mode_b_seconds=1.4),
+        _inference_result("ER32", 4, mode_a_ms=7.0, mode_b_seconds=1.4),
+    ])
+    cost_path = tmp_path / "cost_report.json"
+    inference_path = tmp_path / "inference_report.json"
+    integration_path = tmp_path / "integration_report.json"
+    ledger_path = tmp_path / "ledger.jsonl"
+    runner.write_self_hashed_json(cost_path, {"artifact": "cost_report", "run_id": "synthetic", "training": training, "gates": {"TRAINING_COST": {"classification": "PASS"}}})
+    runner.write_self_hashed_json(inference_path, {"artifact": "inference_report", "run_id": "synthetic", "inference": inference, "gates": {"INFERENCE_COST": {"classification": "PASS"}}})
+    integration_path.write_text("integration\n", encoding="utf-8")
+    ledger_path.write_text("ledger\n", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in (cost_path, inference_path, integration_path, ledger_path)}
+
+    artifact_hash, file_hash = runner.write_analysis_repair(tmp_path)
+    repair_path = tmp_path / "analysis_repair.json"
+    repair = json.loads(repair_path.read_text(encoding="utf-8"))
+    assert repair["artifact_self_hash"] == artifact_hash
+    assert file_hash == runner.sha256_file(repair_path)
+    unsigned = dict(repair)
+    unsigned["artifact_self_hash"] = runner.SELF_HASH_PLACEHOLDER
+    assert runner.sha256_bytes(runner.canonical_json(unsigned)) == artifact_hash
+    assert repair["benchmark_rerun"] is False
+    assert repair["raw_measurements_unchanged"] is True
+    assert repair["gate_V_training_cost"]["corrected_metric"] == pytest.approx(0.70)
+    assert repair["gate_VI_inference_cost"]["corrected_metrics"]["K1_mode_a"] == pytest.approx(0.70)
+    assert repair["recalculated_gate_classifications"]["TRAINING_COST"]["classification"] == "PASS"
+    assert repair["recalculated_gate_classifications"]["INFERENCE_COST"]["classification"] == "PASS"
+    assert {path.name: path.read_bytes() for path in (cost_path, inference_path, integration_path, ledger_path)} == before
+    with pytest.raises(FileExistsError):
+        runner.write_analysis_repair(tmp_path)
 
 
 def test_inference_report_global_status_uses_full_six_gate_map() -> None:
