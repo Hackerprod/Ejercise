@@ -182,15 +182,18 @@ def touch_cold_buffer(cold_buffer: bytearray) -> None:
         cold_buffer[index] = (cold_buffer[index] + 1) & 0xFF
 
 
-def core_probe(model: Any, tokens: Any, state: Any, *, cold_buffer: bytearray | None = None, tiny_operation: Callable[[], None] | None = None) -> float:
-    """Time recurrent core only; optional flush/control runs before timer."""
+def core_probe(model: Any, tokens: Any, state: Any, *, cold_buffer: bytearray | None = None, tiny_operation: Callable[[], None] | None = None) -> tuple[float, Any]:
+    """Time recurrent core and return its readout states for the head."""
     if cold_buffer is not None:
         touch_cold_buffer(cold_buffer)
     if tiny_operation is not None:
         tiny_operation()
     started = time.perf_counter_ns()
-    model.recur_states(tokens, state)
-    return (time.perf_counter_ns() - started) / 1_000_000_000
+    result = model.recur_states(tokens, state)
+    elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
+    if not isinstance(result, tuple) or len(result) < 4:
+        raise RuntimeError("recurrent probe must return readout_states as fourth result")
+    return elapsed, result[3]
 
 
 def run_readout_head(model: Any, state: Any) -> None:
@@ -201,13 +204,13 @@ def run_readout_head(model: Any, state: Any) -> None:
 
 def block_measurement(model: Any, tokens: Any, state_factory: Callable[[], Any], cold_bytes: int = POSITIVE_CONTROL_BYTES) -> dict[str, float]:
     cold_buffer = bytearray(cold_bytes)
-    cold = core_probe(model, tokens, state_factory(), cold_buffer=cold_buffer)
+    cold, _ = core_probe(model, tokens, state_factory(), cold_buffer=cold_buffer)
     warm_state = state_factory()
     for _ in range(WARMUP_CALLS):
         core_probe(model, tokens, warm_state)
-    warm = core_probe(model, tokens, warm_state)
-    run_readout_head(model, warm_state)
-    post = core_probe(model, tokens, warm_state)
+    warm, warm_readout_states = core_probe(model, tokens, warm_state)
+    run_readout_head(model, warm_readout_states)
+    post, _ = core_probe(model, tokens, warm_state)
     return {"cold": cold, "warm": warm, "posthead": post}
 
 
@@ -260,7 +263,7 @@ def measure_variant_block(variant: str, block: int) -> dict[str, Any]:
     state_factory = lambda: model.initial_state(TOKEN_BATCH, device=torch.device("cpu"))
     samples = block_measurement(model, tokens, state_factory)
     negative_state = state_factory()
-    negative = core_probe(model, tokens, negative_state, tiny_operation=lambda: None)
+    negative, _ = core_probe(model, tokens, negative_state, tiny_operation=lambda: None)
     return {"variant": variant, "block": block, **samples, "negative": negative, "rss_bytes": psutil.Process().memory_info().rss}
 
 

@@ -63,18 +63,21 @@ def test_condition_call_contract_has_head_only_for_posthead() -> None:
         def __init__(self) -> None:
             self.head_calls = 0
             self.probe_calls = 0
+            self.head_shapes: list[tuple[int, ...]] = []
 
-        def logits_from_states(self, _state: object) -> object:
+        def logits_from_states(self, state: object) -> object:
             self.head_calls += 1
+            self.head_shapes.append(tuple(state.shape))
             return __import__("torch").zeros(1, 1, 3)
 
-        def recur_states(self, _tokens: object, _state: object) -> tuple[None, None, None, None]:
+        def recur_states(self, _tokens: object, _state: object) -> tuple[None, None, None, object]:
             self.probe_calls += 1
-            return None, None, None, None
+            return None, None, None, __import__("torch").zeros(1, 1, 8, 128)
 
     model = SpyModel()
     runner.block_measurement(model, object(), lambda: object(), cold_bytes=64)
     assert model.head_calls == 1
+    assert model.head_shapes == [(1, 1, 8, 128)]
     assert model.probe_calls == 1 + runner.WARMUP_CALLS + 1 + 1
 
 
