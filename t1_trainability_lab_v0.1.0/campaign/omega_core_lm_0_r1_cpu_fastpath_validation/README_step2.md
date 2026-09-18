@@ -43,3 +43,14 @@ No SCOPE-A runner/results are touched or relaunched. No validation/test split,
 projection, GPU, compile, mixed precision, CUDA graph, vmap, parallel trainer,
 thread experiment, Fable optimization, or quality interpretation is used.
 The Fable proposal module remains read-only reference material.
+
+## Provenance Note (2026-09-18)
+
+Commit `d75cb63` changed `run_step2_benchmark.py` to delegate CPU thread
+configuration to the shared `configure_cpu_runtime()` from
+`run_scientific_scoping_a.py` instead of setting threads at module import
+time, fixing a recurring interop-thread double-set crash in later units
+that import this module. All results under `results/step2_benchmark/`
+predating that commit were produced by the pre-refactor thread-setup code
+and are bound to their own recorded commit/hash, not to `d75cb63`'s bytes.
+No Step 2 result was rerun or edited by that change.

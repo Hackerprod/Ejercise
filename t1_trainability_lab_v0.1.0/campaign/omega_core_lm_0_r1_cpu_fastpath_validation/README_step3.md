@@ -49,3 +49,15 @@ contains metadata-only frequency estimates. They are deliberately separate and
 are never combined into a SCOPE-A projection. The formula remains uncomputed:
 
 `T_SCOPE-A = T_preparación + Σ(rutas/variantes)(N_aciertos×t_acierto + N_fallos×t_fallo) + T_validación/checkpoints/E-S`
+
+## Provenance Note (2026-09-18)
+
+Commit `d75cb63` changed `run_step3_cache_extension.py` to delegate CPU
+thread configuration to the shared `configure_cpu_runtime()` from
+`run_scientific_scoping_a.py` instead of setting threads independently at
+module import time, fixing a recurring interop-thread double-set crash in
+later units that import this module. All results under
+`results/step3_cache_extension/` predating that commit were produced by
+the pre-refactor thread-setup code and are bound to their own recorded
+commit/hash, not to `d75cb63`'s bytes. No Step 3 result was rerun or
+edited by that change.
