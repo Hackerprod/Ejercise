@@ -68,3 +68,38 @@ def test_self_hash_cost_report_is_write_once_and_reproducible(tmp_path: Path) ->
     assert parsed["benchmark_rerun"] is False
     with pytest.raises(FileExistsError):
         runner.write_self_hashed_json(path, runner.build_cost_report(training, inference))
+
+
+def test_child_training_and_inference_routes_cover_four_fresh_combinations(tmp_path: Path) -> None:
+    training_calls: list[list[str]] = []
+    inference_calls: list[list[str]] = []
+
+    def spawn_training(command: list[str], token: str) -> dict[str, object]:
+        training_calls.append(command)
+        assert token
+        return {"config": command[command.index("--config") + 1], "rounds": int(command[command.index("--rounds") + 1]), "updates": []}
+
+    def spawn_inference(command: list[str], token: str) -> dict[str, object]:
+        inference_calls.append(command)
+        assert token
+        return {"config": command[command.index("--config") + 1], "rounds": int(command[command.index("--rounds") + 1])}
+
+    training = runner.run_training_children(tmp_path / "run", tmp_path / "ledger.jsonl", spawn=spawn_training)
+    inference = runner.run_inference_children(spawn=spawn_inference)
+    assert [(item["config"], item["rounds"]) for item in training] == list(runner.COMBINATIONS)
+    assert [(item["config"], item["rounds"]) for item in inference] == list(runner.COMBINATIONS)
+    assert all("--child-training" in command and "--child-token" in command for command in training_calls)
+    assert all("--child-inference" in command and "--child-token" in command for command in inference_calls)
+
+
+def test_full_report_orchestrator_writes_self_hashed_artifact_without_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    training = [_training(config, rounds, 1.0) for config, rounds in runner.COMBINATIONS]
+    inference = [_inference(config, rounds, 1.0, 1.0) for config, rounds in runner.COMBINATIONS]
+    monkeypatch.setattr(runner, "run_training_children", lambda run_dir, ledger: training)
+    monkeypatch.setattr(runner, "run_inference_children", lambda: inference)
+    report = runner.run_full(tmp_path)
+    artifact = Path(report["run_dir"]) / "cost_report.json"
+    persisted = json.loads(artifact.read_text(encoding="utf-8"))
+    assert persisted["artifact_self_hash"]
+    assert persisted["candidate"] == "ER64"
+    assert persisted["phase1_only"] is False

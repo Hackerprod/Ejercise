@@ -8,10 +8,17 @@ for explicit follow-up authorization after review of this phase.
 from __future__ import annotations
 
 import copy
+import gc
 import hashlib
+import hmac
 import json
 import math
+import os
+import secrets
 import sys
+import subprocess
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,15 +29,18 @@ import torch.nn as nn
 HERE = Path(__file__).resolve().parent
 CAMPAIGN_ROOT = HERE.parent
 ER64_ADAPTER_DIR = HERE
+ER32_GATE_DIR = CAMPAIGN_ROOT / "omega_core_lm_0_er32_integration_and_cost_gate"
 R1_SCRIPTS_DIR = CAMPAIGN_ROOT.parent / "scripts"
 FASTPATH_DIR = CAMPAIGN_ROOT / "omega_core_lm_0_r1_cpu_fastpath_validation"
 sys.path.insert(0, str(ER64_ADAPTER_DIR))
+sys.path.insert(0, str(ER32_GATE_DIR))
 sys.path.insert(0, str(FASTPATH_DIR))
 sys.path.insert(0, str(R1_SCRIPTS_DIR))
 
 from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 from omega_fast_er64 import OmegaCoreLMFastER64  # noqa: E402
 from run_omega_core_lm_0_r1_training_technical_preflight import OmegaCoreLM0R1Technical  # noqa: E402
+import run_er32_cost_gate as er32_base  # noqa: E402
 
 
 VOCAB_SIZE = 50257
@@ -43,6 +53,8 @@ RSS_ANOMALY_BYTES = 128 * 1024 * 1024
 SELF_HASH_PLACEHOLDER = "__SELF_HASH__"
 CONFIGS = ("F", "ER64")
 COMBINATIONS = (("F", 1), ("F", 4), ("ER64", 1), ("ER64", 4))
+CHILD_TOKEN_ENV = "ER64_COST_GATE_CHILD_TOKEN"
+UPDATE_SNAPSHOT_PHASES = er32_base.UPDATE_SNAPSHOT_PHASES
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -159,13 +171,200 @@ def build_cost_report(training_results: Iterable[dict[str, Any]], inference_resu
     return {"schema": "omega-core-lm-0-er64-cost-gate-phase1-v1", "candidate": "ER64", "benchmark_rerun": False, "training": training, "inference": inference, "gates": {"TRAINING_COST": classify_training_cost(training), "INFERENCE_COST": classify_inference_cost(inference)}, "phase1_only": True}
 
 
+def configure_child_threads() -> None:
+    torch.set_num_threads(er32_base.THREADS)
+    torch.set_num_interop_threads(er32_base.INTEROP_THREADS)
+    torch.set_float32_matmul_precision("highest")
+
+
+def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Path) -> dict[str, Any]:
+    """Run one six-update ER64/F combination in a fresh child process."""
+    configure_child_threads()
+    snapshots: list[dict[str, Any]] = []
+    updates: list[dict[str, Any]] = []
+    result: dict[str, Any] = {"kind": "training", "config": config, "rounds": rounds, "updates_requested": TRAINING_UPDATES, "snapshots": snapshots, "updates": updates, "status": "failed", "updates_completed": 0}
+    try:
+        er32_base.capture_snapshot(snapshots, "process_start")
+        source, document_ids, manifest, tokenizer = er32_base.load_approved_source()
+        del tokenizer
+        teacher = er32_base.load_teacher()
+        er32_base.capture_snapshot(snapshots, "teacher_loaded")
+        seed = 20260913 if rounds == 1 else 20260914
+        f_reference = make_f_reference(rounds, seed)
+        er32_base.capture_snapshot(snapshots, "reference_created")
+        candidate = make_candidate(config, rounds, f_reference)
+        del f_reference
+        gc.collect()
+        er32_base.capture_snapshot(snapshots, "candidate_ready_after_reference_deleted")
+        optimizer = er32_base.make_adamw(candidate)
+        result["parameter_count"] = sum(parameter.numel() for parameter in candidate.parameters())
+        state: torch.Tensor | None = None
+        for update_index, window in enumerate(er32_base.WINDOW_SCHEDULE):
+            started = time.perf_counter()
+            optimizer.zero_grad(set_to_none=True)
+            if window == 0:
+                state = candidate.initial_state(er32_base.BATCH, device=torch.device("cpu"))
+            if state is None:
+                raise RuntimeError("window 1 has no detached state")
+            input_ids = source[:, :er32_base.TOKENS_PER_WINDOW] if window == 0 else source[:, er32_base.TOKENS_PER_WINDOW : 2 * er32_base.TOKENS_PER_WINDOW]
+            targets = source[:, 1 : 1 + er32_base.TOKENS_PER_WINDOW] if window == 0 else source[:, 1 + er32_base.TOKENS_PER_WINDOW : 1 + 2 * er32_base.TOKENS_PER_WINDOW]
+            valid_mask = torch.ones((er32_base.BATCH, er32_base.TOKENS_PER_WINDOW), dtype=torch.bool)
+            timings: dict[str, float] = {}
+            er32_base.capture_snapshot(snapshots, "before_teacher")
+            teacher_logits = er32_base.teacher_window_logits(teacher, source, window)
+            timings["teacher_forward_seconds"] = time.perf_counter() - started
+            er32_base.capture_snapshot(snapshots, "after_teacher")
+            recurrence_started = time.perf_counter()
+            next_state, _, _, readout_states = candidate.recur_states(input_ids, state)
+            timings["student_recurrence_forward_seconds"] = time.perf_counter() - recurrence_started
+            er32_base.capture_snapshot(snapshots, "after_student_forward")
+            loss_started = time.perf_counter()
+            losses = er32_base.chunked_original_loss(candidate, readout_states, teacher_logits, targets, valid_mask)
+            timings["vocab_projection_loss_seconds"] = time.perf_counter() - loss_started
+            er32_base.capture_snapshot(snapshots, "after_loss")
+            losses["total"].backward()
+            er32_base.capture_snapshot(snapshots, "after_backward")
+            er32_base.assert_finite(candidate, losses)
+            clip_started = time.perf_counter()
+            pre_clip = er32_base.grad_norm(candidate)
+            returned_clip = float(torch.nn.utils.clip_grad_norm_(candidate.parameters(), er32_base.CLIP_NORM).item())
+            timings["clipping_seconds"] = time.perf_counter() - clip_started
+            er32_base.capture_snapshot(snapshots, "after_clip")
+            optimizer_started = time.perf_counter()
+            optimizer.step()
+            timings["adamw_seconds"] = time.perf_counter() - optimizer_started
+            er32_base.capture_snapshot(snapshots, "after_optimizer_step")
+            inventory = er32_base.tensor_inventory(candidate, optimizer) if update_index == 0 else None
+            state = next_state.detach()
+            del teacher_logits, readout_states, next_state, losses
+            gc.collect()
+            er32_base.capture_snapshot(snapshots, "after_update_cleanup")
+            timings["total_seconds"] = time.perf_counter() - started
+            record = {"kind": "training_update", "config": config, "rounds": rounds, "update": update_index, "window": window, "phase": "warmup" if update_index < er32_base.WARMUP_UPDATES else "measured", "valid_tokens": er32_base.BATCH * er32_base.TOKENS_PER_WINDOW, "document_ids": document_ids, "manifest": manifest, "pre_clip_grad_norm": pre_clip, "clip_returned_norm": returned_clip, "timing": timings, "tensor_inventory_after_first_optimizer_step": inventory, "snapshots": [item for item in snapshots if item.get("phase") in UPDATE_SNAPSHOT_PHASES][-8:]}
+            er32_base.append_ledger(ledger_path, record)
+            updates.append(record)
+            result["updates_completed"] = len(updates)
+        result["status"] = "completed"
+        result["tensor_inventory"] = updates[0]["tensor_inventory_after_first_optimizer_step"]
+        result["minimum_available_system_bytes"] = min(int(item["available_system_bytes"]) for item in snapshots if item.get("available_system_bytes") is not None)
+    except er32_base.ResourceGuard as error:
+        result["status"] = "INCONCLUSIVE_RESOURCE"
+        result["resource_guard"] = {"phase": error.phase, "snapshot": error.snapshot}
+    except er32_base.NonFinite as error:
+        result["status"] = "NONFINITE"
+        result["error"] = str(error)
+    except RuntimeError as error:
+        result["status"] = "OOM" if "out of memory" in str(error).lower() else "failed"
+        result["error"] = str(error)
+    except Exception as error:  # pragma: no cover
+        result["error"] = {"type": type(error).__name__, "message": str(error)}
+    return result
+
+
+def run_inference_child(config: str, rounds: int) -> dict[str, Any]:
+    configure_child_threads()
+    source, _, _, tokenizer = er32_base.load_approved_source()
+    del tokenizer
+    seed = 20260913 if rounds == 1 else 20260914
+    candidate = make_candidate(config, rounds, make_f_reference(rounds, seed)).eval()
+    tokens = source[:1]
+    with torch.inference_mode():
+        state = candidate.initial_state(1, device=torch.device("cpu"))
+        for index in range(32):
+            state, _, _, _ = candidate.recur_states(tokens[:, index : index + 1], state)
+        started = time.perf_counter()
+        for index in range(32, 288):
+            state, _, _, _ = candidate.recur_states(tokens[:, index : index + 1], state)
+        mode_a_seconds = time.perf_counter() - started
+        mode_b_seconds: list[float] = []
+        for _ in range(3):
+            initial = candidate.initial_state(1, device=torch.device("cpu"))
+            started = time.perf_counter()
+            candidate.recur_states(tokens[:, :256], initial)
+            mode_b_seconds.append(time.perf_counter() - started)
+    mean_window = sum(mode_b_seconds) / len(mode_b_seconds)
+    return {"kind": "inference", "config": config, "rounds": rounds, "mode_a": {"tokens": 256, "seconds": mode_a_seconds, "tokens_per_second": 256 / mode_a_seconds, "ms_per_token": mode_a_seconds * 1000 / 256}, "mode_b": {"tokens": 256, "seconds_per_window": mode_b_seconds, "mean_seconds_per_window": mean_window, "mean_tokens_per_second": 256 / mean_window}, "steady_state_rss_bytes": er32_base.memory_snapshot()["rss_bytes"]}
+
+
+def child_authorized(token: str | None) -> bool:
+    expected = os.environ.get(CHILD_TOKEN_ENV, "")
+    return bool(token and expected and hmac.compare_digest(token, expected))
+
+
+def spawn_child(command: list[str], token: str) -> dict[str, Any]:
+    environment = os.environ.copy()
+    environment[CHILD_TOKEN_ENV] = token
+    completed = subprocess.run(command, cwd=HERE, env=environment, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"child failed: {completed.stderr[-1000:]}")
+    for line in reversed(completed.stdout.splitlines()):
+        if line.strip():
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise RuntimeError("child output is not an object")
+            return value
+    raise RuntimeError("child produced no JSON result")
+
+
+def run_training_children(run_dir: Path, ledger_path: Path, *, spawn: Any = spawn_child) -> list[dict[str, Any]]:
+    token = secrets.token_hex(32)
+    results = []
+    for config, rounds in COMBINATIONS:
+        command = [sys.executable, str(Path(__file__).resolve()), "--execute", "--child-training", "--child-token", token, "--config", config, "--rounds", str(rounds), "--run-dir", str(run_dir), "--ledger", str(ledger_path)]
+        results.append(spawn(command, token))
+    return results
+
+
+def run_inference_children(*, spawn: Any = spawn_child) -> list[dict[str, Any]]:
+    token = secrets.token_hex(32)
+    results = []
+    for config, rounds in COMBINATIONS:
+        command = [sys.executable, str(Path(__file__).resolve()), "--execute", "--child-inference", "--child-token", token, "--config", config, "--rounds", str(rounds)]
+        results.append(spawn(command, token))
+    return results
+
+
+def run_full(output_dir: Path) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = output_dir / f"run_{uuid.uuid4().hex[:12]}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    ledger = run_dir / "ledger.jsonl"
+    training = run_training_children(run_dir, ledger)
+    inference = run_inference_children()
+    report = build_cost_report(training, inference)
+    report.update({"run_dir": run_dir.as_posix(), "training_results": training, "inference_results": inference, "phase1_only": False})
+    write_self_hashed_json(run_dir / "cost_report.json", report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = __import__("argparse").ArgumentParser()
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--child-training", action="store_true")
+    parser.add_argument("--child-inference", action="store_true")
+    parser.add_argument("--child-token")
+    parser.add_argument("--config", choices=CONFIGS)
+    parser.add_argument("--rounds", type=int, choices=(1, 4))
+    parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--ledger", type=Path)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-er64-cost-gate", action="store_true")
-    parser.error("Phase 2 real execution is reserved for explicit follow-up authorization; use tests for Phase 1")
-    return 2
+    parser.add_argument("--output-dir", type=Path, default=HERE / "results")
+    args = parser.parse_args(argv)
+    if args.execute and child_authorized(args.child_token) and args.config and args.rounds:
+        if args.child_training and args.run_dir and args.ledger:
+            print(json.dumps(run_training_child(args.config, args.rounds, args.run_dir, args.ledger), sort_keys=True))
+            return 0
+        if args.child_inference:
+            print(json.dumps(run_inference_child(args.config, args.rounds), sort_keys=True))
+            return 0
+    if args.smoke:
+        parser.error("synthetic smoke execution is covered by tests; no corpus is loaded")
+    if not (args.full and args.confirm_er64_cost_gate):
+        parser.error("real ER64 cost-gate execution requires --full --confirm-er64-cost-gate")
+    print(json.dumps(run_full(args.output_dir), indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
