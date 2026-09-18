@@ -425,18 +425,66 @@ def run_full(output_dir: Path) -> dict[str, Any]:
     return report
 
 
+def run_resume(output_dir: Path, checkpoint: Path, seed: int, variant: str) -> dict[str, Any]:
+    """Resume one authorized seed/K combination from its valid checkpoint."""
+    checkpoint = checkpoint.resolve()
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+    if seed not in SEEDS or variant not in VARIANTS:
+        raise ValueError("resume requires an authorized Quality-Scoping-A seed and variant")
+    baselines = load_frozen_r1_baselines()
+    train, validation, train_manifest, validation_manifest, teacher = _load_real_documents(pair_count=FULL_PAIRS)
+    result = run_single(
+        run_dir=checkpoint.parent,
+        run_id=f"{CAMPAIGN_ID}_{variant}_{seed}",
+        seed=seed,
+        variant=variant,
+        train_documents=train,
+        validation_documents=validation,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        baselines=baselines,
+        resume_checkpoint=checkpoint,
+    )
+    report = {
+        "schema": "omega-core-lm-0-er32-quality-scoping-a-resume-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "mode": "authorized_resume",
+        "seed": seed,
+        "variant": variant,
+        "checkpoint": checkpoint.as_posix(),
+        "run": result,
+        "source_hashes": source_hashes(),
+    }
+    write_json(output_dir / f"resume_report_{variant}_seed_{seed}.json", report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--confirm-quality-scoping-a", action="store_true")
+    parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument("--seed", type=int, choices=SEEDS)
+    parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--output-dir", type=Path, default=HERE / "results" / "quality_scoping_a")
     args = parser.parse_args(argv)
     if args.smoke:
+        if args.resume_checkpoint:
+            parser.error("--resume-checkpoint cannot be combined with --smoke")
         print(json.dumps(run_smoke(args.output_dir), indent=2, sort_keys=True))
         return 0
     if not (args.full and args.confirm_quality_scoping_a):
         parser.error("real Quality-Scoping-A execution requires --full --confirm-quality-scoping-a")
+    if args.resume_checkpoint:
+        if args.seed is None or args.variant is None:
+            parser.error("--resume-checkpoint requires --seed and --variant")
+        print(json.dumps(run_resume(args.output_dir, args.resume_checkpoint, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
+    if args.seed is not None or args.variant is not None:
+        parser.error("--seed/--variant are only valid with --resume-checkpoint")
     print(json.dumps(run_full(args.output_dir), indent=2, sort_keys=True))
     return 0
 

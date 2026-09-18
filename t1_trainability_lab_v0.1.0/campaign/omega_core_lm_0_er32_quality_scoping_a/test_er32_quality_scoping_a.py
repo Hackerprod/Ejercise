@@ -34,6 +34,31 @@ def test_contract_is_cpu_eager_and_real_run_requires_explicit_confirmation() -> 
         runner.main([])
 
 
+def test_resume_cli_routes_one_combination_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[tuple[Path, Path, int, str]] = []
+
+    def fake_resume(output_dir: Path, checkpoint: Path, seed: int, variant: str) -> dict[str, object]:
+        calls.append((output_dir, checkpoint, seed, variant))
+        return {"mode": "authorized_resume", "seed": seed, "variant": variant}
+
+    monkeypatch.setattr(runner, "run_resume", fake_resume)
+    checkpoint = tmp_path / "checkpoint_01500.pt"
+    assert runner.main([
+        "--full",
+        "--confirm-quality-scoping-a",
+        "--resume-checkpoint",
+        str(checkpoint),
+        "--seed",
+        "20260913",
+        "--variant",
+        "ER32-K4",
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]) == 0
+    assert calls == [(tmp_path / "output", checkpoint, 20260913, "ER32-K4")]
+    assert json.loads(capsys.readouterr().out)["mode"] == "authorized_resume"
+
+
 def test_schedule_and_boundaries_are_frozen() -> None:
     assert runner.schedule(5) == [
         {"update": 0, "window": 0, "pair": 0},
