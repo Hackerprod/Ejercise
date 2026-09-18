@@ -95,6 +95,6 @@ def test_cli_requires_explicit_real_confirmation() -> None:
 def test_real_path_configures_cpu_before_loading_context() -> None:
     source = Path(audit.__file__).read_text(encoding="utf-8")
     real_body = source[source.index("def run_real"):source.index("class TinyTokenizer")]
-    assert real_body.index("configure_cpu()") < real_body.index("load_real_context()")
-    audit.configure_cpu()
-    audit.configure_cpu()
+    assert real_body.index("configure_cpu_runtime()") < real_body.index("load_real_context()")
+    audit.configure_cpu_runtime()
+    audit.configure_cpu_runtime()
