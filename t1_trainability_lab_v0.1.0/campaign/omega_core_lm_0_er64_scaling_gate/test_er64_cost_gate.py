@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 from pathlib import Path
 
@@ -15,7 +16,9 @@ import run_er64_cost_gate as runner  # noqa: E402
 
 
 def _training(config: str, rounds: int, seconds: float) -> dict[str, object]:
-    return {"config": config, "rounds": rounds, "updates": [{"phase": "warmup", "timing": {"total_seconds": seconds}}, {"phase": "measured", "timing": {"total_seconds": seconds}}]}
+    updates = [{"phase": "warmup", "timing": {"total_seconds": seconds}} for _ in range(2)]
+    updates.extend({"phase": "measured", "timing": {"total_seconds": seconds}} for _ in range(4))
+    return {"config": config, "rounds": rounds, "status": "completed", "updates_completed": 6, "updates": updates}
 
 
 def _inference(config: str, rounds: int, mode_a_ms: float, mode_b_seconds: float, rss: int = 1000) -> dict[str, object]:
@@ -66,6 +69,18 @@ def test_self_hash_cost_report_is_write_once_and_reproducible(tmp_path: Path) ->
     assert parsed["artifact_self_hash"] == digest
     assert file_digest == runner.sha256_file(path)
     assert parsed["benchmark_rerun"] is False
+    assert parsed["schema"] == "omega-core-lm-0-er64-cost-gate-v2"
+    assert set(parsed["gates"]) == {"TRAINING_COST", "INFERENCE_COST", "MEMORY_SAFETY"}
+    assert parsed["global_status"] == "PASS"
+    assert parsed["metadata"]["threads"]["interop"] == 1
+    assert parsed["metadata"]["source_sha256s"]
+    assert parsed["metadata"]["git_commit"]
+    assert parsed["metadata"]["python"]
+    assert parsed["metadata"]["pytorch"]
+    assert parsed["metadata"]["cpu_identity"]
+    assert parsed["metadata"]["dataset_revision"]["revision"]
+    assert parsed["metadata"]["teacher_revision"]["revision"]
+    assert parsed["metadata"]["manifest_hash"]
     with pytest.raises(FileExistsError):
         runner.write_self_hashed_json(path, runner.build_cost_report(training, inference))
 
@@ -103,3 +118,30 @@ def test_full_report_orchestrator_writes_self_hashed_artifact_without_corpus(tmp
     assert persisted["artifact_self_hash"]
     assert persisted["candidate"] == "ER64"
     assert persisted["phase1_only"] is False
+
+
+def test_memory_safety_rejects_partial_and_classifies_guard_and_nonfinite() -> None:
+    complete = [_training(config, rounds, 1.0) for config, rounds in runner.COMBINATIONS]
+    assert runner.classify_memory_safety(complete)["classification"] == "PASS"
+    partial = dict(complete[0]); partial["status"] = "failed"; partial["updates_completed"] = 2
+    assert runner.classify_memory_safety([partial, *complete[1:]])["classification"] == "FAIL"
+    guarded = dict(complete[0]); guarded["status"] = "INCONCLUSIVE_RESOURCE"
+    assert runner.classify_memory_safety([guarded, *complete[1:]])["classification"] == "INCONCLUSIVE_RESOURCE"
+    nonfinite = dict(complete[0]); nonfinite["status"] = "NONFINITE"
+    assert runner.classify_memory_safety([nonfinite, *complete[1:]])["classification"] == "FAIL"
+    assert runner.aggregate_training_metrics([partial, *complete[1:]])["R_train"] == float("inf")
+
+
+def test_training_timing_contract_has_phase_specific_backward_and_ledger_fields() -> None:
+    source = inspect.getsource(runner.run_training_child)
+    assert "teacher_started = time.perf_counter()" in source
+    assert "backward_started = time.perf_counter()" in source
+    assert 'timings["backward_seconds"]' in source
+    assert 'timings["ledger_seconds"]' in source
+    assert "append_seconds = er32_base.append_ledger" in source
+
+
+def test_mode_b_has_unmeasured_warmup_before_three_repetitions() -> None:
+    source = inspect.getsource(runner.run_inference_child)
+    assert source.index("warmup_state") < source.index("mode_b_seconds")
+    assert source.count("for _ in range(3)") == 1

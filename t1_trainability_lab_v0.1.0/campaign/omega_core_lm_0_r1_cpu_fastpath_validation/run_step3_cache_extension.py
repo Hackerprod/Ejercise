@@ -1,6 +1,7 @@
 """OMEGA R1 Step 3 cache extension.
 
-This file is isolated from Step 1/Step 2 artifacts and never invokes SCOPE-A.
+This file is isolated from Step 1/Step 2 artifacts and only reuses SCOPE-A's
+shared CPU runtime configuration.
 The parent process performs metadata-only traversal simulation. Each measured
 route runs in its own fresh child process and constructs its own teacher/model.
 """
@@ -49,6 +50,9 @@ from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
 )
 from run_scientific_scoping_a import (  # noqa: E402
     build_pair_manifest,
+    configure_cpu_runtime,
+    CPU_INTEROP_THREADS,
+    CPU_INTRAOP_THREADS,
     is_eligible_document,
 )
 from omega_fast_candidate import (  # noqa: E402
@@ -58,10 +62,9 @@ from omega_fast_candidate import (  # noqa: E402
 )
 
 
-THREADS = int(os.environ.get("OMEGA_STEP3_TORCH_THREADS", "4"))
-INTEROP_THREADS = int(os.environ.get("OMEGA_STEP3_TORCH_INTEROP_THREADS", "1"))
-torch.set_num_threads(THREADS)
-torch.set_num_interop_threads(INTEROP_THREADS)
+configure_cpu_runtime()
+THREADS = CPU_INTRAOP_THREADS
+INTEROP_THREADS = CPU_INTEROP_THREADS
 
 DEVICE = torch.device("cpu")
 DTYPE = torch.float32

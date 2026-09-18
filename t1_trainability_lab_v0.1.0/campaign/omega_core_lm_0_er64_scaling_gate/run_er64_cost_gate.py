@@ -14,6 +14,7 @@ import hmac
 import json
 import math
 import os
+import platform
 import secrets
 import sys
 import subprocess
@@ -30,17 +31,19 @@ HERE = Path(__file__).resolve().parent
 CAMPAIGN_ROOT = HERE.parent
 ER64_ADAPTER_DIR = HERE
 ER32_GATE_DIR = CAMPAIGN_ROOT / "omega_core_lm_0_er32_integration_and_cost_gate"
+SCOPING_DIR = CAMPAIGN_ROOT / "omega_core_lm_0_r1_scientific_scoping_a"
 R1_SCRIPTS_DIR = CAMPAIGN_ROOT.parent / "scripts"
 FASTPATH_DIR = CAMPAIGN_ROOT / "omega_core_lm_0_r1_cpu_fastpath_validation"
 sys.path.insert(0, str(ER64_ADAPTER_DIR))
 sys.path.insert(0, str(ER32_GATE_DIR))
+sys.path.insert(0, str(SCOPING_DIR))
 sys.path.insert(0, str(FASTPATH_DIR))
 sys.path.insert(0, str(R1_SCRIPTS_DIR))
 
 from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 from omega_fast_er64 import OmegaCoreLMFastER64  # noqa: E402
 from run_omega_core_lm_0_r1_training_technical_preflight import OmegaCoreLM0R1Technical  # noqa: E402
-import run_er32_cost_gate as er32_base  # noqa: E402
+from run_scientific_scoping_a import configure_cpu_runtime  # noqa: E402
 
 
 VOCAB_SIZE = 50257
@@ -54,7 +57,7 @@ SELF_HASH_PLACEHOLDER = "__SELF_HASH__"
 CONFIGS = ("F", "ER64")
 COMBINATIONS = (("F", 1), ("F", 4), ("ER64", 1), ("ER64", 4))
 CHILD_TOKEN_ENV = "ER64_COST_GATE_CHILD_TOKEN"
-UPDATE_SNAPSHOT_PHASES = er32_base.UPDATE_SNAPSHOT_PHASES
+er32_base: Any | None = None
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -117,8 +120,14 @@ def make_candidate(config: str, rounds: int, f_reference: OmegaCoreLMFast, *, ex
 
 
 def aggregate_training_metrics(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    values = list(results)
     by_combination: dict[str, dict[str, Any]] = {}
-    for result in results:
+    incomplete = [
+        {"config": result.get("config"), "rounds": result.get("rounds"), "status": result.get("status"), "updates_completed": result.get("updates_completed", 0)}
+        for result in values
+        if result.get("status") != "completed" or int(result.get("updates_completed", 0)) != TRAINING_UPDATES
+    ]
+    for result in values:
         key = f"{result['config']}_K{result['rounds']}"
         measured = [item for item in result.get("updates", []) if item.get("phase") == "measured"]
         seconds = [float(item["timing"]["total_seconds"]) for item in measured]
@@ -126,7 +135,7 @@ def aggregate_training_metrics(results: Iterable[dict[str, Any]]) -> dict[str, A
         by_combination[key] = {"measured_updates": len(measured), "measured_total_seconds": total, "t_update_seconds": total / len(seconds) if seconds else float("inf")}
     f_total = sum(float(by_combination[f"F_K{k}"]["measured_total_seconds"]) for k in (1, 4))
     er64_total = sum(float(by_combination[f"ER64_K{k}"]["measured_total_seconds"]) for k in (1, 4))
-    return {"by_combination": by_combination, "joint_K1_K4": {"F": f_total, "ER64": er64_total}, "R_train": er64_total / f_total if f_total > 0 else float("inf"), "R_train_formula": "T_ER64_total / T_F_total"}
+    return {"by_combination": by_combination, "joint_K1_K4": {"F": f_total, "ER64": er64_total}, "R_train": float("inf") if incomplete else (er64_total / f_total if f_total > 0 else float("inf")), "R_train_formula": "T_ER64_total / T_F_total", "incomplete_results": incomplete}
 
 
 def classify_training_cost(metrics: dict[str, Any], threshold: float = GATE_THRESHOLD) -> dict[str, Any]:
@@ -165,21 +174,67 @@ def classify_inference_cost(metrics: dict[str, Any], threshold: float = GATE_THR
     return {"classification": classification, "threshold": threshold, "ratio_semantics": "ER64_time / F_time", "ratios": ratios}
 
 
+def classify_memory_safety(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    values = list(results)
+    if any(item.get("status") == "INCONCLUSIVE_RESOURCE" for item in values):
+        classification = "INCONCLUSIVE_RESOURCE"
+    elif any(item.get("status") in {"OOM", "NONFINITE"} for item in values):
+        classification = "FAIL"
+    elif sum(int(item.get("updates_completed", 0)) for item in values) != 24:
+        classification = "FAIL"
+    else:
+        classification = "PASS"
+    return {"classification": classification, "updates_completed": sum(int(item.get("updates_completed", 0)) for item in values)}
+
+
+def global_gate_status(gates: dict[str, Any]) -> str:
+    return "PASS" if all(value.get("classification") == "PASS" for value in gates.values()) else "FAIL"
+
+
+def source_hashes() -> dict[str, str]:
+    paths = {
+        "er64_runner": HERE / "run_er64_cost_gate.py",
+        "er64_adapter": HERE / "omega_fast_er64.py",
+        "er64_tests": HERE / "test_er64_cost_gate.py",
+        "er32_runner": ER32_GATE_DIR / "run_er32_cost_gate.py",
+        "step2_runner": FASTPATH_DIR / "run_step2_benchmark.py",
+        "step2_tests": FASTPATH_DIR / "test_step2_benchmark.py",
+        "technical_preflight": R1_SCRIPTS_DIR / "run_omega_core_lm_0_r1_training_technical_preflight.py",
+    }
+    return {name: sha256_file(path) for name, path in paths.items()}
+
+
+def artifact_metadata() -> dict[str, Any]:
+    base = get_er32_base()
+    metadata = base.artifact_metadata()
+    metadata["source_sha256s"] = source_hashes()
+    metadata["threads"] = {"intraop": torch.get_num_threads(), "interop": torch.get_num_interop_threads(), "configured_intraop": 4, "configured_interop": 1}
+    metadata["cpu_identity"] = platform.processor() or platform.uname().processor
+    return metadata
+
+
 def build_cost_report(training_results: Iterable[dict[str, Any]], inference_results: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    training = aggregate_training_metrics(training_results)
-    inference = aggregate_inference_metrics(inference_results)
-    return {"schema": "omega-core-lm-0-er64-cost-gate-phase1-v1", "candidate": "ER64", "benchmark_rerun": False, "training": training, "inference": inference, "gates": {"TRAINING_COST": classify_training_cost(training), "INFERENCE_COST": classify_inference_cost(inference)}, "phase1_only": True}
+    training_values = list(training_results)
+    inference_values = list(inference_results)
+    training = aggregate_training_metrics(training_values)
+    inference = aggregate_inference_metrics(inference_values)
+    gates = {"TRAINING_COST": classify_training_cost(training), "INFERENCE_COST": classify_inference_cost(inference), "MEMORY_SAFETY": classify_memory_safety(training_values)}
+    return {"schema": "omega-core-lm-0-er64-cost-gate-v2", "candidate": "ER64", "benchmark_rerun": False, "metadata": artifact_metadata(), "training": training, "inference": inference, "gates": gates, "global_status": global_gate_status(gates), "phase1_only": False}
 
 
-def configure_child_threads() -> None:
-    torch.set_num_threads(er32_base.THREADS)
-    torch.set_num_interop_threads(er32_base.INTEROP_THREADS)
-    torch.set_float32_matmul_precision("highest")
+def get_er32_base() -> Any:
+    global er32_base
+    if er32_base is None:
+        configure_cpu_runtime()
+        import run_er32_cost_gate as loaded_er32_base  # noqa: E402
+
+        er32_base = loaded_er32_base
+    return er32_base
 
 
 def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Path) -> dict[str, Any]:
     """Run one six-update ER64/F combination in a fresh child process."""
-    configure_child_threads()
+    get_er32_base()
     snapshots: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     result: dict[str, Any] = {"kind": "training", "config": config, "rounds": rounds, "updates_requested": TRAINING_UPDATES, "snapshots": snapshots, "updates": updates, "status": "failed", "updates_completed": 0}
@@ -210,9 +265,10 @@ def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Pat
             targets = source[:, 1 : 1 + er32_base.TOKENS_PER_WINDOW] if window == 0 else source[:, 1 + er32_base.TOKENS_PER_WINDOW : 1 + 2 * er32_base.TOKENS_PER_WINDOW]
             valid_mask = torch.ones((er32_base.BATCH, er32_base.TOKENS_PER_WINDOW), dtype=torch.bool)
             timings: dict[str, float] = {}
+            teacher_started = time.perf_counter()
             er32_base.capture_snapshot(snapshots, "before_teacher")
             teacher_logits = er32_base.teacher_window_logits(teacher, source, window)
-            timings["teacher_forward_seconds"] = time.perf_counter() - started
+            timings["teacher_forward_seconds"] = time.perf_counter() - teacher_started
             er32_base.capture_snapshot(snapshots, "after_teacher")
             recurrence_started = time.perf_counter()
             next_state, _, _, readout_states = candidate.recur_states(input_ids, state)
@@ -222,7 +278,9 @@ def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Pat
             losses = er32_base.chunked_original_loss(candidate, readout_states, teacher_logits, targets, valid_mask)
             timings["vocab_projection_loss_seconds"] = time.perf_counter() - loss_started
             er32_base.capture_snapshot(snapshots, "after_loss")
+            backward_started = time.perf_counter()
             losses["total"].backward()
+            timings["backward_seconds"] = time.perf_counter() - backward_started
             er32_base.capture_snapshot(snapshots, "after_backward")
             er32_base.assert_finite(candidate, losses)
             clip_started = time.perf_counter()
@@ -240,8 +298,12 @@ def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Pat
             gc.collect()
             er32_base.capture_snapshot(snapshots, "after_update_cleanup")
             timings["total_seconds"] = time.perf_counter() - started
-            record = {"kind": "training_update", "config": config, "rounds": rounds, "update": update_index, "window": window, "phase": "warmup" if update_index < er32_base.WARMUP_UPDATES else "measured", "valid_tokens": er32_base.BATCH * er32_base.TOKENS_PER_WINDOW, "document_ids": document_ids, "manifest": manifest, "pre_clip_grad_norm": pre_clip, "clip_returned_norm": returned_clip, "timing": timings, "tensor_inventory_after_first_optimizer_step": inventory, "snapshots": [item for item in snapshots if item.get("phase") in UPDATE_SNAPSHOT_PHASES][-8:]}
-            er32_base.append_ledger(ledger_path, record)
+            timings["ledger_seconds"] = 0.0
+            record = {"kind": "training_update", "config": config, "rounds": rounds, "update": update_index, "window": window, "phase": "warmup" if update_index < er32_base.WARMUP_UPDATES else "measured", "valid_tokens": er32_base.BATCH * er32_base.TOKENS_PER_WINDOW, "document_ids": document_ids, "manifest": manifest, "pre_clip_grad_norm": pre_clip, "clip_returned_norm": returned_clip, "timing": timings, "tensor_inventory_after_first_optimizer_step": inventory, "snapshots": [item for item in snapshots if item.get("phase") in er32_base.UPDATE_SNAPSHOT_PHASES][-8:]}
+            ledger_started = time.perf_counter()
+            append_seconds = er32_base.append_ledger(ledger_path, record)
+            timings["ledger_seconds"] = time.perf_counter() - ledger_started + append_seconds
+            timings["total_seconds"] = time.perf_counter() - started
             updates.append(record)
             result["updates_completed"] = len(updates)
         result["status"] = "completed"
@@ -262,7 +324,7 @@ def run_training_child(config: str, rounds: int, run_dir: Path, ledger_path: Pat
 
 
 def run_inference_child(config: str, rounds: int) -> dict[str, Any]:
-    configure_child_threads()
+    get_er32_base()
     source, _, _, tokenizer = er32_base.load_approved_source()
     del tokenizer
     seed = 20260913 if rounds == 1 else 20260914
@@ -276,6 +338,8 @@ def run_inference_child(config: str, rounds: int) -> dict[str, Any]:
         for index in range(32, 288):
             state, _, _, _ = candidate.recur_states(tokens[:, index : index + 1], state)
         mode_a_seconds = time.perf_counter() - started
+        warmup_state = candidate.initial_state(1, device=torch.device("cpu"))
+        candidate.recur_states(tokens[:, :256], warmup_state)
         mode_b_seconds: list[float] = []
         for _ in range(3):
             initial = candidate.initial_state(1, device=torch.device("cpu"))

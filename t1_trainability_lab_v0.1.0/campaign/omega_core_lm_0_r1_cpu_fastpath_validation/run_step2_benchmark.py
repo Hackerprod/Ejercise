@@ -1,8 +1,9 @@
 """Authorized OMEGA R1 Step 2 CPU fastpath benchmark.
 
-This runner is deliberately isolated from SCOPE-A. It measures four complete
-training-update routes on the eight pinned train documents, one trainer at a
-time, and stops on the first failure.
+This runner is deliberately isolated from SCOPE-A except for shared CPU
+runtime configuration. It measures four complete training-update routes on
+the eight pinned train documents, one trainer at a time, and stops on the
+first failure.
 """
 
 from __future__ import annotations
@@ -28,9 +29,13 @@ UNIT_DIR = Path(__file__).resolve().parent
 LAB_ROOT = UNIT_DIR.parents[1]
 SCRIPTS_DIR = LAB_ROOT / "scripts"
 GPU_PREP_DIR = LAB_ROOT / "campaign" / "omega_core_lm_0_gpu_environment_preparation"
+SCOPE_DIR = LAB_ROOT / "campaign" / "omega_core_lm_0_r1_scientific_scoping_a"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(UNIT_DIR))
 sys.path.insert(0, str(GPU_PREP_DIR))
+sys.path.insert(0, str(SCOPE_DIR))
+
+from run_scientific_scoping_a import configure_cpu_runtime  # noqa: E402
 
 from run_omega_core_lm_0_r1_training_technical_preflight import (  # noqa: E402
     DATASET_CONFIG,
@@ -55,11 +60,10 @@ from omega_nominal_microbatch_runner import (  # noqa: E402
 )
 
 
-# Set exactly once, before any benchmark tensor or autograd work.
-THREADS = int(os.environ.get("OMEGA_STEP2_TORCH_THREADS", "4"))
-INTEROP_THREADS = int(os.environ.get("OMEGA_STEP2_TORCH_INTEROP_THREADS", "1"))
-torch.set_num_threads(THREADS)
-torch.set_num_interop_threads(INTEROP_THREADS)
+# Configure exactly once, before any benchmark tensor or autograd work.
+configure_cpu_runtime()
+THREADS = 4
+INTEROP_THREADS = 1
 
 DEVICE = torch.device("cpu")
 DTYPE = torch.float32

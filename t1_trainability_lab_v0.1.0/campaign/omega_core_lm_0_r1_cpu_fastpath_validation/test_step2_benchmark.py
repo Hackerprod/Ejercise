@@ -24,9 +24,16 @@ def test_runner_isolated_and_has_required_contract() -> None:
     assert '"projection_calculated": False' in source
     assert '"scope_a_relaunched": False' in source
     assert '"test_split_loaded": False' in source
-    assert "torch.set_num_threads" in source
-    assert "torch.set_num_interop_threads" in source
+    assert "from run_scientific_scoping_a import configure_cpu_runtime" in source
+    assert "configure_cpu_runtime()" in source
     assert not any(isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "set_num_threads" for node in ast.walk(tree) if getattr(node, "lineno", 0) > 75)
+
+
+def test_shared_runtime_policy_is_four_intraop_one_interop() -> None:
+    import torch
+
+    assert torch.get_num_threads() == 4
+    assert torch.get_num_interop_threads() == 1
 
 
 def test_runner_does_not_import_protected_fable_or_scope_a_runner() -> None:
