@@ -65,6 +65,15 @@ Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas f
 - **Nivel de confianza**: MEDIO. La dirección conceptual es sólida (cómputo adaptativo por profundidad existe en la literatura), pero el repo específico de EfficientAI no está maduro — tratarlo como referencia/inspiración, no como código a importar.
 - **Agregado**: 2026-09-15, durante SCOPE-B.
 
+### Búsqueda autónoma tipo Dream-RSI para compresión de pesos
+- **Qué es**: paper real (2026, Google DeepMind + University of Maryland/Virginia) — un agente LLM "sueña" reusando árboles de búsqueda/descubrimiento PREVIOS como simuladores exactos, para evaluar miles de políticas alternativas offline sin re-ejecutar código real. Casos de uso propios del paper: ingeniería de algoritmos, optimización matemática, ingeniería de kernels GPU. Usa Gemini 3.1-Pro/3.7-Flash y Qwen3. Verificado real: autores identificados, código en GitHub, resultados cuantitativos (mejoras de 2.43x a 162x en sus benchmarks).
+- **La idea aplicada a OMEGA**: usarlo para buscar autónomamente representaciones de pesos más chicas que no pierdan capacidad — no limitado a la factorización rank-32 de ER32, podría explorar otras familias de compresión (otros rangos, otras estructuras) de forma masivamente paralela.
+- **Por qué NO ahora, ni en esta laptop**: Sol prohibió explícitamente correr 2 trabajos intensivos en simultáneo en la laptop de la campaña (la misma regla que separó ER32 de SCOPE-C). Un sistema de búsqueda "miles de usos en paralelo" compitiendo por CPU/RAM con las corridas reales de ER32-QUALITY-SCOPING-A metería ruido justo en el experimento que se está midiendo.
+- **Dónde SÍ podría correr sin ese conflicto**: la VPS de Contabo del usuario — ahí no compite con el cómputo real de la campaña en la laptop. Sigue siendo trabajo aparte que necesita su propio presupuesto/infraestructura (acceso a un LLM grande, el árbol de descubrimiento para replayear), no algo que se lanza al costado sin diseño.
+- **Desajuste metodológico real a resolver antes de proponerlo**: Dream-RSI está pensado para escenarios con MILES de variantes auto-generadas para replayear como historia — la historia real de OMEGA es un puñado de experimentos deliberados y controlados (F vs R, K1 vs K4, rank 32), no un árbol de descubrimiento masivo. Habría que diseñar cómo encaja esa disciplina "poca cantidad, muy verificado" de esta campaña con un método pensado para "mucha cantidad, exploración automática" — no es un encaje directo, hay que pensarlo antes de proponérselo a Sol.
+- **Cuándo perseguirla**: después de que cierre ER32-QUALITY-SCOPING-A (o cualquier otra unidad de cómputo real en curso en la laptop) — nunca en paralelo con una corrida activa.
+- **Agregado**: 2026-09-17, durante ER32-QUALITY-SCOPING-A.
+
 ---
 
 ## Descartado tras revisión — no agregar sin nueva justificación
