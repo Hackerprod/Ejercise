@@ -49,6 +49,7 @@ EOS_TOKEN_ID = 50256
 EXPECTED_GENERATIONS = 64
 CPU_INTRAOP_THREADS = 4
 CPU_INTEROP_THREADS = 1
+_CPU_RUNTIME_CONFIGURED = False
 
 
 @dataclass(frozen=True)
@@ -82,9 +83,13 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def configure_cpu() -> None:
+    global _CPU_RUNTIME_CONFIGURED
+    if _CPU_RUNTIME_CONFIGURED:
+        return
     torch.set_num_threads(CPU_INTRAOP_THREADS)
     torch.set_num_interop_threads(CPU_INTEROP_THREADS)
     torch.set_float32_matmul_precision("highest")
+    _CPU_RUNTIME_CONFIGURED = True
 
 
 def checkpoint_specs(root: Path = CAMPAIGN_ROOT) -> list[CheckpointSpec]:
@@ -282,6 +287,7 @@ def load_real_context() -> tuple[list[PromptSpec], Any]:
 
 
 def run_real(output_dir: Path) -> dict[str, Any]:
+    configure_cpu()
     prompts, tokenizer = load_real_context()
     return run_audit(checkpoint_specs(), prompts, output_dir, tokenizer)
 

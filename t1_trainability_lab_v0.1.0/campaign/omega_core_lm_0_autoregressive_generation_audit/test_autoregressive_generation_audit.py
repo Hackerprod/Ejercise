@@ -90,3 +90,11 @@ def test_audit_writes_provenance_and_separate_blind_identity(tmp_path: Path) -> 
 def test_cli_requires_explicit_real_confirmation() -> None:
     with pytest.raises(SystemExit):
         audit.main([])
+
+
+def test_real_path_configures_cpu_before_loading_context() -> None:
+    source = Path(audit.__file__).read_text(encoding="utf-8")
+    real_body = source[source.index("def run_real"):source.index("class TinyTokenizer")]
+    assert real_body.index("configure_cpu()") < real_body.index("load_real_context()")
+    audit.configure_cpu()
+    audit.configure_cpu()
