@@ -76,6 +76,17 @@ Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas f
 
 ---
 
+### Portabilidad del beneficio de caché a otro hardware (dimensionamiento fijo vs elástico)
+- **La pregunta del usuario**: si OMEGA se copia a una VPS o a otra laptop con L2/L3 distinto al Ryzen AI 5 330 de esta campaña, ¿qué pasa? ¿El núcleo se "expande" para aprovechar más caché disponible, o se reduce si no entra, o es totalmente fijo?
+- **Verificado en el código (2026-09-18)**: `d=128` y `slots=8` están hardcodeados como constantes en cada unidad de esta campaña (ER32/ER64 cost-gate, Quality-Scoping-A) — no hay ninguna detección de tamaño de caché ni ajuste automático de dimensión/slots según el hardware donde corre.
+- **Lo que SÍ es elástico ya, sin cambiar nada**: `K` (rondas/profundidad). Como los pesos se comparten/reusan K veces, subir K no crece el footprint de memoria del núcleo — solo el tiempo de cómputo por token. Eso ya es "más cómputo, mismo tamaño en caché", y es justo lo que esta campaña viene comparando (K1 vs K4).
+- **Lo que NO es elástico**: `d` y `m` (slots). Agrandarlos crece el footprint del núcleo (aprox. cuadrático con `d`) y es una decisión de arquitectura manual — nada la ajusta sola según el L2/L3 disponible en la máquina donde se despliega.
+- **Por qué importa**: es exactamente la salvedad que Sol dejó explícita al cerrar `OMEGA-READOUT-CACHE-SURVIVAL-AUDIT` (Addendum 217, MD/181.md) — el resultado (`ER32<ER64<F` en desalojo de caché) está demostrado SOLO en el Ryzen AI 5 330 probado; "tampoco hemos demostrado que el mismo porcentaje ocurra en otros CPUs." Portar OMEGA a hardware con L2 más chico podría reducir o anular ese beneficio físico (todo se desaloja igual si ni el núcleo comprimido entra); hardware con más caché dejaría margen para agrandar `d`/`m`/`K`, pero eso exigiría re-diseñar y re-validar, no pasa automático.
+- **Cuándo perseguirla**: no es urgente ahora (ER64 Quality-A es la prioridad activa). Encajaría como una repetición futura de U3 en otra microarquitectura/máquina — que la propia Sol ya sugirió como el paso natural para una afirmación más general/publicable, sin bloquear nada del trabajo actual.
+- **Agregado**: 2026-09-18, durante ER64-CORE-LM-0-QUALITY-SCOPING-A (real, en curso), a partir de una pregunta del usuario.
+
+---
+
 ## Descartado tras revisión — no agregar sin nueva justificación
 
 Revisé estos dos repos que una instancia paralela de Sol propuso y decidí NO agregarlos como ideas accionables — quedan acá documentados para no re-investigarlos de cero si vuelven a aparecer:
