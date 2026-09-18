@@ -59,6 +59,34 @@ def test_resume_cli_routes_one_combination_only(tmp_path: Path, monkeypatch: pyt
     assert json.loads(capsys.readouterr().out)["mode"] == "authorized_resume"
 
 
+def test_fresh_single_cli_routes_one_new_combination_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[tuple[Path, int, str]] = []
+
+    def fake_fresh(output_dir: Path, seed: int, variant: str) -> dict[str, object]:
+        calls.append((output_dir, seed, variant))
+        return {"mode": "authorized_fresh_single", "seed": seed, "variant": variant}
+
+    monkeypatch.setattr(runner, "run_fresh_single", fake_fresh)
+    assert runner.main([
+        "--full",
+        "--confirm-quality-scoping-a",
+        "--seed",
+        "20260914",
+        "--variant",
+        "ER32-K1",
+        "--output-dir",
+        str(tmp_path / "output"),
+    ]) == 0
+    assert calls == [(tmp_path / "output", 20260914, "ER32-K1")]
+    assert json.loads(capsys.readouterr().out)["mode"] == "authorized_fresh_single"
+
+
+def test_single_selector_requires_both_seed_and_variant(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        runner.main(["--full", "--confirm-quality-scoping-a", "--seed", "20260914"])
+    assert "requires both --seed and --variant" in capsys.readouterr().err
+
+
 def test_schedule_and_boundaries_are_frozen() -> None:
     assert runner.schedule(5) == [
         {"update": 0, "window": 0, "pair": 0},

@@ -461,6 +461,38 @@ def run_resume(output_dir: Path, checkpoint: Path, seed: int, variant: str) -> d
     return report
 
 
+def run_fresh_single(output_dir: Path, seed: int, variant: str) -> dict[str, Any]:
+    """Run one authorized seed/K combination from update zero."""
+    if seed not in SEEDS or variant not in VARIANTS:
+        raise ValueError("fresh run requires an authorized Quality-Scoping-A seed and variant")
+    baselines = load_frozen_r1_baselines()
+    train, validation, train_manifest, validation_manifest, teacher = _load_real_documents(pair_count=FULL_PAIRS)
+    result = run_single(
+        run_dir=output_dir / "runs" / f"{variant}_seed_{seed}",
+        run_id=f"{CAMPAIGN_ID}_{variant}_{seed}",
+        seed=seed,
+        variant=variant,
+        train_documents=train,
+        validation_documents=validation,
+        train_manifest=train_manifest,
+        validation_manifest=validation_manifest,
+        teacher=teacher,
+        baselines=baselines,
+        resume_checkpoint=None,
+    )
+    report = {
+        "schema": "omega-core-lm-0-er32-quality-scoping-a-fresh-run-report-v1",
+        "campaign_id": CAMPAIGN_ID,
+        "mode": "authorized_fresh_single",
+        "seed": seed,
+        "variant": variant,
+        "run": result,
+        "source_hashes": source_hashes(),
+    }
+    write_json(output_dir / f"fresh_report_{variant}_seed_{seed}.json", report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
@@ -472,8 +504,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=HERE / "results" / "quality_scoping_a")
     args = parser.parse_args(argv)
     if args.smoke:
-        if args.resume_checkpoint:
-            parser.error("--resume-checkpoint cannot be combined with --smoke")
+        if args.resume_checkpoint or args.seed is not None or args.variant is not None:
+            parser.error("resume/seed/variant selectors cannot be combined with --smoke")
         print(json.dumps(run_smoke(args.output_dir), indent=2, sort_keys=True))
         return 0
     if not (args.full and args.confirm_quality_scoping_a):
@@ -484,7 +516,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(run_resume(args.output_dir, args.resume_checkpoint, args.seed, args.variant), indent=2, sort_keys=True))
         return 0
     if args.seed is not None or args.variant is not None:
-        parser.error("--seed/--variant are only valid with --resume-checkpoint")
+        if args.seed is None or args.variant is None:
+            parser.error("fresh single run requires both --seed and --variant")
+        print(json.dumps(run_fresh_single(args.output_dir, args.seed, args.variant), indent=2, sort_keys=True))
+        return 0
     print(json.dumps(run_full(args.output_dir), indent=2, sort_keys=True))
     return 0
 
