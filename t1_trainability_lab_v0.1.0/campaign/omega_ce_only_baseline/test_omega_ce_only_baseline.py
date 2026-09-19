@@ -119,7 +119,11 @@ def test_phase0_formula_even_boundary_and_self_hash() -> None:
     report = runner.synthetic_phase0_report()
     expected_q = (8.0 + 10.0) / (3.0 + 4.0)
     assert report["q_cost"] == pytest.approx(expected_q)
-    assert report["U_equal_cost"] == 2 * int((2000 / expected_q) // 2)
+    assert report["U_equal_cost"] == 2 * int((2000 * expected_q) // 2)
+    assert report["U_equal_cost_by_K"] == {
+        "K1": {"q_cost": pytest.approx(8.0 / 3.0), "U_equal_cost": 5332},
+        "K4": {"q_cost": pytest.approx(10.0 / 4.0), "U_equal_cost": 5000},
+    }
     assert report["protocol"]["total_updates"] == 24
     assert runner.verify_self_hash(report)
     assert report["measurements"]["CE-only-K4"]["teacher_loaded"] is False
@@ -157,17 +161,17 @@ def test_phase_a_classification_and_automatic_equal_cost_plan() -> None:
         {"seed": seed, "K": k, "validation_curve": _curve(10.05 if k == 1 else 10.06)}
         for seed in runner.SEEDS for k in runner.KS
     ]
-    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost=1400)
+    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost_by_k={1: 2400, 4: 2600})
     assert report["classification_at_2000"] == "NONINFERIOR"
     assert report["equal_cost_continuation"]["required"] is False
     results[0]["validation_curve"] = _curve(10.2)
-    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost=1400)
+    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost_by_k={1: 2400, 4: 2600})
     assert report["classification_at_2000"] == "MIXED"
     assert report["equal_cost_continuation"] == {
         "required": True,
         "scheduled": True,
         "executed": False,
-        "updates": 1400,
+        "updates_by_K": {"K1": 2400, "K4": 2600},
         "reason": "automatic continuation when Phase A is not NONINFERIOR",
     }
 
@@ -178,7 +182,7 @@ def test_phase_a_delta_ce_is_informational_k1_minus_k4() -> None:
         {"seed": seed, "K": k, "validation_curve": _curve(10.1 if k == 1 else 10.0)}
         for seed in runner.SEEDS for k in runner.KS
     ]
-    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost=1000)
+    report = runner.build_phase_a_comparison(results, baselines, u_equal_cost_by_k={1: 2400, 4: 2600})
     assert report["informational_Delta_CE_K1_minus_K4"][0]["boundaries"][-1]["delta_ce_k1_minus_k4"] == pytest.approx(0.1)
 
 
@@ -188,9 +192,11 @@ def test_equal_cost_classifications_and_executable_continuation_contract() -> No
     advantage = [{"seed": seed, "K": k, "validation_curve": [{"update": 2400, "nll": 10.2}]} for seed in runner.SEEDS for k in runner.KS]
     mixed = advantage[:]
     mixed[0] = {"seed": runner.SEEDS[0], "K": 1, "validation_curve": [{"update": 2400, "nll": 10.05}]}
-    assert runner.build_equal_cost_comparison(noninferior, baselines, u_equal_cost=2400)["classification"] == "CE-ONLY-COST-NONINFERIOR"
-    assert runner.build_equal_cost_comparison(advantage, baselines, u_equal_cost=2400)["classification"] == "DISTILLATION-COST-ADVANTAGE"
-    assert runner.build_equal_cost_comparison(mixed, baselines, u_equal_cost=2400)["classification"] == "COST-MIXED"
+    budgets = {1: 2400, 4: 2600}
+    assert runner.build_equal_cost_comparison(noninferior, baselines, u_equal_cost_by_k=budgets)["by_K"]["K1"]["classification"] == "CE-ONLY-COST-NONINFERIOR"
+    assert runner.build_equal_cost_comparison(advantage, baselines, u_equal_cost_by_k=budgets)["by_K"]["K4"]["classification"] == "DISTILLATION-COST-ADVANTAGE"
+    assert runner.build_equal_cost_comparison(mixed, baselines, u_equal_cost_by_k=budgets)["by_K"]["K1"]["classification"] == "COST-MIXED"
+    assert "informational_Delta_CE_K1_minus_K4" not in runner.build_equal_cost_comparison(mixed, baselines, u_equal_cost_by_k=budgets)
     calls: list[tuple[int, int, int]] = []
     phase_a = [{"seed": seed, "K": k} for seed in runner.SEEDS for k in runner.KS]
 
@@ -198,9 +204,26 @@ def test_equal_cost_classifications_and_executable_continuation_contract() -> No
         calls.append((result["seed"], result["K"], target))
         return {**result, "validation_curve": [{"update": target, "nll": 10.0}]}
 
-    continued = runner.run_equal_cost_continuation(phase_a, u_equal_cost=2400, continuation_runner=continuation)
+    continued = runner.run_equal_cost_continuation(phase_a, u_equal_cost_by_k=budgets, continuation_runner=continuation)
     assert len(continued) == 4
-    assert calls == [(seed, k, 2400) for seed in runner.SEEDS for k in runner.KS]
+    assert calls == [(seed, k, budgets[k]) for seed in runner.SEEDS for k in runner.KS]
+
+
+def test_corrected_phase0_report_preserves_original_and_adds_per_k_budgets(tmp_path: Path) -> None:
+    original_path = runner.HERE / "results" / "phase0_report.json"
+    original_copy = tmp_path / "phase0_report.json"
+    original_copy.write_bytes(original_path.read_bytes())
+    corrected_path = tmp_path / "phase0_report_corrected.json"
+    corrected = runner.correct_phase0_report(original_copy, corrected_path)
+    assert original_copy.read_bytes() == original_path.read_bytes()
+    assert corrected["correction"]["rerun_performed"] is False
+    assert corrected["U_equal_cost"] == 5196
+    assert corrected["U_equal_cost_by_K"] == {
+        "K1": {"q_cost": pytest.approx(20.680929200025275 / 6.612592899997253), "U_equal_cost": 6254},
+        "K4": {"q_cost": pytest.approx(24.767701800039504 / 10.876460600004066), "U_equal_cost": 4554},
+    }
+    assert runner.verify_self_hash(corrected)
+    assert corrected_path.is_file()
 
 
 def test_load_r1_baseline_curves_reads_existing_list_artifacts() -> None:

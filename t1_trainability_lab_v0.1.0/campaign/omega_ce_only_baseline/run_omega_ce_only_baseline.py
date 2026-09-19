@@ -52,6 +52,8 @@ from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 CAMPAIGN_ID = "OMEGA-CE-ONLY-BASELINE"
 ADDENDUM = 220
 COMMIT_REFERENCE = "b0e2909"
+CORRECTION_ADDENDUM = 221
+CORRECTION_COMMIT_REFERENCE = "6b95e5c"
 DIMENSION = 128
 SLOTS = 8
 TOKENIZER_VOCAB = 50257
@@ -399,12 +401,19 @@ def build_phase0_report(measurements: Iterable[Mapping[str, Any]]) -> dict[str, 
     if ce_seconds <= 0 or distill_seconds <= 0:
         raise ValueError("Phase 0 total seconds must be positive")
     q_cost = distill_seconds / ce_seconds
-    u_equal_cost = 2 * math.floor((TOTAL_UPDATES / q_cost) / 2)
+    u_equal_cost = 2 * math.floor((TOTAL_UPDATES * q_cost) / 2)
+    per_k: dict[str, dict[str, float | int]] = {}
+    for k in (1, 4):
+        q_k = rows[f"DISTILL-K{k}"]["total_seconds"] / rows[f"CE-only-K{k}"]["total_seconds"]
+        per_k[f"K{k}"] = {
+            "q_cost": q_k,
+            "U_equal_cost": 2 * math.floor((TOTAL_UPDATES * q_k) / 2),
+        }
     report = {
-        "schema": "omega-ce-only-baseline-phase0-report-v1",
+        "schema": "omega-ce-only-baseline-phase0-report-v2",
         "campaign_id": CAMPAIGN_ID,
-        "addendum": ADDENDUM,
-        "commit_reference": COMMIT_REFERENCE,
+        "addendum": CORRECTION_ADDENDUM,
+        "commit_reference": CORRECTION_COMMIT_REFERENCE,
         "quality_gate": None,
         "protocol": {
             "fresh_process_per_combination": True,
@@ -417,9 +426,29 @@ def build_phase0_report(measurements: Iterable[Mapping[str, Any]]) -> dict[str, 
         "measurements": {name: rows[name] for name in PHASE0_COMBINATIONS},
         "q_cost": q_cost,
         "U_equal_cost": u_equal_cost,
-        "formula": "q_cost=(T_DISTILL_K1+T_DISTILL_K4)/(T_CE_K1+T_CE_K4); U_equal_cost=2*floor((2000/q_cost)/2)",
+        "U_equal_cost_by_K": per_k,
+        "formula": "q_cost=T_DISTILL/T_CE; U_equal_cost=2*floor((2000*q_cost)/2), pooled and independently per K",
     }
     return _self_hashed(report)
+
+
+def correct_phase0_report(source_path: Path, output_path: Path) -> dict[str, Any]:
+    """Derive corrected budgets without rerunning Phase 0 or changing source."""
+    original = json.loads(source_path.read_text(encoding="utf-8"))
+    if not verify_self_hash(original):
+        raise ValueError("original Phase 0 report self-hash verification failed")
+    corrected = build_phase0_report(original["measurements"].values())
+    corrected["correction"] = {
+        "source_report": source_path.as_posix(),
+        "source_report_self_hash": original["report_self_hash"],
+        "source_schema": original.get("schema"),
+        "source_addendum": original.get("addendum"),
+        "source_commit_reference": original.get("commit_reference"),
+        "rerun_performed": False,
+    }
+    corrected = _self_hashed(corrected)
+    write_json(output_path, corrected)
+    return corrected
 
 
 def synthetic_phase0_report() -> dict[str, Any]:
@@ -625,15 +654,18 @@ def classify_deltas(final_deltas: Iterable[float], ceiling: float = NONINFERIOR_
     return "MIXED"
 
 
-def equal_cost_plan(classification: str, u_equal_cost: int) -> dict[str, Any]:
+def equal_cost_plan(classification: str, u_equal_cost_by_k: Mapping[int | str, int]) -> dict[str, Any]:
     if classification not in {"NONINFERIOR", "INFERIOR", "MIXED"}:
         raise ValueError(classification)
+    budgets = {f"K{k}": int(u_equal_cost_by_k[k] if k in u_equal_cost_by_k else u_equal_cost_by_k[f"K{k}"]) for k in KS}
+    if any(value < TOTAL_UPDATES for value in budgets.values()):
+        raise ValueError("per-K equal-cost budget is before checkpoint_2000")
     required = classification != "NONINFERIOR"
     return {
         "required": required,
         "scheduled": required,
         "executed": False,
-        "updates": int(u_equal_cost) if required else None,
+        "updates_by_K": budgets if required else None,
         "reason": "automatic continuation when Phase A is not NONINFERIOR" if required else "not required",
     }
 
@@ -653,10 +685,10 @@ def build_equal_cost_comparison(
     ce_cost_results: Iterable[Mapping[str, Any]],
     baseline_curves: Mapping[tuple[int, int], Iterable[Mapping[str, Any]]],
     *,
-    u_equal_cost: int,
+    u_equal_cost_by_k: Mapping[int | str, int],
     ceiling: float = NONINFERIOR_CEILING,
 ) -> dict[str, Any]:
-    rows: list[dict[str, Any]] = []
+    rows_by_k: dict[str, list[dict[str, Any]]] = {"K1": [], "K4": []}
     for result in ce_cost_results:
         seed = int(result["seed"])
         k = int(result["K"])
@@ -668,7 +700,7 @@ def build_equal_cost_comparison(
         distill_nll = baseline.get(TOTAL_UPDATES)
         if distill_nll is None:
             raise ValueError("R1 baseline missing update 2000")
-        rows.append({
+        rows_by_k[f"K{k}"].append({
             "seed": seed,
             "K": k,
             "update": final_update,
@@ -676,35 +708,50 @@ def build_equal_cost_comparison(
             "distill_nll_at_2000": distill_nll,
             "delta_ce_minus_distill_at_equal_cost": curve[final_update] - distill_nll,
         })
-    deltas = [row["delta_ce_minus_distill_at_equal_cost"] for row in rows]
+    by_k: dict[str, dict[str, Any]] = {}
+    for k_name, rows in rows_by_k.items():
+        if len(rows) != len(SEEDS):
+            raise ValueError(f"equal-cost comparison requires both seeds for {k_name}")
+        by_k[k_name] = {
+            "target_update": int(u_equal_cost_by_k[k_name] if k_name in u_equal_cost_by_k else u_equal_cost_by_k[int(k_name[1:])]),
+            "combinations": rows,
+            "classification": classify_equal_cost_deltas(
+                [row["delta_ce_minus_distill_at_equal_cost"] for row in rows], ceiling
+            ),
+        }
     return {
-        "target_update": int(u_equal_cost),
+        "comparison_scope": "per_K",
+        "target_updates_by_K": {key: value["target_update"] for key, value in by_k.items()},
         "ce_noninferior_ceiling": ceiling,
-        "combinations": rows,
-        "classification": classify_equal_cost_deltas(deltas, ceiling),
+        "by_K": by_k,
     }
 
 
 def run_equal_cost_continuation(
     phase_a_results: Iterable[Mapping[str, Any]],
     *,
-    u_equal_cost: int,
+    u_equal_cost_by_k: Mapping[int | str, int],
     continuation_runner: Callable[[Mapping[str, Any], int], Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
-    """Continue all four CE paths with unchanged configuration after Phase A."""
-    if u_equal_cost < TOTAL_UPDATES:
-        raise ValueError("U_equal_cost is before checkpoint_2000; no continuation is executable")
+    """Continue each CE path to its own K-specific equal-cost budget."""
     results = list(phase_a_results)
     if len(results) != 4:
         raise ValueError("equal-cost continuation requires four Phase A CE results")
-    return [continuation_runner(result, u_equal_cost) for result in results]
+    continued: list[Mapping[str, Any]] = []
+    for result in results:
+        k = int(result["K"])
+        target = int(u_equal_cost_by_k[k] if k in u_equal_cost_by_k else u_equal_cost_by_k[f"K{k}"])
+        if target < TOTAL_UPDATES:
+            raise ValueError(f"U_eq_K{k} is before checkpoint_2000; no continuation is executable")
+        continued.append(continuation_runner(result, target))
+    return continued
 
 
 def build_phase_a_comparison(
     ce_results: Iterable[Mapping[str, Any]],
     baseline_curves: Mapping[tuple[int, int], Iterable[Mapping[str, Any]]],
     *,
-    u_equal_cost: int,
+    u_equal_cost_by_k: Mapping[int | str, int],
     ceiling: float = NONINFERIOR_CEILING,
 ) -> dict[str, Any]:
     combinations: list[dict[str, Any]] = []
@@ -735,7 +782,7 @@ def build_phase_a_comparison(
         "ce_noninferior_ceiling": ceiling,
         "combinations": combinations,
         "informational_Delta_CE_K1_minus_K4": delta_ce_k1_minus_k4,
-        "equal_cost_continuation": equal_cost_plan(classification, u_equal_cost),
+        "equal_cost_continuation": equal_cost_plan(classification, u_equal_cost_by_k),
     }
 
 
@@ -1215,6 +1262,13 @@ def run_phase_a_real(output_dir: Path, *, confirm_real_execution: bool, phase0_r
     phase0_report = json.loads(phase0_report_path.read_text(encoding="utf-8"))
     if not verify_self_hash(phase0_report):
         raise ValueError("Phase 0 report self-hash verification failed")
+    raw_budgets = phase0_report.get("U_equal_cost_by_K")
+    if not isinstance(raw_budgets, Mapping):
+        raise ValueError("Phase 0 report lacks corrected per-K equal-cost budgets")
+    u_equal_cost_by_k = {
+        k: int(raw_budgets[k] if k in raw_budgets else raw_budgets[f"K{k}"])
+        for k in KS
+    }
     manifests = load_frozen_manifests()
     gate = initialization_gate()
     loaded_manifests, train_documents, validation_documents, secondary_documents = load_real_frozen_documents()
@@ -1236,11 +1290,10 @@ def run_phase_a_real(output_dir: Path, *, confirm_real_execution: bool, phase0_r
                     validation_manifest=manifests["validation"],
                 )
             )
-    comparison = build_phase_a_comparison(results, baselines, u_equal_cost=int(phase0_report["U_equal_cost"]))
+    comparison = build_phase_a_comparison(results, baselines, u_equal_cost_by_k=u_equal_cost_by_k)
     comparison["equal_cost_continuation"]["u_equal_cost_source"] = phase0_report_path.as_posix()
     if comparison["classification_at_2000"] != "NONINFERIOR":
-        target = int(phase0_report["U_equal_cost"])
-        if target >= TOTAL_UPDATES:
+        if all(target >= TOTAL_UPDATES for target in u_equal_cost_by_k.values()):
             def continue_one(result: Mapping[str, Any], update_target: int) -> Mapping[str, Any]:
                 seed = int(result["seed"])
                 k = int(result["K"])
@@ -1257,13 +1310,25 @@ def run_phase_a_real(output_dir: Path, *, confirm_real_execution: bool, phase0_r
                     resume_checkpoint=Path(result["run_dir"]) / "checkpoint_02000.pt",
                 )
 
-            cost_results = run_equal_cost_continuation(results, u_equal_cost=target, continuation_runner=continue_one)
+            cost_results = run_equal_cost_continuation(
+                results,
+                u_equal_cost_by_k=u_equal_cost_by_k,
+                continuation_runner=continue_one,
+            )
             comparison["equal_cost_continuation"]["executed"] = True
-            comparison["equal_cost_result"] = build_equal_cost_comparison(cost_results, baselines, u_equal_cost=target)
+            comparison["equal_cost_result"] = build_equal_cost_comparison(
+                cost_results,
+                baselines,
+                u_equal_cost_by_k=u_equal_cost_by_k,
+            )
         else:
             comparison["equal_cost_continuation"]["executed"] = False
-            comparison["equal_cost_continuation"]["reason"] = "U_equal_cost is before checkpoint_2000; existing CE@2000 is already beyond target"
-            comparison["equal_cost_result"] = build_equal_cost_comparison(results, baselines, u_equal_cost=target)
+            comparison["equal_cost_continuation"]["reason"] = "one or more per-K budgets are before checkpoint_2000"
+            comparison["equal_cost_result"] = build_equal_cost_comparison(
+                results,
+                baselines,
+                u_equal_cost_by_k=u_equal_cost_by_k,
+            )
     report = {
         "schema": "omega-ce-only-baseline-phase-a-report-v1",
         "campaign_id": CAMPAIGN_ID,
@@ -1310,9 +1375,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-real-execution", action="store_true")
     parser.add_argument("--phase0-measurements", type=Path)
     parser.add_argument("--phase0-report", type=Path)
+    parser.add_argument("--correct-phase0-report", type=Path)
+    parser.add_argument("--corrected-output", type=Path)
     parser.add_argument("--ce-root", type=Path)
     parser.add_argument("--output-dir", type=Path, default=HERE / "results")
     args = parser.parse_args(argv)
+    if args.correct_phase0_report is not None:
+        output = args.corrected_output or args.correct_phase0_report.with_name(
+            f"{args.correct_phase0_report.stem}_corrected.json"
+        )
+        report = correct_phase0_report(args.correct_phase0_report, output)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if args.phase0_worker:
         if args.combination is None:
             parser.error("--phase0-worker requires --combination")
