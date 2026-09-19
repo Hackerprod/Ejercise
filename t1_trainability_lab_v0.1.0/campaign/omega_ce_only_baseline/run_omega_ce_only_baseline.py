@@ -451,6 +451,20 @@ def correct_phase0_report(source_path: Path, output_path: Path) -> dict[str, Any
     return corrected
 
 
+def phase0_equal_cost_budgets(phase0_report: Mapping[str, Any]) -> dict[int, int]:
+    """Extract nested per-K U_equal_cost values from corrected Phase 0 report."""
+    raw_budgets = phase0_report.get("U_equal_cost_by_K")
+    if not isinstance(raw_budgets, Mapping):
+        raise ValueError("Phase 0 report lacks corrected per-K equal-cost budgets")
+    budgets: dict[int, int] = {}
+    for k in KS:
+        entry = raw_budgets[k] if k in raw_budgets else raw_budgets.get(f"K{k}")
+        if not isinstance(entry, Mapping) or "U_equal_cost" not in entry:
+            raise ValueError(f"Phase 0 report lacks nested U_equal_cost for K{k}")
+        budgets[k] = int(entry["U_equal_cost"])
+    return budgets
+
+
 def synthetic_phase0_report() -> dict[str, Any]:
     values = {
         "DISTILL-K1": 8.0,
@@ -1262,13 +1276,7 @@ def run_phase_a_real(output_dir: Path, *, confirm_real_execution: bool, phase0_r
     phase0_report = json.loads(phase0_report_path.read_text(encoding="utf-8"))
     if not verify_self_hash(phase0_report):
         raise ValueError("Phase 0 report self-hash verification failed")
-    raw_budgets = phase0_report.get("U_equal_cost_by_K")
-    if not isinstance(raw_budgets, Mapping):
-        raise ValueError("Phase 0 report lacks corrected per-K equal-cost budgets")
-    u_equal_cost_by_k = {
-        k: int(raw_budgets[k] if k in raw_budgets else raw_budgets[f"K{k}"])
-        for k in KS
-    }
+    u_equal_cost_by_k = phase0_equal_cost_budgets(phase0_report)
     manifests = load_frozen_manifests()
     gate = initialization_gate()
     loaded_manifests, train_documents, validation_documents, secondary_documents = load_real_frozen_documents()

@@ -226,6 +226,12 @@ def test_corrected_phase0_report_preserves_original_and_adds_per_k_budgets(tmp_p
     assert corrected_path.is_file()
 
 
+def test_phase_a_parses_nested_per_k_budgets_from_real_corrected_report() -> None:
+    report_path = runner.HERE / "results" / "phase0_report_corrected.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert runner.phase0_equal_cost_budgets(report) == {1: 6254, 4: 4554}
+
+
 def test_load_r1_baseline_curves_reads_existing_list_artifacts() -> None:
     curves = runner.load_r1_baseline_curves()
     assert set(curves) == {(seed, k) for seed in runner.SEEDS for k in runner.KS}
