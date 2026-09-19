@@ -142,6 +142,32 @@ Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas f
 
 ---
 
+### Mantener el bloque de pesos residente en caché durante iteración repetida — verificación de una fuente externa + 2 candidatos prioritarios
+- **Origen**: texto de una IA externa (sin verificar) propuso varios mecanismos/proyectos concretos para el gap del ángulo 4 de la búsqueda anterior ("nadie ataca directo mantener un bloque chico de pesos caliente en caché mientras un loop externo mueve datos transitorios"). Se verificó cada afirmación por separado (subagente Sonnet, 2026-09-18) antes de aceptar nada — la fuente acertó en los conceptos generales pero infló/tergiversó varias citas específicas.
+
+- **PRIORITARIOS — proponer a Sol junto con el resto del paquete de optimización**:
+  - **`baidu-research/persistent-rnn`** (Diamos et al. 2016, *"Persistent RNNs: Stashing Recurrent Weights On-Chip"*, http://proceedings.mlr.press/v48/diamos16.pdf) — **REAL, verificado, código open-source real**. Mantiene los pesos de la capa recurrente en el register file de la GPU, reusados a través de múltiples timesteps, evitando releerlos de memoria en cada paso — 15-30x de speedup medido en batch chico. Es el precedente MÁS directo y sólido de todo lo investigado: mismo problema exacto que OMEGA (pesos recurrentes reusados paso a paso, batch chico), aunque implementado para GPU/register-file — la lógica es transferible conceptualmente a "mantener el bloque de K rondas anclado en L1/L2 de CPU" en vez de en registros de GPU.
+  - **`arXiv 2606.25353`** — *"Cache-Resident LLM Inference in GB-Scale Last-Level Caches"* — **REAL** (confirmado título/tema; extracción de PDF fue parcial, no se verificaron cifras cuantitativas exactas, leer el paper directo antes de citar números). Propone mantener los pesos del modelo permanentemente residentes en la LLC de CPU, particionando en bloques cache-resident y gestionando el tráfico de activaciones/KV-cache para que NO desaloje ese working set — es casi exactamente la hipótesis física que U3 ya midió que funciona para OMEGA (aunque el paper apunta a LLMs de escala mayor en CPUs de servidor con LLC de gigabytes, no a un núcleo de pocos MB). Es la referencia académica más alineada con lo que OMEGA está tratando de demostrar.
+
+- **Real y relevante, contexto de apoyo (no prioritario, pero verificado)**:
+  - **`genesis-kernel`** (14★, https://github.com/Anuar81/genesis-kernel) — real: kernels AVX-512 fusionados de dequant NF4+matmul para CPU, generados por evolución genética de instrucciones, drop-in en llama.cpp, verificado bit-exacto contra ggml. Usa `PREFETCHNTA` (no `_mm_stream_si128` como decía la fuente original — instrucción distinta, mismo espíritu de evitar contaminación de caché con datos de un solo uso).
+  - **Intel CAT (Cache Allocation Technology) + `resctrl`** — real, documentado, en producción (Red Hat, `intel/intel-cmt-cat`, papers como vCAT); hay evidencia real de uso para aislar inferencia ML de baja latencia en L2/L3.
+  - **ARM way-locking / Cache Lockdown** (Cortex-R, L2C-310, registros CP15) — 100% real y documentado por ARM, mecanismo de hardware para anclar líneas/ways específicos en caché. Sin proyecto público específico de "pesos de red neuronal", pero el mecanismo aplica tal cual se describe.
+  - **`vLLM`/`Megatron-LM`, kernels persistentes para MoE** — real y verificable en código actual (grid fijo de CTAs, tile-looping, PR activo `vllm-project/vllm#57010`, trabajo relacionado "MonoMoE").
+  - **`mivertowski/DotCompute`** (23★, activo, `[RingKernel]`) — real, pero el mecanismo real es actor/cola de mensajes, no "pesos anclados en shared memory" — la analogía con Persistent RNN es floja, no confundir los dos.
+  - **OpenBLAS/BLIS** — precedente clásico ya establecido (no ligado a IA): micro-kernels dimensionados para caber en registros/L1, con packing de bloques para maximizar reuso — la misma física, versión madura y genérica.
+
+- **Citas de la fuente externa que NO se sostuvieron tal cual, quedan documentadas para no re-investigar si vuelven a aparecer**:
+  - "Intel Edge Microvisor Toolkit automatiza CAT para pesos ML" — el toolkit existe y RDT es un componente listado, pero no hay evidencia de automatización específica para ML.
+  - Paper "Proximu$" descrito como "sobre degradación de Ops/Byte por desalojo L1→L3" — el paper es real (arXiv 2011.11695) pero es sobre cómputo cerca-de-caché en general, ese framing específico no es su foco central.
+  - "+15-20% throughput" atribuido al Intel VTune Profiler Performance Analysis Cookbook — el documento existe, esos números NO están en él. No usar esa cifra.
+  - Cita puntual de blogs de Modular sobre "desalojo de L2 por relanzamientos frecuentes" — los blogs de Modular sobre Blackwell/kernels persistentes existen, esa frase específica no se encontró como tal.
+
+- **Cuándo perseguirla**: mismo bloque de optimización que las 2 entradas anteriores, apenas cierre `ER64-QUALITY-SCOPING-A`. De los 3 bloques de investigación acumulados hoy, `persistent-rnn` y `arXiv 2606.25353` son los candidatos más fuertes para llevarle a Sol como punto de partida concreto del ángulo "núcleo caliente en caché", en vez de partir de cero.
+- **Agregado**: 2026-09-18, verificación de una fuente externa a pedido del usuario (regla aplicada: no descartar nada por ser raro/desconocido/pocas estrellas — la verificación se hizo solo sobre si cada afirmación es real, nunca sobre popularidad).
+
+---
+
 ## Descartado tras revisión — no agregar sin nueva justificación
 
 Revisé estos dos repos que una instancia paralela de Sol propuso y decidí NO agregarlos como ideas accionables — quedan acá documentados para no re-investigarlos de cero si vuelven a aparecer:
