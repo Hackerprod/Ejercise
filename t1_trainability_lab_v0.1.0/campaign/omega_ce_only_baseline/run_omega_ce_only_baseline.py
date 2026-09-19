@@ -45,6 +45,7 @@ if str(R1_DIR) not in sys.path:
 if str(PREP_DIR) not in sys.path:
     sys.path.insert(0, str(PREP_DIR))
 
+import run_scientific_scoping_a as r1  # noqa: E402
 from omega_fast_candidate import OmegaCoreLMFast  # noqa: E402
 
 
@@ -90,9 +91,6 @@ class RealExecutionAuthorizationError(RuntimeError):
     """Raised when a real entry path lacks its explicit authorization flag."""
 
 
-_CPU_RUNTIME_CONFIGURED = False
-
-
 def canonical_bytes(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -105,17 +103,8 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def configure_cpu_runtime() -> None:
-    global _CPU_RUNTIME_CONFIGURED
-    if _CPU_RUNTIME_CONFIGURED:
-        return
-    torch.set_num_threads(CPU_INTRAOP_THREADS)
-    torch.set_num_interop_threads(CPU_INTEROP_THREADS)
-    _CPU_RUNTIME_CONFIGURED = True
-
-
 def validate_policy() -> dict[str, Any]:
-    configure_cpu_runtime()
+    r1.configure_cpu_runtime()
     policy = {
         "device": "cpu",
         "dtype": "float32",
@@ -173,7 +162,7 @@ def fresh_model(
 ) -> OmegaCoreLMFast:
     if k not in KS:
         raise ValueError(f"unsupported K: {k}")
-    configure_cpu_runtime()
+    r1.configure_cpu_runtime()
     set_seed(seed)
     # R1@0 was initialized by reference construction followed by F conversion;
     # direct F construction consumes a different random stream for fused QKV.
@@ -493,13 +482,10 @@ def _phase0_worker(combination: str, *, smoke: bool) -> dict[str, Any]:
     distill = combination.startswith("DISTILL-")
     k = int(combination.rsplit("K", 1)[1])
     seed = SEEDS[0] if k == 1 else SEEDS[1]
-    configure_cpu_runtime()
+    r1.configure_cpu_runtime()
     set_seed(seed)
     teacher: torch.nn.Module | None = None
     if distill:
-        # Deliberately keep R1 teacher path inside distillation worker branch.
-        import run_scientific_scoping_a as r1
-
         if smoke:
             documents = r1.synthetic_documents(PHYSICAL_BATCH, 17)
             teacher = r1.TinyTeacher(17)
@@ -529,8 +515,6 @@ def _phase0_worker(combination: str, *, smoke: bool) -> dict[str, Any]:
         optimizer.zero_grad(set_to_none=True)
         total_started = time.perf_counter()
         if distill:
-            import run_scientific_scoping_a as r1
-
             forward_started = time.perf_counter()
             result = model.forward_window(inputs, state)
             forward_seconds = time.perf_counter() - forward_started

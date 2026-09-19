@@ -60,26 +60,27 @@ def test_ce_forward_uses_recur_states_not_forward_window() -> None:
     assert torch.isfinite(losses["total"])
 
 
-def test_phase0_worker_behavior_separates_ce_and_distillation(monkeypatch: pytest.MonkeyPatch) -> None:
-    imported: list[str] = []
-    real_import = __import__
-
-    def tracking_import(name: str, *args: object, **kwargs: object):
-        imported.append(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.__import__", tracking_import)
+def test_phase0_worker_behavior_separates_ce_and_distillation() -> None:
     ce_row = runner._phase0_worker("CE-only-K1", smoke=True)
-    assert "run_scientific_scoping_a" not in imported
     assert ce_row["teacher_imported"] is False
     assert ce_row["teacher_forward_calls"] == 0
     assert ce_row["kl_calculations"] == 0
 
     distill_row = runner._phase0_worker("DISTILL-K1", smoke=True)
-    assert "run_scientific_scoping_a" in imported
     assert distill_row["teacher_imported"] is True
     assert distill_row["teacher_forward_calls"] == runner.PHASE0_MEASURED_UPDATES
     assert distill_row["kl_calculations"] == runner.PHASE0_MEASURED_UPDATES
+
+
+def test_cpu_runtime_uses_shared_r1_authority_and_is_idempotent() -> None:
+    assert runner.r1.CPU_INTRAOP_THREADS == runner.CPU_INTRAOP_THREADS == 4
+    assert runner.r1.CPU_INTEROP_THREADS == runner.CPU_INTEROP_THREADS == 1
+    assert not hasattr(runner, "_CPU_RUNTIME_CONFIGURED")
+    assert not hasattr(runner, "configure_cpu_runtime")
+    runner.r1.configure_cpu_runtime()
+    runner.validate_policy()
+    runner.r1.configure_cpu_runtime()
+    assert torch.get_num_threads() == runner.CPU_INTRAOP_THREADS
 
 
 def test_ce_measurement_contract_has_no_teacher_or_kl_work() -> None:
