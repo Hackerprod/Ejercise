@@ -69,19 +69,24 @@ Precedente independiente que refuerza que el teacher probablemente sí importa a
 ### La pregunta exacta
 ¿Es la destilación (CE+KL contra DistilGPT2) necesaria para que R1 aprenda lenguaje coherente a esta escala (602 documentos, corpus revisitado ~13× por corrida), o CE puro contra el corpus (como cualquier LLM normal) da resultados comparables?
 
-### Diseño propuesto (borrador, falta que Sol lo autorice/ajuste)
-Unidad nueva, aislada: `OMEGA-CE-ONLY-BASELINE` (o el nombre que Sol prefiera).
-- **Solo R1** (NO ER32/ER64 — no mezclar la pregunta "¿hace falta el teacher?" con "¿hace falta rank32/64?").
-- Mismo corpus (602 docs), mismas seeds (20260913/20260914), mismo optimizer/boundaries/protocolo que R1 ya usa.
-- `L = CE` puro. Sin KL, sin cargar el teacher en absoluto.
-- Comparar contra R1-con-teacher ya congelado: (a) NLL en el validation primario de 8 documentos en los mismos boundaries (0/500/1000/1500/2000); (b) generación autoregresiva con el protocolo YA congelado del audit anterior (mismos 8 prompts, greedy, 64 tokens nuevos) — comparar distinct-1/distinct-2 contra R1-con-teacher.
-- Además, comparar un Transformer chico entrenado igual (sin teacher, mismo corpus) como segundo control — ya lo habíamos hablado como idea complementaria (generation-audit).
+### Diseño AUTORIZADO por Sol (Addendum 220, MD/185.md, commit `b0e2909`) — ya no es borrador
+Unidad `OMEGA-CE-ONLY-BASELINE`, aislada, solo R1 (no ER32/ER64). Único cambio científico: `L=0.5CE+0.5T²KL → L=CE completo` (no 0.5·CE — receta convencional completa, no gradiente reducido). Todo lo demás idéntico a R1 (D=128, S=8, K1/K4, seeds, AdamW, CPU FP32 4/1, B=8, T=256, chunk=512).
+
+**Corrección clave de Sol al borrador original**: no alcanza comparar calidad a igual número de updates — hay que comparar también a igual COSTO de entrenamiento, porque CE-only más barato podría correr más updates por el mismo presupuesto de tiempo. Por eso el diseño real tiene 2 fases + rama automática:
+
+- **Gate de correctness previo**: cada modelo CE-only debe ser bit-idéntico al checkpoint R1 en `update=0` (torch.equal + hash), oráculo de inicialización únicamente.
+- **Fase 0 (cost probe, 24 updates descartables)**: DISTILL-K1/K4 + CE-only-K1/K4, 6 updates cada uno (2 warmup+4 measured), mismo protocolo del cost-gate. Calcula `q_cost` real (no asumir 42.3%) y predeclara `U_equal_cost = 2·⌊(2000/q_cost)/2⌋` ANTES de ver calidad.
+- **Fase A (8000 updates reales, 4 combinaciones)**: `δ^CE_K,i(2000)≤0.10` → `CE-ONLY-NONINFERIOR-A`/`INFERIOR-A`/`MIXED-A`.
+- **Rama automática equal-cost**: si Fase A no da NONINFERIOR, continúa automáticamente hasta `U_equal_cost` sin tocar hiperparámetros → `CE-ONLY-COST-NONINFERIOR`/`DISTILLATION-COST-ADVANTAGE`/`COST-MIXED`.
+- **Generation audit** (documentario, sin gate): 32 generaciones, mismo protocolo congelado, comparadas contra las históricas del commit `ca8f4ad` (R1 con teacher).
+
+Detalle completo del contrato en Addendum 220 de `T1.5_Spec_MIX_O.md` — no reinventar, ya está especificado exacto.
 
 ### Qué demostraría cada resultado
-- Si CE-only da calidad comparable (NLL similar, generación no más degenerada) → elimina el 42.3% del costo PERMANENTEMENTE para todo lo que sigue (ER32/ER64/lo que venga). Sería el hallazgo más grande de toda la campaña.
-- Si da mucho peor → confirma que el teacher es necesario, cierra la pregunta con evidencia real en vez de asumirlo, y valida que seguir pagando el 42.3% está justificado.
+- CE-only pierde incluso a igual costo → "evidencia fuerte de que el teacher está económicamente justificado en esta receta" (Sol) — pero no prueba que TODO OMEGA necesite DistilGPT2 inevitablemente (no se probó LR tuning, scheduled sampling, más datos).
+- CE-only alcanza calidad a updates o costo iguales → razón fuerte para sacar el teacher del camino futuro. Sería el hallazgo más grande de la campaña.
 
-### Estado: NO diseñado formalmente por Sol todavía, NO implementado, NO autorizado para ejecución real. Es lo primero a proponerle cuando se retome el trabajo con ella.
+### Estado (2026-09-19): AUTORIZADO por Sol. Contrato enviado a opencode para implementar Fase 0 + Fase A (código+tests, sin ejecución real todavía). Pendiente: reporte de opencode, revisión del judge, autorización de ejecución real de Fase 0 primero.
 
 ---
 
