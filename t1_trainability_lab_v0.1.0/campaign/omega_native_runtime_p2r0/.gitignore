@@ -1,3 +1,4 @@
 __pycache__/
 *.stdout.log
 *.stderr.log
+native/build/
