@@ -43,6 +43,15 @@ bool append_floats(size_t count, size_t* offset) {
   return true;
 }
 
+bool append_uint64s(size_t count, size_t* offset) {
+  size_t aligned = 0;
+  size_t bytes = 0;
+  if (!align_size(*offset, &aligned) || !checked_mul(count, sizeof(std::uint64_t), &bytes) || !checked_add(aligned, bytes, offset)) {
+    return false;
+  }
+  return true;
+}
+
 size_t element_count(const OmegaRecurrentConfig& config) {
   size_t result = 0;
   size_t value = 0;
@@ -63,6 +72,31 @@ bool training_counts(const OmegaRecurrentConfig& config, size_t state_count, siz
     return false;
   }
   return true;
+}
+
+bool depth_reduction_layout(const OmegaRecurrentConfig& config, size_t* output_count, size_t* levels, size_t* partial_count) {
+  size_t contributions = 0;
+  size_t four_dimension = 0;
+  if (!checked_mul(4, config.dimension, &four_dimension) || !checked_mul(config.batch, config.sequence_length, &contributions) ||
+      !checked_mul(contributions, config.slots, &contributions) || !checked_mul(contributions, four_dimension, &contributions) ||
+      !checked_mul(config.rounds, config.dimension, output_count)) {
+    return false;
+  }
+  if (contributions == 0) {
+    return false;
+  }
+  constexpr size_t mask_bits = std::numeric_limits<std::uint64_t>::digits;
+  size_t capacity = 1;
+  size_t computed_levels = 1;
+  while (capacity < contributions) {
+    if (computed_levels >= mask_bits || capacity > std::numeric_limits<size_t>::max() / 2) {
+      return false;
+    }
+    capacity *= 2;
+    ++computed_levels;
+  }
+  *levels = computed_levels;
+  return checked_mul(*output_count, *levels, partial_count);
 }
 
 bool append_training_storage(const OmegaRecurrentConfig& config, size_t state_count, size_t* offset) {
@@ -116,6 +150,14 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
   if (config.training != 0 && !append_training_storage(config, state_count, &total)) {
     return 0;
   }
+  size_t output_count = 0;
+  size_t levels = 0;
+  size_t partial_count = 0;
+  if (!depth_reduction_layout(config, &output_count, &levels, &partial_count) ||
+      !append_floats(partial_count, &total) || !append_floats(partial_count, &total) ||
+      !append_uint64s(output_count, &total) || !append_uint64s(output_count, &total)) {
+    return 0;
+  }
   return total;
 }
 
@@ -138,6 +180,24 @@ struct WorkspaceCursor {
     }
     used += padding;
     float* result = reinterpret_cast<float*>(base + used);
+    used += bytes;
+    return result;
+  }
+
+  std::uint64_t* take_uint64(size_t count) {
+    size_t bytes = 0;
+    if (!checked_mul(count, sizeof(std::uint64_t), &bytes) || used > capacity) {
+      return nullptr;
+    }
+    const uintptr_t address = reinterpret_cast<uintptr_t>(base) + used;
+    const size_t remainder = static_cast<size_t>(address % kAlignment);
+    const size_t padding = remainder == 0 ? 0 : kAlignment - remainder;
+    size_t required = 0;
+    if (!checked_add(padding, bytes, &required) || required > capacity - used) {
+      return nullptr;
+    }
+    used += padding;
+    std::uint64_t* result = reinterpret_cast<std::uint64_t*>(base + used);
     used += bytes;
     return result;
   }
@@ -246,10 +306,87 @@ void clear_optional_contribution_sums(const OmegaRecurrentConfig& config, const 
   if (grads.sum_abs_d_block_norm_weight != nullptr) std::memset(grads.sum_abs_d_block_norm_weight, 0, dimension * sizeof(float));
   if (grads.sum_abs_d_depth_embedding != nullptr) std::memset(grads.sum_abs_d_depth_embedding, 0, config.rounds * dimension * sizeof(float));
   if (grads.sum_abs_d_gate_logits != nullptr) std::memset(grads.sum_abs_d_gate_logits, 0, config.rounds * dimension * sizeof(float));
+  if (grads.fp64_d_depth_embedding != nullptr) std::memset(grads.fp64_d_depth_embedding, 0, config.rounds * dimension * sizeof(double));
+  if (grads.depth_max_level != nullptr) std::memset(grads.depth_max_level, 0, config.rounds * dimension * sizeof(size_t));
+  if (grads.count_d_token_part != nullptr) std::memset(grads.count_d_token_part, 0, config.batch * config.sequence_length * state_dimension * sizeof(size_t));
+  if (grads.count_d_previous_state != nullptr) std::memset(grads.count_d_previous_state, 0, state_count * sizeof(size_t));
+  if (grads.count_d_state_part_weight != nullptr) std::memset(grads.count_d_state_part_weight, 0, matrix_count * sizeof(size_t));
+  if (grads.count_d_prelude_norm_weight != nullptr) std::memset(grads.count_d_prelude_norm_weight, 0, state_dimension * sizeof(size_t));
+  if (grads.count_d_block_qkv_weight != nullptr) std::memset(grads.count_d_block_qkv_weight, 0, qkv_count * sizeof(size_t));
+  if (grads.count_d_block_qkv_bias != nullptr) std::memset(grads.count_d_block_qkv_bias, 0, qkv_bias_count * sizeof(size_t));
+  if (grads.count_d_block_out_weight != nullptr) std::memset(grads.count_d_block_out_weight, 0, dimension * dimension * sizeof(size_t));
+  if (grads.count_d_block_out_bias != nullptr) std::memset(grads.count_d_block_out_bias, 0, dimension * sizeof(size_t));
+  if (grads.count_d_block_fc1_weight != nullptr) std::memset(grads.count_d_block_fc1_weight, 0, fc1_count * sizeof(size_t));
+  if (grads.count_d_block_fc1_bias != nullptr) std::memset(grads.count_d_block_fc1_bias, 0, 4 * dimension * sizeof(size_t));
+  if (grads.count_d_block_fc2_weight != nullptr) std::memset(grads.count_d_block_fc2_weight, 0, fc2_count * sizeof(size_t));
+  if (grads.count_d_block_fc2_bias != nullptr) std::memset(grads.count_d_block_fc2_bias, 0, dimension * sizeof(size_t));
+  if (grads.count_d_block_norm_weight != nullptr) std::memset(grads.count_d_block_norm_weight, 0, dimension * sizeof(size_t));
+  if (grads.count_d_depth_embedding != nullptr) std::memset(grads.count_d_depth_embedding, 0, config.rounds * dimension * sizeof(size_t));
+  if (grads.count_d_gate_logits != nullptr) std::memset(grads.count_d_gate_logits, 0, config.rounds * dimension * sizeof(size_t));
 }
 
-void add_abs_contribution(float* sums, size_t index, float contribution) {
+void add_abs_contribution(float* sums, size_t* counts, size_t index, float contribution) {
   if (sums != nullptr) sums[index] += std::fabs(contribution);
+  if (counts != nullptr) ++counts[index];
+}
+
+bool carry_add(float* partials, std::uint64_t* masks, size_t output_index, size_t levels, float value) {
+  size_t base = 0;
+  if (!checked_mul(output_index, levels, &base)) {
+    return false;
+  }
+  std::uint64_t mask = masks[output_index];
+  for (size_t level = 0; level < levels; ++level) {
+    const std::uint64_t bit = std::uint64_t{1} << level;
+    if ((mask & bit) == 0) {
+      partials[base + level] = value;
+      masks[output_index] = mask | bit;
+      return true;
+    }
+    value = partials[base + level] + value;
+    mask &= ~bit;
+  }
+  return false;
+}
+
+bool carry_flush(float* partials, std::uint64_t* masks, size_t output_index, size_t levels, float* output) {
+  size_t base = 0;
+  if (!checked_mul(output_index, levels, &base)) {
+    return false;
+  }
+  const std::uint64_t mask = masks[output_index];
+  bool initialized = false;
+  float total = 0.0F;
+  for (size_t level = 0; level < levels; ++level) {
+    const std::uint64_t bit = std::uint64_t{1} << level;
+    if ((mask & bit) != 0) {
+      total = initialized ? total + partials[base + level] : partials[base + level];
+      initialized = true;
+    }
+  }
+  if (!initialized) {
+    return false;
+  }
+  *output = total;
+  return true;
+}
+
+bool add_depth_contribution(const OmegaRecurrentGrads& grads, float* gradient_partials, std::uint64_t* gradient_masks,
+    float* abs_partials, std::uint64_t* abs_masks, size_t output_index, size_t levels, float contribution) {
+  if (!carry_add(gradient_partials, gradient_masks, output_index, levels, contribution)) {
+    return false;
+  }
+  if (grads.sum_abs_d_depth_embedding != nullptr &&
+      !carry_add(abs_partials, abs_masks, output_index, levels, std::fabs(contribution))) {
+    return false;
+  }
+  if (grads.count_d_depth_embedding != nullptr) {
+    ++grads.count_d_depth_embedding[output_index];
+  }
+  if (grads.fp64_d_depth_embedding != nullptr) {
+    grads.fp64_d_depth_embedding[output_index] += static_cast<double>(contribution);
+  }
+  return true;
 }
 
 }  // namespace
@@ -500,9 +637,13 @@ extern "C" int omega_recurrent_backward(
   size_t slot_scores = 0;
   size_t fc1_count = 0;
   size_t depth_bias_count = 0;
+  size_t depth_output_count = 0;
+  size_t depth_levels = 0;
+  size_t depth_partial_count = 0;
   if (!checked_mul(config->batch, slots, &slot_scores) || !checked_mul(slot_scores, slots, &slot_scores) ||
       !checked_mul(state_count, 4, &fc1_count) || !checked_mul(config->rounds, dimension, &depth_bias_count) ||
-      !checked_mul(depth_bias_count, 4, &depth_bias_count)) {
+      !checked_mul(depth_bias_count, 4, &depth_bias_count) ||
+      !depth_reduction_layout(*config, &depth_output_count, &depth_levels, &depth_partial_count)) {
     return 12;
   }
 
@@ -525,6 +666,17 @@ extern "C" int omega_recurrent_backward(
   if (!bind_training_storage(*config, state_count, &cursor, &training_buffers)) {
     return 14;
   }
+  float* depth_gradient_partials = cursor.take(depth_partial_count);
+  float* depth_abs_partials = cursor.take(depth_partial_count);
+  std::uint64_t* depth_gradient_masks = cursor.take_uint64(depth_output_count);
+  std::uint64_t* depth_abs_masks = cursor.take_uint64(depth_output_count);
+  if (depth_gradient_partials == nullptr || depth_abs_partials == nullptr || depth_gradient_masks == nullptr || depth_abs_masks == nullptr) {
+    return 15;
+  }
+  std::memset(depth_gradient_partials, 0, depth_partial_count * sizeof(float));
+  std::memset(depth_abs_partials, 0, depth_partial_count * sizeof(float));
+  std::memset(depth_gradient_masks, 0, depth_output_count * sizeof(std::uint64_t));
+  std::memset(depth_abs_masks, 0, depth_output_count * sizeof(std::uint64_t));
 
   std::memset(grads->d_token_part, 0, config->batch * config->sequence_length * state_dimension * sizeof(float));
   std::memset(grads->d_previous_state, 0, state_count * sizeof(float));
@@ -595,8 +747,8 @@ extern "C" int omega_recurrent_backward(
             const float gate_contribution = d_pre * transformed * gate * (1.0F - gate);
             grads->d_block_norm_weight[d] += block_norm_contribution;
             grads->d_gate_logits[round * dimension + d] += gate_contribution;
-            add_abs_contribution(grads->sum_abs_d_block_norm_weight, d, block_norm_contribution);
-            add_abs_contribution(grads->sum_abs_d_gate_logits, round * dimension + d, gate_contribution);
+            add_abs_contribution(grads->sum_abs_d_block_norm_weight, grads->count_d_block_norm_weight, d, block_norm_contribution);
+            add_abs_contribution(grads->sum_abs_d_gate_logits, grads->count_d_gate_logits, round * dimension + d, gate_contribution);
           }
 
           for (size_t d = 0; d < dimension; ++d) {
@@ -604,10 +756,10 @@ extern "C" int omega_recurrent_backward(
               const float hidden = gelu(saved_fc1_pre[(batch * slots + slot) * 4 * dimension + row]);
               const float contribution = update[base + d] * hidden;
               grads->d_block_fc2_weight[d * 4 * dimension + row] += contribution;
-              add_abs_contribution(grads->sum_abs_d_block_fc2_weight, d * 4 * dimension + row, contribution);
+              add_abs_contribution(grads->sum_abs_d_block_fc2_weight, grads->count_d_block_fc2_weight, d * 4 * dimension + row, contribution);
             }
             grads->d_block_fc2_bias[d] += update[base + d];
-            add_abs_contribution(grads->sum_abs_d_block_fc2_bias, d, update[base + d]);
+            add_abs_contribution(grads->sum_abs_d_block_fc2_bias, grads->count_d_block_fc2_bias, d, update[base + d]);
           }
           for (size_t d = 0; d < dimension; ++d) {
             mixed[base + d] = 0.0F;
@@ -620,20 +772,23 @@ extern "C" int omega_recurrent_backward(
             const size_t fc_index = (batch * slots + slot) * 4 * dimension + row;
             fc1[fc_index] = d_hidden * gelu_derivative(saved_fc1_pre[fc_index]);
             grads->d_block_fc1_bias[row] += fc1[fc_index];
-            add_abs_contribution(grads->sum_abs_d_block_fc1_bias, row, fc1[fc_index]);
+            add_abs_contribution(grads->sum_abs_d_block_fc1_bias, grads->count_d_block_fc1_bias, row, fc1[fc_index]);
             for (size_t input = 0; input < dimension; ++input) {
               const float fc1_weight_contribution = fc1[fc_index] * (saved_out[base + input] + params->depth_embedding[round * dimension + input]);
               const float depth_contribution = params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
               grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
-              add_abs_contribution(grads->sum_abs_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
-              grads->d_depth_embedding[round * dimension + input] += depth_contribution;
-              add_abs_contribution(grads->sum_abs_d_depth_embedding, round * dimension + input, depth_contribution);
+              add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
+              const size_t depth_index = round * dimension + input;
+              if (!add_depth_contribution(*grads, depth_gradient_partials, depth_gradient_masks, depth_abs_partials, depth_abs_masks,
+                      depth_index, depth_levels, depth_contribution)) {
+                return 15;
+              }
               mixed[base + input] += params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
             }
           }
           for (size_t d = 0; d < dimension; ++d) {
             grads->d_block_out_bias[d] += mixed[base + d];
-            add_abs_contribution(grads->sum_abs_d_block_out_bias, d, mixed[base + d]);
+              add_abs_contribution(grads->sum_abs_d_block_out_bias, grads->count_d_block_out_bias, d, mixed[base + d]);
           }
           for (size_t input = 0; input < dimension; ++input) {
             float d_attention = 0.0F;
@@ -641,7 +796,7 @@ extern "C" int omega_recurrent_backward(
               d_attention += params->block_out_weight[d * dimension + input] * mixed[base + d];
               const float out_weight_contribution = mixed[base + d] * saved_attention[base + input];
               grads->d_block_out_weight[d * dimension + input] += out_weight_contribution;
-              add_abs_contribution(grads->sum_abs_d_block_out_weight, d * dimension + input, out_weight_contribution);
+              add_abs_contribution(grads->sum_abs_d_block_out_weight, grads->count_d_block_out_weight, d * dimension + input, out_weight_contribution);
             }
             q[base + input] = d_attention;
           }
@@ -694,9 +849,9 @@ extern "C" int omega_recurrent_backward(
                 grads->d_block_qkv_weight[output * dimension + input] += q_weight_contribution;
                 grads->d_block_qkv_weight[(dimension + output) * dimension + input] += key_weight_contribution;
                 grads->d_block_qkv_weight[(2 * dimension + output) * dimension + input] += value_weight_contribution;
-                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, output * dimension + input, q_weight_contribution);
-                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, (dimension + output) * dimension + input, key_weight_contribution);
-                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, (2 * dimension + output) * dimension + input, value_weight_contribution);
+                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, grads->count_d_block_qkv_weight, output * dimension + input, q_weight_contribution);
+                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, grads->count_d_block_qkv_weight, (dimension + output) * dimension + input, key_weight_contribution);
+                add_abs_contribution(grads->sum_abs_d_block_qkv_weight, grads->count_d_block_qkv_weight, (2 * dimension + output) * dimension + input, value_weight_contribution);
               }
               candidate[base + input] = d_z + update[base + input] / sigmoid(params->gate_logits[round * dimension + input]);
               anchor[base + input] += d_z;
@@ -705,9 +860,9 @@ extern "C" int omega_recurrent_backward(
               grads->d_block_qkv_bias[output] += q[base + output];
               grads->d_block_qkv_bias[dimension + output] += key[base + output];
               grads->d_block_qkv_bias[2 * dimension + output] += value[base + output];
-              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, output, q[base + output]);
-              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, dimension + output, key[base + output]);
-              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, 2 * dimension + output, value[base + output]);
+              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, grads->count_d_block_qkv_bias, output, q[base + output]);
+              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, grads->count_d_block_qkv_bias, dimension + output, key[base + output]);
+              add_abs_contribution(grads->sum_abs_d_block_qkv_bias, grads->count_d_block_qkv_bias, 2 * dimension + output, value[base + output]);
             }
           }
         }
@@ -762,9 +917,9 @@ extern "C" int omega_recurrent_backward(
         const float d_pre = anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * inverse_rms - pre * inverse_rms_cubed_over_dimension * norm_dot;
         const float prelude_norm_contribution = anchor[batch * state_dimension + flattened] * pre * inverse_rms;
         grads->d_prelude_norm_weight[flattened] += prelude_norm_contribution;
-        add_abs_contribution(grads->sum_abs_d_prelude_norm_weight, flattened, prelude_norm_contribution);
+        add_abs_contribution(grads->sum_abs_d_prelude_norm_weight, grads->count_d_prelude_norm_weight, flattened, prelude_norm_contribution);
         grads->d_token_part[(batch * config->sequence_length + position) * state_dimension + flattened] += d_pre;
-        add_abs_contribution(grads->sum_abs_d_token_part, (batch * config->sequence_length + position) * state_dimension + flattened, d_pre);
+        add_abs_contribution(grads->sum_abs_d_token_part, grads->count_d_token_part, (batch * config->sequence_length + position) * state_dimension + flattened, d_pre);
         state[batch * state_dimension + flattened] = d_pre;
         for (size_t input = 0; input < dimension; ++input) {
           float mean = 0.0F;
@@ -774,7 +929,7 @@ extern "C" int omega_recurrent_backward(
           mean /= static_cast<float>(slots);
           const float state_part_contribution = d_pre * mean;
           grads->d_state_part_weight[flattened * dimension + input] += state_part_contribution;
-          add_abs_contribution(grads->sum_abs_d_state_part_weight, flattened * dimension + input, state_part_contribution);
+          add_abs_contribution(grads->sum_abs_d_state_part_weight, grads->count_d_state_part_weight, flattened * dimension + input, state_part_contribution);
         }
       }
       for (size_t input = 0; input < dimension; ++input) {
@@ -791,9 +946,28 @@ extern "C" int omega_recurrent_backward(
       }
     }
   }
-  if (grads->sum_abs_d_previous_state != nullptr) {
+  for (size_t depth_index = 0; depth_index < depth_output_count; ++depth_index) {
+    if (grads->depth_max_level != nullptr) {
+      const std::uint64_t mask = depth_gradient_masks[depth_index];
+      for (size_t level = depth_levels; level-- > 0;) {
+        if ((mask & (std::uint64_t{1} << level)) != 0) {
+          grads->depth_max_level[depth_index] = level;
+          break;
+        }
+      }
+    }
+    if (!carry_flush(depth_gradient_partials, depth_gradient_masks, depth_index, depth_levels, &grads->d_depth_embedding[depth_index])) {
+      return 15;
+    }
+    if (grads->sum_abs_d_depth_embedding != nullptr &&
+        !carry_flush(depth_abs_partials, depth_abs_masks, depth_index, depth_levels, &grads->sum_abs_d_depth_embedding[depth_index])) {
+      return 15;
+    }
+  }
+  if (grads->sum_abs_d_previous_state != nullptr || grads->count_d_previous_state != nullptr) {
     for (size_t index = 0; index < state_count; ++index) {
-      grads->sum_abs_d_previous_state[index] = std::fabs(state[index]);
+      if (grads->sum_abs_d_previous_state != nullptr) grads->sum_abs_d_previous_state[index] = std::fabs(state[index]);
+      if (grads->count_d_previous_state != nullptr) grads->count_d_previous_state[index] = 1;
     }
   }
   std::memcpy(grads->d_previous_state, state, state_count * sizeof(float));

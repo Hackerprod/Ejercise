@@ -3,6 +3,12 @@
 
 #include <stddef.h>
 
+#if defined(_WIN32) && defined(OMEGA_RECURRENT_BUILD_SHARED)
+#define OMEGA_RECURRENT_API __declspec(dllexport)
+#else
+#define OMEGA_RECURRENT_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,13 +70,33 @@ typedef struct OmegaRecurrentGrads {
   float* sum_abs_d_block_norm_weight;
   float* sum_abs_d_depth_embedding;
   float* sum_abs_d_gate_logits;
+  /* Optional exact counts of accumulated contributions per element. */
+  size_t* count_d_token_part;
+  size_t* count_d_previous_state;
+  size_t* count_d_state_part_weight;
+  size_t* count_d_prelude_norm_weight;
+  size_t* count_d_block_qkv_weight;
+  size_t* count_d_block_qkv_bias;
+  size_t* count_d_block_out_weight;
+  size_t* count_d_block_out_bias;
+  size_t* count_d_block_fc1_weight;
+  size_t* count_d_block_fc1_bias;
+  size_t* count_d_block_fc2_weight;
+  size_t* count_d_block_fc2_bias;
+  size_t* count_d_block_norm_weight;
+  size_t* count_d_depth_embedding;
+  size_t* count_d_gate_logits;
+  /* Optional diagnostic-only FP64 flat accumulation for depth embedding. */
+  double* fp64_d_depth_embedding;
+  /* Optional diagnostic-only maximum occupied carry level per depth element. */
+  size_t* depth_max_level;
 } OmegaRecurrentGrads;
 
 /* Returns zero for invalid dimensions or size overflow. */
-size_t omega_recurrent_workspace_bytes(OmegaRecurrentConfig config);
+OMEGA_RECURRENT_API size_t omega_recurrent_workspace_bytes(OmegaRecurrentConfig config);
 
 /* Returns 0 on success; nonzero on invalid arguments or insufficient workspace. */
-int omega_recurrent_forward(
+OMEGA_RECURRENT_API int omega_recurrent_forward(
     const OmegaRecurrentConfig* config,
     const OmegaRecurrentParams* params,
     const float* token_part,
@@ -81,7 +107,7 @@ int omega_recurrent_forward(
     size_t workspace_bytes);
 
 /* Computes full-BPTT gradients from a prior forward with config.training=1. */
-int omega_recurrent_backward(
+OMEGA_RECURRENT_API int omega_recurrent_backward(
     const OmegaRecurrentConfig* config,
     const OmegaRecurrentParams* params,
     const float* token_part,
