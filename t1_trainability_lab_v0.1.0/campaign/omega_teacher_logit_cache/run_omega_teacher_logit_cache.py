@@ -857,6 +857,7 @@ def _benchmark_child(route: str, cache_manifest_path: Path) -> dict[str, Any]:
 
 def run_benchmark_subprocesses(*, output_root: Path, cache_manifest: Path, confirm_real_execution: bool) -> dict[str, Any]:
     require_real_authorization(confirm_real_execution, "benchmark")
+    cache_manifest = cache_manifest.resolve()
     routes = benchmark_protocol()["routes"]
     rows: list[dict[str, Any]] = []
     commands: list[list[str]] = []
