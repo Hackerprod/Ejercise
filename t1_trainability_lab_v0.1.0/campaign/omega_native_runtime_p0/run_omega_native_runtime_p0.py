@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -54,6 +55,7 @@ STAGE_NAMES = (
     "ce_kl_forward",
     "student_vocab_projection",
     "backward_total",
+    "backward_loss_logits",
     "backward_vocab_readout",
     "backward_recurrent",
     "backward_embedding_prelude",
@@ -191,13 +193,23 @@ def _backward_timed(loss: Tensor, boundaries: Mapping[str, Tensor]) -> dict[str,
     vocab_hook, readout_hook, prelude_hook = (events[key] for key in ordered)
     if not (vocab_hook <= readout_hook <= prelude_hook <= ended):
         return {"method": "unsegmented", "status": "boundary_hook_order_invalid", "backward_total": total}
+    segments = {
+        "backward_loss_logits": vocab_hook - started,
+        "backward_vocab_readout": readout_hook - vocab_hook,
+        "backward_recurrent": prelude_hook - readout_hook,
+        "backward_embedding_prelude": ended - prelude_hook,
+    }
+    reconstructed = sum(segments.values())
+    if not math.isclose(total, reconstructed, rel_tol=1e-9, abs_tol=1e-9):
+        raise ProfileContractError(
+            "single-backward boundary timing does not conserve elapsed time: "
+            f"total={total}, reconstructed={reconstructed}"
+        )
     return {
         "method": "boundary_hooks_single_backward",
         "status": "segmented",
         "backward_total": total,
-        "backward_vocab_readout": readout_hook - vocab_hook,
-        "backward_recurrent": prelude_hook - readout_hook,
-        "backward_embedding_prelude": ended - prelude_hook,
+        **segments,
     }
 
 
@@ -276,6 +288,40 @@ def _aggregate(records: Sequence[Mapping[str, Any]], warmup_updates: int) -> dic
     }
 
 
+def derive_backward_gap_report(report_path: Path) -> dict[str, Any]:
+    """Add loss-to-logits backward bucket to an existing profile report.
+
+    This does not execute a model or touch the cache.  It derives the missing
+    bucket from timestamps already represented by the existing three segments
+    and the backward envelope in the self-hashed report.
+    """
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not hidden.verify_self_hash(report):
+        raise ProfileContractError("cannot derive backward bucket from invalid report self-hash")
+    for combination in report["combinations"].values():
+        records = combination["records"]
+        for record in records:
+            timings = record["timings"]
+            if timings.get("backward_status") != "segmented":
+                continue
+            total = float(timings["backward_total"])
+            vocab_readout = float(timings["backward_vocab_readout"])
+            recurrent = float(timings["backward_recurrent"])
+            embedding = float(timings["backward_embedding_prelude"])
+            loss_logits = total - vocab_readout - recurrent - embedding
+            reconstructed = loss_logits + vocab_readout + recurrent + embedding
+            if loss_logits < -1e-9 or not math.isclose(total, reconstructed, rel_tol=1e-9, abs_tol=1e-9):
+                raise ProfileContractError("derived backward loss/logits bucket violates conservation invariant")
+            timings["backward_loss_logits"] = loss_logits
+        combination["profile"] = _aggregate(records, int(combination["profile"]["warmup_updates"]))
+    report["backward_derivation"] = {
+        "status": "DERIVED_FROM_EXISTING_REPORT",
+        "formula": "backward_total - backward_vocab_readout - backward_recurrent - backward_embedding_prelude",
+        "real_profile_rerun": False,
+    }
+    return hidden.write_self_hashed(report_path, report)
+
+
 def run_profile(
     *,
     manifest_path: Path,
@@ -331,16 +377,20 @@ def run_profile(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile", action="store_true")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--profile", action="store_true")
+    mode.add_argument("--derive-backward-gap", action="store_true")
     parser.add_argument("--manifest", type=Path, default=SEALED_MANIFEST)
     parser.add_argument("--cache-file", type=Path, default=DEFAULT_CACHE_FILE)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--report", type=Path, default=DEFAULT_OUTPUT_ROOT / "profile_report.json")
     parser.add_argument("--total-updates", type=int, default=DEFAULT_TOTAL_UPDATES)
     parser.add_argument("--warmup-updates", type=int, default=DEFAULT_WARMUP_UPDATES)
     parser.add_argument("--confirm-real-execution", action="store_true")
     args = parser.parse_args(argv)
-    if not args.profile:
-        parser.error("select --profile")
+    if args.derive_backward_gap:
+        print(json.dumps(derive_backward_gap_report(args.report), indent=2, sort_keys=True))
+        return 0
     report = run_profile(manifest_path=args.manifest, cache_file=args.cache_file, output_root=args.output_root, confirm_real_execution=args.confirm_real_execution, total_updates=args.total_updates, warmup_updates=args.warmup_updates)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

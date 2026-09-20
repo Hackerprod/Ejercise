@@ -1,4 +1,9 @@
 {
+  "backward_derivation": {
+    "formula": "backward_total - backward_vocab_readout - backward_recurrent - backward_embedding_prelude",
+    "real_profile_rerun": false,
+    "status": "DERIVED_FROM_EXISTING_REPORT"
+  },
   "cache_load_seconds": 0.8503804000210948,
   "campaign_id": "OMEGA-NATIVE-RUNTIME-P0",
   "combinations": {
@@ -14,6 +19,7 @@
         "mean_seconds": {
           "adamw": 0.0186059874977218,
           "backward_embedding_prelude": 0.015144375003728783,
+          "backward_loss_logits": 0.28252311249889317,
           "backward_recurrent": 0.7410454249984468,
           "backward_total": 1.4277122500061523,
           "backward_vocab_readout": 0.38899933750508353,
@@ -31,6 +37,7 @@
         "percent_of_total": {
           "adamw": 0.6147559005460203,
           "backward_embedding_prelude": 0.5003816053710611,
+          "backward_loss_logits": 9.334777338240617,
           "backward_recurrent": 24.48470137079312,
           "backward_total": 47.17269266576611,
           "backward_vocab_readout": 12.852832351361316,
@@ -58,6 +65,7 @@
           "timings": {
             "adamw": 0.030395800014957786,
             "backward_embedding_prelude": 0.017945599975064397,
+            "backward_loss_logits": 0.34199589997297153,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.812636399990879,
             "backward_status": "segmented",
@@ -87,6 +95,7 @@
           "timings": {
             "adamw": 0.01799690001644194,
             "backward_embedding_prelude": 0.01595219998853281,
+            "backward_loss_logits": 0.2820300000021234,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7286890000104904,
             "backward_status": "segmented",
@@ -116,6 +125,7 @@
           "timings": {
             "adamw": 0.017912100011017174,
             "backward_embedding_prelude": 0.014541599957738072,
+            "backward_loss_logits": 0.27860969997709617,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7104503000155091,
             "backward_status": "segmented",
@@ -145,6 +155,7 @@
           "timings": {
             "adamw": 0.01875410001957789,
             "backward_embedding_prelude": 0.01268099999288097,
+            "backward_loss_logits": 0.281849900027737,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7258461000164971,
             "backward_status": "segmented",
@@ -174,6 +185,7 @@
           "timings": {
             "adamw": 0.019874999998137355,
             "backward_embedding_prelude": 0.01555540005210787,
+            "backward_loss_logits": 0.2800881000002846,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.729490999947302,
             "backward_status": "segmented",
@@ -203,6 +215,7 @@
           "timings": {
             "adamw": 0.018482399987988174,
             "backward_embedding_prelude": 0.01556590001564473,
+            "backward_loss_logits": 0.2830623000045307,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7278530999901704,
             "backward_status": "segmented",
@@ -232,6 +245,7 @@
           "timings": {
             "adamw": 0.01818960002856329,
             "backward_embedding_prelude": 0.016665700008161366,
+            "backward_loss_logits": 0.2842627000063658,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7133522999938577,
             "backward_status": "segmented",
@@ -261,6 +275,7 @@
           "timings": {
             "adamw": 0.018603500036988407,
             "backward_embedding_prelude": 0.01363540004240349,
+            "backward_loss_logits": 0.2835501999943517,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7173339999862947,
             "backward_status": "segmented",
@@ -290,6 +305,7 @@
           "timings": {
             "adamw": 0.017999199975747615,
             "backward_embedding_prelude": 0.015954799950122833,
+            "backward_loss_logits": 0.2789998999796808,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7287551000481471,
             "backward_status": "segmented",
@@ -319,6 +335,7 @@
           "timings": {
             "adamw": 0.018968699965626,
             "backward_embedding_prelude": 0.013554200006183237,
+            "backward_loss_logits": 0.2820268999785185,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7431941000395454,
             "backward_status": "segmented",
@@ -348,6 +365,7 @@
           "timings": {
             "adamw": 0.018763899977784604,
             "backward_embedding_prelude": 0.014645799994468689,
+            "backward_loss_logits": 0.2833867000299506,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7873720999923535,
             "backward_status": "segmented",
@@ -377,6 +395,7 @@
           "timings": {
             "adamw": 0.017906200024299324,
             "backward_embedding_prelude": 0.015067700005602092,
+            "backward_loss_logits": 0.2782510999822989,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7288578000152484,
             "backward_status": "segmented",
@@ -406,6 +425,7 @@
           "timings": {
             "adamw": 0.01908900000853464,
             "backward_embedding_prelude": 0.01449299999512732,
+            "backward_loss_logits": 0.2799321000347845,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7588345999829471,
             "backward_status": "segmented",
@@ -435,6 +455,7 @@
           "timings": {
             "adamw": 0.018855300033465028,
             "backward_embedding_prelude": 0.01502639998216182,
+            "backward_loss_logits": 0.2847903000074439,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7524225000524893,
             "backward_status": "segmented",
@@ -464,6 +485,7 @@
           "timings": {
             "adamw": 0.01845789997605607,
             "backward_embedding_prelude": 0.014140999992378056,
+            "backward_loss_logits": 0.28304240002762526,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.739803500007838,
             "backward_status": "segmented",
@@ -493,6 +515,7 @@
           "timings": {
             "adamw": 0.01729330001398921,
             "backward_embedding_prelude": 0.01320099999429658,
+            "backward_loss_logits": 0.2818661999772303,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7398250999976881,
             "backward_status": "segmented",
@@ -522,6 +545,7 @@
           "timings": {
             "adamw": 0.019486400007735938,
             "backward_embedding_prelude": 0.017558999999891967,
+            "backward_loss_logits": 0.2811704999767244,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7591394999762997,
             "backward_status": "segmented",
@@ -551,6 +575,7 @@
           "timings": {
             "adamw": 0.018395799968857318,
             "backward_embedding_prelude": 0.015320300008170307,
+            "backward_loss_logits": 0.2824932000366971,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7573874999652617,
             "backward_status": "segmented",
@@ -580,6 +605,7 @@
           "timings": {
             "adamw": 0.018566699989605695,
             "backward_embedding_prelude": 0.016126299975439906,
+            "backward_loss_logits": 0.28919689997565,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7263070000335574,
             "backward_status": "segmented",
@@ -609,6 +635,7 @@
           "timings": {
             "adamw": 0.01876289997017011,
             "backward_embedding_prelude": 0.015798100037500262,
+            "backward_loss_logits": 0.2842502999701537,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 0.7467975999461487,
             "backward_status": "segmented",
@@ -641,6 +668,7 @@
         "mean_seconds": {
           "adamw": 0.0187332249879546,
           "backward_embedding_prelude": 0.017892693755129585,
+          "backward_loss_logits": 0.29513139999107807,
           "backward_recurrent": 1.3929524499981198,
           "backward_total": 2.0916785562476434,
           "backward_vocab_readout": 0.3857020125033159,
@@ -658,6 +686,7 @@
         "percent_of_total": {
           "adamw": 0.46306368552169513,
           "backward_embedding_prelude": 0.44228672422868165,
+          "backward_loss_logits": 7.295307341951057,
           "backward_recurrent": 34.43217575550144,
           "backward_total": 51.70387809923417,
           "backward_vocab_readout": 9.534108277552987,
@@ -685,6 +714,7 @@
           "timings": {
             "adamw": 0.024986299977172166,
             "backward_embedding_prelude": 0.016733700002077967,
+            "backward_loss_logits": 0.29442330001620576,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3640706000151113,
             "backward_status": "segmented",
@@ -714,6 +744,7 @@
           "timings": {
             "adamw": 0.01853780000237748,
             "backward_embedding_prelude": 0.016377899970393628,
+            "backward_loss_logits": 0.3058958000037819,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.4432012000470422,
             "backward_status": "segmented",
@@ -743,6 +774,7 @@
           "timings": {
             "adamw": 0.01854970003478229,
             "backward_embedding_prelude": 0.021166699996683747,
+            "backward_loss_logits": 0.29125250002834946,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3488574999500997,
             "backward_status": "segmented",
@@ -772,6 +804,7 @@
           "timings": {
             "adamw": 0.018306299985852093,
             "backward_embedding_prelude": 0.01451069995528087,
+            "backward_loss_logits": 0.2912307999795303,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.4053843000438064,
             "backward_status": "segmented",
@@ -801,6 +834,7 @@
           "timings": {
             "adamw": 0.018795299984049052,
             "backward_embedding_prelude": 0.019431799999438226,
+            "backward_loss_logits": 0.2946317999740131,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3861383000039496,
             "backward_status": "segmented",
@@ -830,6 +864,7 @@
           "timings": {
             "adamw": 0.017674500006251037,
             "backward_embedding_prelude": 0.02079300000332296,
+            "backward_loss_logits": 0.29307889996562153,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3629577999818139,
             "backward_status": "segmented",
@@ -859,6 +894,7 @@
           "timings": {
             "adamw": 0.01889060001121834,
             "backward_embedding_prelude": 0.017813100013881922,
+            "backward_loss_logits": 0.2926701999967918,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3814746999996714,
             "backward_status": "segmented",
@@ -888,6 +924,7 @@
           "timings": {
             "adamw": 0.01886059995740652,
             "backward_embedding_prelude": 0.019172900007106364,
+            "backward_loss_logits": 0.2920643999823369,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3689466000068933,
             "backward_status": "segmented",
@@ -917,6 +954,7 @@
           "timings": {
             "adamw": 0.018631399958394468,
             "backward_embedding_prelude": 0.01747710001654923,
+            "backward_loss_logits": 0.2919586999923922,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3826242000213824,
             "backward_status": "segmented",
@@ -946,6 +984,7 @@
           "timings": {
             "adamw": 0.018936100008431822,
             "backward_embedding_prelude": 0.01776000001700595,
+            "backward_loss_logits": 0.29671830002916977,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.4268137000035495,
             "backward_status": "segmented",
@@ -975,6 +1014,7 @@
           "timings": {
             "adamw": 0.01781309995567426,
             "backward_embedding_prelude": 0.0165864999871701,
+            "backward_loss_logits": 0.30653780000284314,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.378416699997615,
             "backward_status": "segmented",
@@ -1004,6 +1044,7 @@
           "timings": {
             "adamw": 0.018068599980324507,
             "backward_embedding_prelude": 0.01802529999986291,
+            "backward_loss_logits": 0.29250030004186556,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.4066317999968305,
             "backward_status": "segmented",
@@ -1033,6 +1074,7 @@
           "timings": {
             "adamw": 0.018761999963317066,
             "backward_embedding_prelude": 0.01862069999333471,
+            "backward_loss_logits": 0.30165309994481504,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3855431000120007,
             "backward_status": "segmented",
@@ -1062,6 +1104,7 @@
           "timings": {
             "adamw": 0.017677599971648306,
             "backward_embedding_prelude": 0.02001929999096319,
+            "backward_loss_logits": 0.29194450000068173,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3941701999865472,
             "backward_status": "segmented",
@@ -1091,6 +1134,7 @@
           "timings": {
             "adamw": 0.019934500043746084,
             "backward_embedding_prelude": 0.015299599966965616,
+            "backward_loss_logits": 0.3007498999941163,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.405352900037542,
             "backward_status": "segmented",
@@ -1120,6 +1164,7 @@
           "timings": {
             "adamw": 0.020254099974408746,
             "backward_embedding_prelude": 0.015264300047419965,
+            "backward_loss_logits": 0.29511040000943467,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.3854287999565713,
             "backward_status": "segmented",
@@ -1149,6 +1194,7 @@
           "timings": {
             "adamw": 0.019338999991305172,
             "backward_embedding_prelude": 0.019448100007139146,
+            "backward_loss_logits": 0.29649189999327064,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.4307026999886148,
             "backward_status": "segmented",
@@ -1178,6 +1224,7 @@
           "timings": {
             "adamw": 0.019175500026904047,
             "backward_embedding_prelude": 0.01840599998831749,
+            "backward_loss_logits": 0.3004932999610901,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.415095400006976,
             "backward_status": "segmented",
@@ -1207,6 +1254,7 @@
           "timings": {
             "adamw": 0.01939269999274984,
             "backward_embedding_prelude": 0.016583100019488484,
+            "backward_loss_logits": 0.28722699999343604,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.393212399969343,
             "backward_status": "segmented",
@@ -1236,6 +1284,7 @@
           "timings": {
             "adamw": 0.01752599998144433,
             "backward_embedding_prelude": 0.015582300024107099,
+            "backward_loss_logits": 0.2882718999753706,
             "backward_method": "boundary_hooks_single_backward",
             "backward_recurrent": 1.383729900000617,
             "backward_status": "segmented",
@@ -1279,7 +1328,7 @@
     "teacher_transformer_forward_calls": 0,
     "teacher_transformer_loaded": false
   },
-  "report_self_hash": "87201e215d603ad6292a82523603de9335cd3bb1ed588550490f2d361a138ada",
+  "report_self_hash": "fc98a0a6d05b090c29264cb915259ccdaeb3597be49fec0be19db2ab208da2fa",
   "route": {
     "batch": 8,
     "bptt_tokens": 256,

@@ -76,3 +76,18 @@ def test_aggregate_excludes_warmup_and_reports_percentages() -> None:
     assert aggregate["measured_updates"] == 3
     assert aggregate["mean_seconds"]["backward_total"] == 1.0
     assert aggregate["percent_of_total"]["adamw"] == 100.0
+
+
+def test_backward_loss_logits_conservation_formula() -> None:
+    total = 1.25
+    vocab_readout = 0.30
+    recurrent = 0.70
+    embedding_prelude = 0.10
+    loss_logits = total - vocab_readout - recurrent - embedding_prelude
+    assert loss_logits == 0.15
+    assert torch.isclose(
+        torch.tensor(total),
+        torch.tensor(loss_logits + vocab_readout + recurrent + embedding_prelude),
+        rtol=1e-6,
+        atol=1e-6,
+    )
