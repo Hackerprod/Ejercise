@@ -112,7 +112,9 @@ Con CE puro (sin KL), el backward se simplifica — es un momento limpio para me
 ### Qué falta para saber si ayuda
 No hay forma de saber si el balance neto ahorra tiempo sin medir — trozos más chicos de backward individual, pero más pasadas por ventana (overhead extra por chunk). Requiere desglosar `backward_seconds` por componente (hoy es un timer único, no sabemos si el costo grande viene del núcleo o de la proyección a vocabulario) y/o medir directamente con y sin truncamiento.
 
-### Estado: idea verificada y documentada, NO implementada, NO diseñada formalmente. Portable (no depende de Intel/Linux/hardware específico).
+### Estado (2026-09-20): **CERRADA — `OMEGA-TBPTT-DIRECTIONAL-PROBE = CLOSED / DIRECTIONAL-STOP`** (Addendum 227, MD/192.md). Probado real (horizon=16, K4, seed13, 0→2000 updates): técnicamente positivo (R_t=0.891, ~11% menos wall-clock, RSS −62.8%) pero calidad se cae de forma creciente y clara (δ16 llega a +0.379 vs ceiling +0.10) — el NLL se estanca cerca de update 1000 y retrocede, no es un caso de "necesita más updates". Sweep formal 8/16/32 NO autorizado con esta evidencia. Consecuencia directa: el runtime nativo (Prioridad 2) YA NO necesita implementar `bptt_horizon` configurable como feature — solo dejar la costura arquitectónica para no cerrar la puerta. Alcance: solo refuta K4/horizon=16, K1 y horizon=32 quedan sin probar.
+
+**Siguiente paso real**: Prioridad 1 (teacher logit caching, confirmado por el usuario como scope aislado, "solo eso, nada más todavía").
 
 ---
 
