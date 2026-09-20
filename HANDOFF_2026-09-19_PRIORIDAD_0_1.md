@@ -86,7 +86,15 @@ Detalle completo del contrato en Addendum 220 de `T1.5_Spec_MIX_O.md` — no rei
 - CE-only pierde incluso a igual costo → "evidencia fuerte de que el teacher está económicamente justificado en esta receta" (Sol) — pero no prueba que TODO OMEGA necesite DistilGPT2 inevitablemente (no se probó LR tuning, scheduled sampling, más datos).
 - CE-only alcanza calidad a updates o costo iguales → razón fuerte para sacar el teacher del camino futuro. Sería el hallazgo más grande de la campaña.
 
-### Estado (2026-09-19): AUTORIZADO por Sol. Contrato enviado a opencode para implementar Fase 0 + Fase A (código+tests, sin ejecución real todavía). Pendiente: reporte de opencode, revisión del judge, autorización de ejecución real de Fase 0 primero.
+### Estado (2026-09-19): **CERRADA — `OMEGA-CE-ONLY-BASELINE = CLOSED / MIXED TRADEOFF`** (Addendum 224, MD/189.md). Fase 0 + Fase A (8000 updates reales) + rama equal-cost automática (4/4 combinaciones) + generation audit documentario, todo ejecutado real y verificado independiente por el judge (self-hash, tests, agregados recomputados desde JSON crudo).
+
+**Resultado real**: equal-updates@2000 = MIXED (3/4≤0.10, K1 2/2 noninferior). Equal-cost congelado: K1=DISTILLATION-COST-ADVANTAGE (falla 2/2, presupuesto validado por timing largo), K4=COST-MIXED (una seed mejora fuerte, otra empeora — sensibilidad a seed, presupuesto conocido conservador). Generation audit: CE-only menos repetitivo que R1+teacher en las 4 métricas congeladas, en ambos presupuestos — pero sin poder afirmar "más coherente" (modos de fallo distintos, ver caso de artefactos `@-@`).
+
+**Veredicto de Sol**: "el teacher no está demostrado como necesario para aprender comportamiento lingüístico... distillation SÍ mejora robustez de NLL held-out tardío, pero NO muestra ventaja correspondiente en generación." CE-only es receta viable. NO se cierra como "el teacher es necesario" — sería perder el hallazgo principal.
+
+**Hallazgo nuevo, no perseguido todavía** (anotado en IDEAS_FUTURAS.md): NLL held-out y dinámica autoregresiva libre se DESACOPLAN con entrenamiento CE-only prolongado — empeora NLL, mejora diversidad/estabilidad de generación. Sol lo conecta con el scheduled sampling del diseño T2 original (brecha teacher-forced vs free-running). Reactivado como candidato futuro, no autorizado como unidad todavía.
+
+**Siguiente paso real, per instrucción del usuario ("Stop temporal")**: NO perseguir las sugerencias de Sol sobre esta nueva brecha NLL/generación todavía — pasar a truncated BPTT (§4), siguiente en la cola ya acordada.
 
 ---
 
