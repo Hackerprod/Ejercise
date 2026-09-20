@@ -208,6 +208,16 @@ Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas f
 
 ---
 
+### Hallazgo abierto (cierre de OMEGA-CE-ONLY-BASELINE): NLL held-out y dinámica autoregresiva libre se desacoplan — scheduled sampling reactivado como candidato
+- **Qué se midió**: al cerrar `OMEGA-CE-ONLY-BASELINE` (2026-09-19, Addendum 224/MD 189), el generation audit real mostró que CE-only entrenado más allá de 2000 updates EMPEORA en validation NLL (verificado, ver Addendum 222/223) pero simultáneamente MEJORA en las métricas de degeneración autoregresiva congeladas (distinct-1/2, ciclos exactos, max_same_token_run) — CE@equal-cost es el menos repetitivo de los 3 regímenes medidos (R1-teacher, CE@2000, CE@equal-cost), a pesar de tener el peor NLL de los tres.
+- **Por qué es interesante, palabras de Sol**: "aparece una separación entre dos propiedades: held-out NLL y autoregressive free-running behavior. Eso es importante para OMEGA." No se puede decir simplemente "los updates extra sobreentrenaron y arruinaron el modelo" — degradan un eje (likelihood held-out) mientras mejoran otro (estabilidad/diversidad de generación libre).
+- **Conexión histórica verificable**: Sol conecta esto directo con el scheduled sampling del diseño T2 original (`Conversacion.md`) — "estaba diseñado precisamente para cerrar una brecha entre teacher-forced likelihood y free-running behavior. Ahora tenemos evidencia experimental de que esa brecha existe de verdad en OMEGA, no sólo como una preocupación teórica." Scheduled sampling estaba marcado explícitamente FUERA de alcance de CE-ONLY-BASELINE desde el Addendum 220 (junto a λ_h y retuning de LR) — este hallazgo lo reactiva como candidato real a estudiar, no lo reabre dentro de esa unidad ya cerrada.
+- **Hipótesis sin decidir entre ellas (palabras de Sol, ninguna descartada todavía)**: sobreajuste al corpus en likelihood sin pérdida equivalente de dinámica lingüística; distillation empujando al estudiante hacia attractors frecuentes bajo greedy decoding; calibración/sharpness distinta de logits; cambios de entropy/margin/top-1 aunque la CE empeore; exposición teacher-forced vs free-running (el problema clásico que scheduled sampling ataca).
+- **Qué NO hacer con esto todavía**: no es una unidad autorizada, no tiene protocolo congelado, no se decidió entre las hipótesis. Es un hallazgo documentado para cuando la cola de prioridades (0→BPTT truncado→1→2) llegue a un punto donde tenga sentido proponerlo a Sol como unidad propia.
+- **Agregado**: 2026-09-19, cierre real de `OMEGA-CE-ONLY-BASELINE`, generation audit verificado independientemente por el judge (self-hash + recomputo de agregados desde el JSON crudo) antes de reportar a Sol.
+
+---
+
 ## Descartado tras revisión — no agregar sin nueva justificación
 
 Revisé estos dos repos que una instancia paralela de Sol propuso y decidí NO agregarlos como ideas accionables — quedan acá documentados para no re-investigarlos de cero si vuelven a aparecer:
