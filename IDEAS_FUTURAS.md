@@ -197,6 +197,15 @@ Notas sueltas, no autorizadas, no priorizadas — cosas a considerar en etapas f
 
 ---
 
+### PRIORIDAD 2 (después de Prioridad 0/1 y truncated BPTT): kernel de entrenamiento en C++/CPU para el loop de K rondas — no partir de cero, adaptar precedentes ya verificados
+- **Por qué ahora**: el loop de `recur_states` (256 tokens × K rondas, `run_omega_ce_only_baseline.py`/`omega_fast.py:139-148`) es un `for` de Python puro, un lanzamiento de kernel PyTorch por operación por paso — ese overhead domina sobre el cómputo real a batch chico. El usuario planteó (2026-09-19) construir esto como Prioridad 2, tras la PC nueva (i7-13700F) y habiendo comparado antes en esta misma máquina con los datos congelados para aislar la ganancia de implementación de la ganancia de hardware.
+- **No es partir de cero — 3 precedentes ya verificados en este mismo archivo** (sección "Optimización del propio bucle recurrente", arriba, Ángulo 2, agregados 2026-09-18): `yandex/faster-rnnlm` (`gru_layer.cc`, preasigna matrices una vez, fusiona la proyección de entrada en un solo GEMM por subsecuencia — el patrón exacto que falta en el loop de K rondas de OMEGA), `asappresearch/sru` (kernel C++ CPU real compilable vía `torch.utils.cpp_extension.load`, registrable como extensión de PyTorch), `karpathy/llm.c` (`train_gpt2.c`, forward+backward completo en C puro con OpenMP, referencia de bajo nivel).
+- **Ruta de menor riesgo, no la única, pero la recomendada**: adaptar el patrón de SRU — extensión C++ vía `cpp_extension.load()` registrada como `torch.autograd.Function`, en vez de un runtime nativo aislado con backward derivado 100% a mano. Ventajas concretas: (1) el backward se puede verificar con `torch.autograd.gradcheck` (utilidad ya incluida en PyTorch) en vez de una derivación analítica aparte; (2) al seguir siendo un Tensor de PyTorch en ambos extremos, se valida DIRECTO contra las curvas de NLL/checkpoints ya congelados de esta campaña, sin arnés de comparación adicional — mismo principio de gate bit-idéntico/self-hash que ya usa todo `omega_ce_only_baseline`. Antes de esto, medir `torch.compile` sobre el loop actual (horas, no semanas) como piso de comparación barato — si alcanza, no hace falta la extensión C++.
+- **Cuándo perseguirla**: después de Prioridad 0 (cerrando) → truncated BPTT → Prioridad 1 (teacher caching). Como las anteriores, necesita su propio paso de propuesta/autorización a Sol antes de arrancar, no es automática.
+- **Agregado**: 2026-09-19, a partir de la discusión con el usuario sobre atención enmascarada vs recurrencia no lineal, y su corrección de que ya había precedentes de training en C++/CPU documentados en este archivo que no debían ignorarse al estimar el costo.
+
+---
+
 ## Descartado tras revisión — no agregar sin nueva justificación
 
 Revisé estos dos repos que una instancia paralela de Sol propuso y decidí NO agregarlos como ideas accionables — quedan acá documentados para no re-investigarlos de cero si vuelven a aparecer:
