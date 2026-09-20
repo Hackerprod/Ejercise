@@ -36,7 +36,7 @@ TECHNICAL_SCRIPT = REPO_ROOT / "t1_trainability_lab_v0.1.0" / "scripts" / "run_o
 TRAIN_MANIFEST_PATH = CE_ROOT / "results" / "runs" / "CE-K4_seed_20260913" / "train_manifest.json"
 DEFAULT_OUTPUT_ROOT = HERE / "results"
 
-for _path in (F_DIR, R1_DIR, TECHNICAL_SCRIPT.parent):
+for _path in (CE_ROOT, F_DIR, R1_DIR, TECHNICAL_SCRIPT.parent):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -273,9 +273,31 @@ def build_entry_plan(manifest: Mapping[str, Any], *, limit_pairs: int = BUILD_PA
     return plan
 
 
+def scheduled_documents(documents: Sequence[Mapping[str, Any]], pair: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Resolve frozen pair indices as positions, never document identities."""
+    return [documents[int(index)] for index in pair["document_indices"]]
+
+
+def _json_stable(value: Any) -> Any:
+    """Normalize tokenizer metadata, including transformers AddedToken values."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_stable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_stable(item) for item in value]
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}", "repr": repr(value)}
+
+
 def tokenizer_hash(tokenizer: Any) -> str:
     vocab = tokenizer.get_vocab()
-    payload = {"init_kwargs": getattr(tokenizer, "init_kwargs", {}), "vocab": sorted(vocab.items())}
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    backend_serialized = backend.to_str() if backend is not None and hasattr(backend, "to_str") else None
+    payload = {
+        "init_kwargs": _json_stable(getattr(tokenizer, "init_kwargs", {})),
+        "vocab": sorted((str(key), int(value)) for key, value in vocab.items()),
+        "backend_sha256": sha256_bytes(backend_serialized.encode("utf-8")) if backend_serialized is not None else None,
+    }
     return canonical_hash(payload)
 
 
@@ -672,25 +694,29 @@ def build_cache(*, output_root: Path, confirm_real_execution: bool) -> dict[str,
     mmap = np.memmap(temporary, mode="w+", dtype=np.float32, shape=shape.tuple, order="C")
     entries: dict[str, Any] = {}
     written: set[tuple[int, int]] = set()
-    by_index = {int(document["document_index"]): document for document in documents}
+    # Frozen pair rows address eligible positions (0..601). The manifest's
+    # document_index is the original dataset/reconstruction index and is not
+    # contiguous; retain it only as document identity inside the cache key.
     started = time.perf_counter()
     for pair in manifest["cyclic_pairs"]["pairs"][:BUILD_PAIRS]:
-        batch_indices = [int(index) for index in pair["document_indices"]]
-        source = torch.tensor([by_index[index]["tokens"] for index in batch_indices], dtype=torch.long)
+        batch_positions = [int(index) for index in pair["document_indices"]]
+        batch_documents = scheduled_documents(documents, pair)
+        source = torch.tensor([document["tokens"] for document in batch_documents], dtype=torch.long)
         for window in WINDOWS:
             logits = teacher_window_logits(teacher, source, window)
-            for position, document_index in enumerate(batch_indices):
-                key = (document_index, window)
+            for batch_position, cache_position in enumerate(batch_positions):
+                key = (cache_position, window)
                 if key in written:
                     continue
-                payload = logits[position].contiguous()
-                mmap[window, document_index] = payload.numpy()
-                document = by_index[document_index]
+                payload = logits[batch_position].contiguous()
+                mmap[window, cache_position] = payload.numpy()
+                document = batch_documents[batch_position]
                 fields = cache_key_fields(document, window, teacher_parameter_sha256=teacher_digest, tokenizer_hash=tokenizer_digest)
-                entries[f"{window}:{document_index}"] = {
-                    "document_index": document_index,
+                entries[f"{window}:{cache_position}"] = {
+                    "document_index": cache_position,
+                    "source_document_index": int(document["document_index"]),
                     "window": window,
-                    "offset_bytes": entry_offset_bytes(window, document_index),
+                    "offset_bytes": entry_offset_bytes(window, cache_position),
                     "shape": [TOKENS_PER_WINDOW, TOKENIZER_VOCAB],
                     "sha256": tensor_hash(payload),
                     "cache_key": {"fields": fields, "digest": canonical_hash(fields)},

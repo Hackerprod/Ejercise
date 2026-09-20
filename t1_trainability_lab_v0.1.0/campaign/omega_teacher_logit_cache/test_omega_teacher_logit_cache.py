@@ -51,6 +51,14 @@ def test_build_schedule_covers_each_document_window_once_and_skips_wrap_duplicat
     assert all(row["pair"] <= 75 for row in plan)
 
 
+def test_pair_documents_use_positions_not_noncontiguous_document_identity() -> None:
+    documents = [{"document_index": 1000 + position * 7, "tokens": [position]} for position in range(8)]
+    pair = {"document_indices": [6, 2, 7, 0]}
+    selected = runner.scheduled_documents(documents, pair)
+    assert [item["tokens"] for item in selected] == [[6], [2], [7], [0]]
+    assert [item["document_index"] for item in selected] == [1042, 1014, 1049, 1000]
+
+
 def test_cache_key_has_identity_and_excludes_student_or_temperature() -> None:
     key = runner.cache_key(_documents(1)[0], 1, teacher_parameter_sha256="teacher", tokenizer_hash="tokenizer")
     fields = key["fields"]
