@@ -13,6 +13,7 @@ typedef struct OmegaRecurrentConfig {
   size_t slots;
   size_t dimension;
   size_t rounds;
+  int training; /* 0: inference workspace; 1: full-BPTT checkpoint workspace */
 } OmegaRecurrentConfig;
 
 typedef struct OmegaRecurrentParams {
@@ -31,6 +32,40 @@ typedef struct OmegaRecurrentParams {
   const float* gate_logits;         /* [rounds, dimension] */
 } OmegaRecurrentParams;
 
+typedef struct OmegaRecurrentGrads {
+  float* d_token_part;
+  float* d_previous_state;
+  float* d_state_part_weight;
+  float* d_prelude_norm_weight;
+  float* d_block_qkv_weight;
+  float* d_block_qkv_bias;
+  float* d_block_out_weight;
+  float* d_block_out_bias;
+  float* d_block_fc1_weight;
+  float* d_block_fc1_bias;
+  float* d_block_fc2_weight;
+  float* d_block_fc2_bias;
+  float* d_block_norm_weight;
+  float* d_depth_embedding;
+  float* d_gate_logits;
+  /* Optional per-element sums of absolute accumulation contributions. */
+  float* sum_abs_d_token_part;
+  float* sum_abs_d_previous_state;
+  float* sum_abs_d_state_part_weight;
+  float* sum_abs_d_prelude_norm_weight;
+  float* sum_abs_d_block_qkv_weight;
+  float* sum_abs_d_block_qkv_bias;
+  float* sum_abs_d_block_out_weight;
+  float* sum_abs_d_block_out_bias;
+  float* sum_abs_d_block_fc1_weight;
+  float* sum_abs_d_block_fc1_bias;
+  float* sum_abs_d_block_fc2_weight;
+  float* sum_abs_d_block_fc2_bias;
+  float* sum_abs_d_block_norm_weight;
+  float* sum_abs_d_depth_embedding;
+  float* sum_abs_d_gate_logits;
+} OmegaRecurrentGrads;
+
 /* Returns zero for invalid dimensions or size overflow. */
 size_t omega_recurrent_workspace_bytes(OmegaRecurrentConfig config);
 
@@ -44,6 +79,17 @@ int omega_recurrent_forward(
     float* readout_states,
     void* workspace,
     size_t workspace_bytes);
+
+/* Computes full-BPTT gradients from a prior forward with config.training=1. */
+int omega_recurrent_backward(
+    const OmegaRecurrentConfig* config,
+    const OmegaRecurrentParams* params,
+    const float* token_part,
+    const float* d_readout_states,
+    const float* d_next_state,
+    void* workspace,
+    size_t workspace_bytes,
+    OmegaRecurrentGrads* grads);
 
 #ifdef __cplusplus
 } /* extern "C" */
