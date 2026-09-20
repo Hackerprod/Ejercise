@@ -129,7 +129,11 @@ Si es correcto: cachear el forward del teacher la PRIMERA vez que se ve cada (do
 - **`CompactifAI/Full-Chunked-KL-Loss`** (arXiv:2608.03796) — 19★, código real. Implementa caching offline de logits top-K del teacher. Diseñado para CUDA (portar lógica, no kernel). La variante "chunked" de la pérdida en sí AGREGA cómputo a cambio de memoria — solo la parte de CACHING es relevante acá, no la parte "chunked".
 - **`akhilkedia/RandomSamplingKD`** (ACL 2025 Oral) — crítica formal a que el caching top-K naive da estimación SESGADA del teacher. Sin código (promesa vacía desde jul-2025). Vale como advertencia conceptual, no como algo a usar.
 
-### Estado: NO implementado, NO diseñado formalmente, pendiente confirmar el patrón real de revisitas del corpus antes de dimensionar el ahorro esperado.
+### Estado (2026-09-20): **CERRADA END-TO-END — `PRIORIDAD 1 = CLOSED/SELECTED`** (Addendum 232, MD/198.md; integración real Addendum del mismo día). Patrón de revisitas confirmado real (no estimado): 602 docs, 1000 pares, 13-14 apariciones/documento por ciclo de 1000 pares.
+
+**Camino real recorrido**: (1) `OMEGA-TEACHER-LOGIT-CACHE` (logits crudos completos, 57.7GiB) → `CLOSED/NO-GO` real — 33-34% MÁS LENTO, no más rápido. Causa: el drive donde vive el repo (`D:`) resultó ser un HDD externo por USB (129 MB/s medido), no el NVMe interno (`C:`, 1.2-4.5GB/s medido) — el caché de 57.7GiB no cabía en RAM ni en el NVMe (solo 41.7GB libres entonces), terminó en el HDD lento sin que nadie lo marcara como variable. (2) Sol reinterpretó el NO-GO como específico del HDD, no una conclusión general, y autorizó `OMEGA-TEACHER-HIDDEN-CACHE-PROBE`: cachear el hidden state pre-LM-head (`[256,768]`, 0.88GiB, 65.4x más chico) en vez de logits completos — matemáticamente exacto (`logits=lm_head(hidden)`), cabe en RAM, construido en el NVMe. Resultado real: `PASS_STRONG` — R_K1=0.653, R_K4=0.724, R_joint=0.692, ~31% más rápido, break-even <0.1 corridas. (3) `OMEGA-HIDDEN-CACHE-PRODUCTION-INTEGRATION` (gate final, no investigación): provenance fail-closed, ausencia real del teacher confirmada, checkpoint/resume desde proceso fresco, oráculo bit-exacto — `INTEGRATION_PASS` real en K1 y K4.
+
+**Implementación seleccionada, lista para usarse en futuras campañas que compartan teacher/corpus/context policy**: caché de hidden state FP32 en `C:\omega_cache\teacher_hidden.fp32` (NVMe), preload completo a RAM antes de entrenar, LM head original ejecutado online sobre el hidden cacheado.
 
 ---
 
