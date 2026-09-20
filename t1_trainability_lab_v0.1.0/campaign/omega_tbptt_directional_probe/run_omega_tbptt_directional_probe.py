@@ -264,9 +264,12 @@ def _preflight_worker(combination: str, *, smoke: bool) -> dict[str, Any]:
         if combination == FULL_COMBINATION:
             optimizer.zero_grad(set_to_none=True)
             forward_started = time.perf_counter()
-            next_state, _, losses = base.ce_only_forward_loss(model, source[:, :WINDOW_TOKENS], source[:, 1:WINDOW_TOKENS + 1], state)
+            recurrent_result = model.recur_states(source[:, :WINDOW_TOKENS], state)
             forward_elapsed = time.perf_counter() - forward_started
-            ce_elapsed = 0.0
+            next_state, _, _, readout_states = recurrent_result
+            ce_started = time.perf_counter()
+            losses = base.ce_only_loss(model, readout_states, source[:, 1:WINDOW_TOKENS + 1])
+            ce_elapsed = time.perf_counter() - ce_started
             backward_started = time.perf_counter()
             losses["total"].backward()
             backward_elapsed = time.perf_counter() - backward_started
