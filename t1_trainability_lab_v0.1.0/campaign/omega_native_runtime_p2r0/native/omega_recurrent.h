@@ -2,6 +2,7 @@
 #define OMEGA_RECURRENT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #if defined(_WIN32) && defined(OMEGA_RECURRENT_BUILD_SHARED)
 #define OMEGA_RECURRENT_API __declspec(dllexport)
@@ -20,10 +21,22 @@ typedef struct OmegaRecurrentConfig {
   size_t dimension;
   size_t rounds;
   int training; /* 0: inference workspace; 1: full-BPTT checkpoint workspace */
+#ifdef __cplusplus
+  int instrumentation = 1; /* 1: certification buffers; 0: clean production workspace */
+#else
+  int instrumentation; /* 1: certification buffers; 0: clean production workspace */
+#endif
 } OmegaRecurrentConfig;
 
+typedef struct OmegaMatrixViewF32 {
+  const float* data;
+  size_t rows;
+  size_t cols;
+  ptrdiff_t row_stride;
+} OmegaMatrixViewF32;
+
 typedef struct OmegaRecurrentParams {
-  const float* state_part_weight;   /* [slots * dimension, dimension] */
+  OmegaMatrixViewF32 state_part_weight; /* [slots * dimension, dimension], column stride 1 */
   const float* prelude_norm_weight; /* [slots * dimension] */
   const float* block_qkv_weight;    /* [3 * dimension, dimension] */
   const float* block_qkv_bias;      /* [3 * dimension] */
@@ -92,6 +105,40 @@ typedef struct OmegaRecurrentGrads {
   size_t* depth_max_level;
 } OmegaRecurrentGrads;
 
+/* Temporary high-level regression profile. Present only in profile builds. */
+#ifdef OMEGA_PROFILE_INTERNAL
+typedef struct OmegaRecurrentProfileDirection {
+  uint64_t calls;
+  uint64_t qkv_projection_calls;
+  double qkv_projection_seconds;
+  uint64_t attention_scores_softmax_mixing_calls;
+  double attention_scores_softmax_mixing_seconds;
+  uint64_t out_projection_calls;
+  double out_projection_seconds;
+  uint64_t fc1_gelu_calls;
+  double fc1_gelu_seconds;
+  uint64_t fc2_calls;
+  double fc2_seconds;
+  uint64_t rmsnorm_gates_calls;
+  double rmsnorm_gates_seconds;
+  uint64_t state_prelude_calls;
+  double state_prelude_seconds;
+  uint64_t depth_embedding_pairwise_reduction_calls;
+  double depth_embedding_pairwise_reduction_seconds;
+  uint64_t depth_embedding_carry_calls;
+  double depth_embedding_carry_seconds;
+  uint64_t history_buffer_reads_writes_calls;
+  double history_buffer_reads_writes_seconds;
+} OmegaRecurrentProfileDirection;
+
+typedef struct OmegaRecurrentProfileSnapshot {
+  int enabled;
+  int compiled;
+  OmegaRecurrentProfileDirection forward;
+  OmegaRecurrentProfileDirection backward;
+} OmegaRecurrentProfileSnapshot;
+#endif
+
 /* Returns zero for invalid dimensions or size overflow. */
 OMEGA_RECURRENT_API size_t omega_recurrent_workspace_bytes(OmegaRecurrentConfig config);
 
@@ -116,6 +163,13 @@ OMEGA_RECURRENT_API int omega_recurrent_backward(
     void* workspace,
     size_t workspace_bytes,
     OmegaRecurrentGrads* grads);
+
+/* Temporary profiling ABI. Exported only from OMEGA_PROFILE_INTERNAL builds. */
+#ifdef OMEGA_PROFILE_INTERNAL
+OMEGA_RECURRENT_API void omega_recurrent_profile_set_enabled(int enabled);
+OMEGA_RECURRENT_API void omega_recurrent_profile_reset(void);
+OMEGA_RECURRENT_API int omega_recurrent_profile_snapshot(OmegaRecurrentProfileSnapshot* snapshot);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */

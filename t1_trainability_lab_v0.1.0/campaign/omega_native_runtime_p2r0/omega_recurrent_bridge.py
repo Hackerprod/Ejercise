@@ -33,6 +33,7 @@ class _OmegaRecurrentConfig(ctypes.Structure):
         ("dimension", ctypes.c_size_t),
         ("rounds", ctypes.c_size_t),
         ("training", ctypes.c_int),
+        ("instrumentation", ctypes.c_int),
     ]
 
 
@@ -41,9 +42,18 @@ _CountPointer = ctypes.POINTER(ctypes.c_size_t)
 _DoublePointer = ctypes.POINTER(ctypes.c_double)
 
 
+class _OmegaMatrixViewF32(ctypes.Structure):
+    _fields_ = [
+        ("data", _FloatPointer),
+        ("rows", ctypes.c_size_t),
+        ("cols", ctypes.c_size_t),
+        ("row_stride", ctypes.c_ssize_t),
+    ]
+
+
 class _OmegaRecurrentParams(ctypes.Structure):
     _fields_ = [
-        ("state_part_weight", _FloatPointer),
+        ("state_part_weight", _OmegaMatrixViewF32),
         ("prelude_norm_weight", _FloatPointer),
         ("block_qkv_weight", _FloatPointer),
         ("block_qkv_bias", _FloatPointer),
@@ -202,14 +212,14 @@ def _library() -> ctypes.CDLL:
     return _LIBRARY
 
 
-def _validate_tensor(value: Tensor, name: str, shape: Sequence[int]) -> None:
+def _validate_tensor(value: Tensor, name: str, shape: Sequence[int], *, contiguous: bool = True) -> None:
     if not isinstance(value, Tensor):
         raise TypeError(f"{name} must be a torch.Tensor")
     if value.device.type != "cpu":
         raise ValueError(f"{name} must be CPU")
     if value.dtype != torch.float32:
         raise ValueError(f"{name} must be float32")
-    if not value.is_contiguous():
+    if contiguous and not value.is_contiguous():
         raise ValueError(f"{name} must be contiguous")
     if tuple(value.shape) != tuple(shape):
         raise ValueError(f"{name} shape {tuple(value.shape)} != {tuple(shape)}")
@@ -245,9 +255,18 @@ def _validate_inputs(values: Sequence[Tensor], rounds: int) -> tuple[_OmegaRecur
     if len(parameters) != len(_PARAMETER_NAMES):
         raise ValueError("unexpected recurrent parameter count")
     for name, value, shape in zip(("token_part", "previous_state", *_PARAMETER_NAMES), values, expected):
-        _validate_tensor(value, name, shape)
-    config = _OmegaRecurrentConfig(sequence, batch, slots, dimension, rounds, 1)
-    params = _OmegaRecurrentParams(*(_float_pointer(value) for value in parameters))
+        _validate_tensor(value, name, shape, contiguous=name != "state_part_weight")
+    state_part_weight = parameters[0]
+    if state_part_weight.stride(-1) != 1 or int(state_part_weight.stride(0)) < int(state_part_weight.shape[1]):
+        raise ValueError("state_part_weight must have column stride 1 and row stride >= cols")
+    state_view = _OmegaMatrixViewF32(
+        _float_pointer(state_part_weight),
+        int(state_part_weight.shape[0]),
+        int(state_part_weight.shape[1]),
+        int(state_part_weight.stride(0)),
+    )
+    config = _OmegaRecurrentConfig(sequence, batch, slots, dimension, rounds, 1, 1)
+    params = _OmegaRecurrentParams(state_view, *(_float_pointer(value) for value in parameters[1:]))
     return config, params
 
 
@@ -332,9 +351,9 @@ class OmegaRecurrentFunction(torch.autograd.Function):
             dtype=torch.float32,
             device="cpu",
         ) if d_readout_states is None else d_readout_states.contiguous()
-        gradients = tuple(torch.empty_like(value) for value in tensor_args)
-        sum_abs_parameters = tuple(torch.empty_like(value) for value in parameters)
-        count_parameters = tuple(torch.empty_like(value, dtype=torch.int64) for value in parameters)
+        gradients = tuple(torch.empty(tuple(value.shape), dtype=value.dtype, device=value.device) for value in tensor_args)
+        sum_abs_parameters = tuple(torch.empty(tuple(value.shape), dtype=value.dtype, device=value.device) for value in parameters)
+        count_parameters = tuple(torch.empty(tuple(value.shape), dtype=torch.int64, device=value.device) for value in parameters)
         fp64_depth_embedding = torch.empty_like(parameters[-2], dtype=torch.float64)
         depth_max_level = torch.empty_like(parameters[-2], dtype=torch.int64)
         null_pointer = _FloatPointer()
@@ -350,7 +369,16 @@ class OmegaRecurrentFunction(torch.autograd.Function):
             ctypes.cast(ctypes.c_void_p(int(fp64_depth_embedding.data_ptr())), _DoublePointer),
             ctypes.cast(ctypes.c_void_p(int(depth_max_level.data_ptr())), _CountPointer),
         )
-        params = _OmegaRecurrentParams(*(_float_pointer(value) for value in parameters))
+        state_part_weight = parameters[0]
+        params = _OmegaRecurrentParams(
+            _OmegaMatrixViewF32(
+                _float_pointer(state_part_weight),
+                int(state_part_weight.shape[0]),
+                int(state_part_weight.shape[1]),
+                int(state_part_weight.stride(0)),
+            ),
+            *(_float_pointer(value) for value in parameters[1:]),
+        )
         status = library.omega_recurrent_backward(
             ctypes.byref(config),
             ctypes.byref(params),

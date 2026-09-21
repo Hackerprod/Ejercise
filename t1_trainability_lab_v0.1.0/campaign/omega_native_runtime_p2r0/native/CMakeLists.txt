@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(OMEGA_PROFILE_INTERNAL "Compile temporary native profile instrumentation" OFF)
+
 add_library(omega_recurrent STATIC omega_recurrent.cpp)
 set_target_properties(omega_recurrent PROPERTIES OUTPUT_NAME omega_recurrent_static)
 
@@ -28,9 +30,15 @@ endforeach()
 
 foreach(target omega_recurrent omega_recurrent_shared)
   target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  if(OMEGA_PROFILE_INTERNAL)
+    target_compile_definitions(${target} PRIVATE OMEGA_PROFILE_INTERNAL=1)
+  endif()
 
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /fp:precise)
+    if(target STREQUAL "omega_recurrent_shared")
+      target_compile_options(${target} PRIVATE /arch:AVX2)
+    endif()
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   endif()
@@ -39,14 +47,28 @@ endforeach()
 add_executable(omega_recurrent_test omega_recurrent_test.cpp)
 target_link_libraries(omega_recurrent_test PRIVATE omega_recurrent)
 
+add_executable(omega_recurrent_instrumentation_equivalence_test omega_recurrent_instrumentation_equivalence_test.cpp)
+target_link_libraries(omega_recurrent_instrumentation_equivalence_test PRIVATE omega_recurrent)
+
+add_executable(omega_recurrent_matrix_view_test omega_recurrent_matrix_view_test.cpp)
+target_link_libraries(omega_recurrent_matrix_view_test PRIVATE omega_recurrent)
+
 if(MSVC)
   target_compile_options(omega_recurrent_test PRIVATE /W4 /permissive- /fp:precise)
+  target_compile_options(omega_recurrent_instrumentation_equivalence_test PRIVATE /W4 /permissive- /fp:precise)
+  target_compile_options(omega_recurrent_matrix_view_test PRIVATE /W4 /permissive- /fp:precise)
 else()
   target_compile_options(omega_recurrent_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+  target_compile_options(omega_recurrent_instrumentation_equivalence_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+  target_compile_options(omega_recurrent_matrix_view_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
 endif()
 
 enable_testing()
 add_test(
   NAME omega_recurrent_forward_goldens
   COMMAND omega_recurrent_test ${CMAKE_CURRENT_SOURCE_DIR}/../golden_cases
+)
+add_test(
+  NAME omega_recurrent_matrix_view
+  COMMAND omega_recurrent_matrix_view_test
 )

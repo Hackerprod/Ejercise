@@ -140,8 +140,10 @@ bool run_case(const std::filesystem::path& path, size_t rounds) {
   }
   const OmegaRecurrentConfig config{kSequenceLength, kBatch, kSlots, kDimension, rounds, 0};
   const auto& t = golden.tensors;
+  const OmegaMatrixViewF32 state_part_weight{
+      t[2].data(), kSlots * kDimension, kDimension, static_cast<ptrdiff_t>(kDimension)};
   OmegaRecurrentParams params{
-      t[2].data(), t[3].data(), t[4].data(), t[5].data(), t[6].data(), t[7].data(), t[8].data(),
+      state_part_weight, t[3].data(), t[4].data(), t[5].data(), t[6].data(), t[7].data(), t[8].data(),
       t[9].data(), t[10].data(), t[11].data(), t[12].data(), t[13].data(), t[14].data(),
   };
   const size_t workspace_bytes = omega_recurrent_workspace_bytes(config);
