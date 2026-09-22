@@ -299,29 +299,27 @@ bool training_counts(const OmegaRecurrentConfig& config, size_t state_count, siz
   return true;
 }
 
-bool depth_reduction_layout(const OmegaRecurrentConfig& config, size_t* output_count, size_t* levels, size_t* partial_count) {
+bool depth_vector_reduction_layout(const OmegaRecurrentConfig& config, size_t* hidden_dimension,
+    size_t* levels, size_t* partial_count) {
   size_t contributions = 0;
-  size_t four_dimension = 0;
-  if (!checked_mul(4, config.dimension, &four_dimension) || !checked_mul(config.batch, config.sequence_length, &contributions) ||
-      !checked_mul(contributions, config.slots, &contributions) || !checked_mul(contributions, four_dimension, &contributions) ||
-      !checked_mul(config.rounds, config.dimension, output_count)) {
+  if (!checked_mul(config.batch, config.sequence_length, &contributions) ||
+      !checked_mul(contributions, config.slots, &contributions) ||
+      !checked_mul(config.dimension, 4, hidden_dimension)) {
     return false;
   }
-  if (contributions == 0) {
-    return false;
-  }
+  if (contributions == 0) return false;
   constexpr size_t mask_bits = std::numeric_limits<std::uint64_t>::digits;
   size_t capacity = 1;
   size_t computed_levels = 1;
   while (capacity < contributions) {
-    if (computed_levels >= mask_bits || capacity > std::numeric_limits<size_t>::max() / 2) {
-      return false;
-    }
+    if (computed_levels >= mask_bits || capacity > std::numeric_limits<size_t>::max() / 2) return false;
     capacity *= 2;
     ++computed_levels;
   }
   *levels = computed_levels;
-  return checked_mul(*output_count, *levels, partial_count);
+  size_t round_levels = 0;
+  return checked_mul(config.rounds, *levels, &round_levels) &&
+      checked_mul(round_levels, *hidden_dimension, partial_count);
 }
 
 bool append_training_storage(const OmegaRecurrentConfig& config, size_t state_count, size_t* offset) {
@@ -360,6 +358,12 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
   if (!checked_mul(config.rounds, config.dimension, &depth_bias_count) || !checked_mul(depth_bias_count, 4, &depth_bias_count)) {
     return 0;
   }
+  size_t depth_hidden_dimension = 0;
+  size_t depth_levels = 0;
+  size_t depth_partial_count = 0;
+  if (!depth_vector_reduction_layout(config, &depth_hidden_dimension, &depth_levels, &depth_partial_count)) {
+    return 0;
+  }
   /* Caller may provide ordinary heap storage, not a 64-byte-aligned pointer. */
   size_t total = kAlignment - 1;
   /* state, anchor, candidate, q, k, v, mixed, update */
@@ -374,14 +378,7 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
   if (config.training != 0 && !append_training_storage(config, state_count, &total)) {
     return 0;
   }
-  size_t output_count = 0;
-  size_t levels = 0;
-  size_t partial_count = 0;
-  if (!depth_reduction_layout(config, &output_count, &levels, &partial_count) ||
-      !append_floats(partial_count, &total) ||
-      (config.instrumentation != 0 && !append_floats(partial_count, &total)) ||
-      !append_uint64s(output_count, &total) ||
-      (config.instrumentation != 0 && !append_uint64s(output_count, &total))) {
+  if (!append_floats(depth_partial_count, &total) || !append_uint64s(config.rounds, &total)) {
     return 0;
   }
   return total;
@@ -408,7 +405,6 @@ size_t runtime_workspace_bytes_impl(size_t worker_count, const OmegaRecurrentCon
   size_t depth_count = 0;
   if (!checked_mul(config.rounds, config.dimension, &depth_count)) return 0;
   size_t total = kAlignment - 1;
-  if (!append_floats(depth_count, &total)) return 0;
   for (size_t worker = 0; worker < worker_count; ++worker) {
     if (!append_bytes(core_bytes, &total) || !append_floats(parameter_count, &total) ||
         !append_floats(parameter_count, &total) || !append_size_ts(parameter_count, &total) ||
@@ -449,21 +445,10 @@ struct WorkspaceCursor {
 
   std::uint64_t* take_uint64(size_t count) {
     size_t bytes = 0;
-    if (!checked_mul(count, sizeof(std::uint64_t), &bytes) || used > capacity) {
-      return nullptr;
-    }
-    const uintptr_t address = reinterpret_cast<uintptr_t>(base) + used;
-    const size_t remainder = static_cast<size_t>(address % kAlignment);
-    const size_t padding = remainder == 0 ? 0 : kAlignment - remainder;
-    size_t required = 0;
-    if (!checked_add(padding, bytes, &required) || required > capacity - used) {
-      return nullptr;
-    }
-    used += padding;
-    std::uint64_t* result = reinterpret_cast<std::uint64_t*>(base + used);
-    used += bytes;
-    return result;
+    if (!checked_mul(count, sizeof(std::uint64_t), &bytes)) return nullptr;
+    return reinterpret_cast<std::uint64_t*>(take_bytes(bytes));
   }
+
 };
 
 struct TrainingBuffers {
@@ -659,66 +644,38 @@ void add_abs_contribution(float* sums, size_t* counts, size_t index, float contr
   if (counts != nullptr) ++counts[index];
 }
 
-bool carry_add(float* partials, std::uint64_t* masks, size_t output_index, size_t levels, float value) {
-  size_t base = 0;
-  if (!checked_mul(output_index, levels, &base)) {
+bool add_depth_hidden_vector(float* partials, std::uint64_t* masks, size_t round, size_t levels,
+    size_t hidden_dimension, const float* source) {
+  size_t round_base = 0;
+  if (!checked_mul(round, levels, &round_base) || !checked_mul(round_base, hidden_dimension, &round_base)) {
     return false;
   }
-  std::uint64_t mask = masks[output_index];
+  std::uint64_t mask = masks[round];
+  const float* carry_source = source;
   for (size_t level = 0; level < levels; ++level) {
+    const size_t level_base = round_base + level * hidden_dimension;
     const std::uint64_t bit = std::uint64_t{1} << level;
     if ((mask & bit) == 0) {
-      partials[base + level] = value;
-      masks[output_index] = mask | bit;
+      std::memcpy(partials + level_base, carry_source, hidden_dimension * sizeof(float));
+      masks[round] = mask | bit;
       return true;
     }
-    value = partials[base + level] + value;
+#if OMEGA_HAS_AVX2
+    size_t index = 0;
+    for (; index + 8 <= hidden_dimension; index += 8) {
+      _mm256_storeu_ps(partials + level_base + index, _mm256_add_ps(
+          _mm256_loadu_ps(partials + level_base + index), _mm256_loadu_ps(carry_source + index)));
+    }
+    for (; index < hidden_dimension; ++index) partials[level_base + index] += carry_source[index];
+#else
+    for (size_t index = 0; index < hidden_dimension; ++index) {
+      partials[level_base + index] += carry_source[index];
+    }
+#endif
+    carry_source = partials + level_base;
     mask &= ~bit;
   }
   return false;
-}
-
-bool carry_flush(float* partials, std::uint64_t* masks, size_t output_index, size_t levels, float* output) {
-  size_t base = 0;
-  if (!checked_mul(output_index, levels, &base)) {
-    return false;
-  }
-  const std::uint64_t mask = masks[output_index];
-  bool initialized = false;
-  float total = 0.0F;
-  for (size_t level = 0; level < levels; ++level) {
-    const std::uint64_t bit = std::uint64_t{1} << level;
-    if ((mask & bit) != 0) {
-      total = initialized ? total + partials[base + level] : partials[base + level];
-      initialized = true;
-    }
-  }
-  if (!initialized) {
-    return false;
-  }
-  *output = total;
-  return true;
-}
-
-bool add_depth_contribution(const OmegaRecurrentGrads& grads, float* gradient_partials, std::uint64_t* gradient_masks,
-    float* abs_partials, std::uint64_t* abs_masks, size_t output_index, size_t levels, float contribution) {
-  if (diagnostic_elide(OMEGA_DIAGNOSTIC_ELIDE_DEPTH_EMBEDDING_PAIRWISE)) {
-    return true;
-  }
-  if (!carry_add(gradient_partials, gradient_masks, output_index, levels, contribution)) {
-    return false;
-  }
-  if (grads.sum_abs_d_depth_embedding != nullptr &&
-      !carry_add(abs_partials, abs_masks, output_index, levels, std::fabs(contribution))) {
-    return false;
-  }
-  if (grads.count_d_depth_embedding != nullptr) {
-    ++grads.count_d_depth_embedding[output_index];
-  }
-  if (grads.fp64_d_depth_embedding != nullptr) {
-    grads.fp64_d_depth_embedding[output_index] += static_cast<double>(contribution);
-  }
-  return true;
 }
 
 }  // namespace
@@ -1307,12 +1264,14 @@ int recurrent_backward_impl(
   size_t fc1_count = 0;
   size_t depth_bias_count = 0;
   size_t depth_output_count = 0;
+  size_t depth_hidden_dimension = 0;
   size_t depth_levels = 0;
   size_t depth_partial_count = 0;
   if (!checked_mul(config->batch, slots, &slot_scores) || !checked_mul(slot_scores, slots, &slot_scores) ||
       !checked_mul(state_count, 4, &fc1_count) || !checked_mul(config->rounds, dimension, &depth_bias_count) ||
       !checked_mul(depth_bias_count, 4, &depth_bias_count) ||
-      !depth_reduction_layout(*config, &depth_output_count, &depth_levels, &depth_partial_count)) {
+      !checked_mul(config->rounds, dimension, &depth_output_count) ||
+      !depth_vector_reduction_layout(*config, &depth_hidden_dimension, &depth_levels, &depth_partial_count)) {
     return 12;
   }
   WorkspaceCursor cursor{reinterpret_cast<unsigned char*>(workspace), workspace_bytes, 0};
@@ -1337,20 +1296,13 @@ int recurrent_backward_impl(
   if (diagnostic_elide(OMEGA_DIAGNOSTIC_ELIDE_HISTORY_BUFFER)) {
     clear_training_storage(*config, state_count, &training_buffers);
   }
-  float* depth_gradient_partials = cursor.take(depth_partial_count);
-  float* depth_abs_partials = config->instrumentation != 0 ? cursor.take(depth_partial_count) : nullptr;
-  std::uint64_t* depth_gradient_masks = cursor.take_uint64(depth_output_count);
-  std::uint64_t* depth_abs_masks = config->instrumentation != 0 ? cursor.take_uint64(depth_output_count) : nullptr;
-  if (depth_gradient_partials == nullptr || depth_gradient_masks == nullptr ||
-      (config->instrumentation != 0 && (depth_abs_partials == nullptr || depth_abs_masks == nullptr))) {
+  float* depth_partials = cursor.take(depth_partial_count);
+  std::uint64_t* depth_masks = cursor.take_uint64(config->rounds);
+  if (depth_partials == nullptr || depth_masks == nullptr) {
     return 15;
   }
-  std::memset(depth_gradient_partials, 0, depth_partial_count * sizeof(float));
-  std::memset(depth_gradient_masks, 0, depth_output_count * sizeof(std::uint64_t));
-  if (config->instrumentation != 0) {
-    std::memset(depth_abs_partials, 0, depth_partial_count * sizeof(float));
-    std::memset(depth_abs_masks, 0, depth_output_count * sizeof(std::uint64_t));
-  }
+  std::memset(depth_partials, 0, depth_partial_count * sizeof(float));
+  std::memset(depth_masks, 0, config->rounds * sizeof(std::uint64_t));
 
   std::memset(grads->d_token_part, 0, config->batch * config->sequence_length * state_dimension * sizeof(float));
   std::memset(grads->d_previous_state, 0, state_count * sizeof(float));
@@ -1573,14 +1525,13 @@ int recurrent_backward_impl(
                 row = 0;
                for (; row + 8 <= hidden_count; row += 8) {
                  float fc1_values[8];
-                 for (size_t lane = 0; lane < 8; ++lane) {
-                   const size_t current_row = row + lane;
-                   const size_t fc_index = fc1_base + current_row;
-                   fc1_values[lane] = d_hidden_values[current_row] * gelu_derivative(saved_fc1_pre[fc_index]);
-                   fc1[fc_index] = fc1_values[lane];
-                 }
-
-                 const __m256 fc1_vector = _mm256_loadu_ps(fc1_values);
+                  for (size_t lane = 0; lane < 8; ++lane) {
+                    const size_t current_row = row + lane;
+                    const size_t fc_index = fc1_base + current_row;
+                    fc1_values[lane] = d_hidden_values[current_row] * gelu_derivative(saved_fc1_pre[fc_index]);
+                    fc1[fc_index] = fc1_values[lane];
+                  }
+                  const __m256 fc1_vector = _mm256_loadu_ps(fc1_values);
                  // FC1 dBias is a contiguous eight-output vector update.
                  const __m256 bias_vector = _mm256_add_ps(
                     _mm256_loadu_ps(grads->d_block_fc1_bias + row), fc1_vector);
@@ -1613,9 +1564,12 @@ int recurrent_backward_impl(
                               current_row * dimension + input + offset, contribution_values[offset]);
                           const size_t depth_index = round * dimension + input + offset;
                           const float depth_contribution = weight_row[offset] * fc1_value;
-                          if (!add_depth_contribution(*grads, depth_gradient_partials, depth_gradient_masks,
-                                  depth_abs_partials, depth_abs_masks, depth_index, depth_levels, depth_contribution)) {
-                            return 15;
+                          if (grads->sum_abs_d_depth_embedding != nullptr) {
+                            grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                          }
+                          if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                          if (grads->fp64_d_depth_embedding != nullptr) {
+                            grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
                           }
                         }
                       }
@@ -1632,9 +1586,12 @@ int recurrent_backward_impl(
                               current_row * dimension + input_index, contribution);
                           const size_t depth_index = round * dimension + input_index;
                           const float depth_contribution = params->block_fc1_weight[current_row * dimension + input_index] * fc1_values[lane];
-                          if (!add_depth_contribution(*grads, depth_gradient_partials, depth_gradient_masks,
-                                  depth_abs_partials, depth_abs_masks, depth_index, depth_levels, depth_contribution)) {
-                            return 15;
+                          if (grads->sum_abs_d_depth_embedding != nullptr) {
+                            grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                          }
+                          if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                          if (grads->fp64_d_depth_embedding != nullptr) {
+                            grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
                           }
                         }
                       }
@@ -1671,10 +1628,10 @@ int recurrent_backward_impl(
                   }
                 }
                }
-               for (; row < hidden_count; ++row) {
-                 const size_t fc_index = fc1_base + row;
-                fc1[fc_index] = d_hidden_values[row] * gelu_derivative(saved_fc1_pre[fc_index]);
-                grads->d_block_fc1_bias[row] += fc1[fc_index];
+                for (; row < hidden_count; ++row) {
+                  const size_t fc_index = fc1_base + row;
+                  fc1[fc_index] = d_hidden_values[row] * gelu_derivative(saved_fc1_pre[fc_index]);
+                  grads->d_block_fc1_bias[row] += fc1[fc_index];
                 add_abs_contribution(grads->sum_abs_d_block_fc1_bias, grads->count_d_block_fc1_bias, row, fc1[fc_index]);
                 {
                   OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kDepthEmbeddingPairwiseReduction);
@@ -1684,9 +1641,12 @@ int recurrent_backward_impl(
                     grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
                     add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
                     const size_t depth_index = round * dimension + input;
-                    if (!add_depth_contribution(*grads, depth_gradient_partials, depth_gradient_masks, depth_abs_partials, depth_abs_masks,
-                             depth_index, depth_levels, depth_contribution)) {
-                      return 15;
+                    if (grads->sum_abs_d_depth_embedding != nullptr) {
+                      grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                    }
+                    if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                    if (grads->fp64_d_depth_embedding != nullptr) {
+                      grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
                     }
                     mixed[base + input] += params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
                   }
@@ -1710,15 +1670,23 @@ int recurrent_backward_impl(
                     grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
                     add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
                     const size_t depth_index = round * dimension + input;
-                    if (!add_depth_contribution(*grads, depth_gradient_partials, depth_gradient_masks, depth_abs_partials, depth_abs_masks,
-                             depth_index, depth_levels, depth_contribution)) {
-                      return 15;
+                    if (grads->sum_abs_d_depth_embedding != nullptr) {
+                      grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                    }
+                    if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                    if (grads->fp64_d_depth_embedding != nullptr) {
+                      grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
                     }
                     mixed[base + input] += params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
                   }
                 }
               }
 #endif
+            if (!diagnostic_elide(OMEGA_DIAGNOSTIC_ELIDE_DEPTH_EMBEDDING_PAIRWISE) &&
+                !add_depth_hidden_vector(depth_partials, depth_masks, round, depth_levels,
+                    depth_hidden_dimension, fc1 + (batch * slots + slot) * (4 * dimension))) {
+              return 15;
+            }
             {
               OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kRmsnormGates);
 #if OMEGA_HAS_AVX2
@@ -2112,23 +2080,32 @@ int recurrent_backward_impl(
    }
   }
   if (!diagnostic_any_elide()) {
-    OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kDepthEmbeddingCarry);
-    for (size_t depth_index = 0; depth_index < depth_output_count; ++depth_index) {
-      if (grads->depth_max_level != nullptr) {
-        const std::uint64_t mask = depth_gradient_masks[depth_index];
-        for (size_t level = depth_levels; level-- > 0;) {
-          if ((mask & (std::uint64_t{1} << level)) != 0) {
-            grads->depth_max_level[depth_index] = level;
-            break;
-          }
+    OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kDepthEmbeddingPairwiseReduction);
+    for (size_t round = 0; round < config->rounds; ++round) {
+      const std::uint64_t mask = depth_masks[round];
+      const size_t round_base = round * depth_levels * depth_hidden_dimension;
+      size_t highest_level = 0;
+      for (size_t level = 1; level < depth_levels; ++level) {
+        if ((mask & (std::uint64_t{1} << level)) != 0) {
+          highest_level = level;
         }
       }
-      if (!carry_flush(depth_gradient_partials, depth_gradient_masks, depth_index, depth_levels, &grads->d_depth_embedding[depth_index])) {
-        return 15;
-      }
-      if (grads->sum_abs_d_depth_embedding != nullptr &&
-          !carry_flush(depth_abs_partials, depth_abs_masks, depth_index, depth_levels, &grads->sum_abs_d_depth_embedding[depth_index])) {
-        return 15;
+      for (size_t input = 0; input < dimension; ++input) {
+        float depth_gradient = 0.0F;
+        bool initialized = false;
+        for (size_t level = 0; level < depth_levels; ++level) {
+          if ((mask & (std::uint64_t{1} << level)) == 0) continue;
+          const float* partial = depth_partials + round_base + level * depth_hidden_dimension;
+          float partial_gradient = 0.0F;
+          for (size_t row = 0; row < depth_hidden_dimension; ++row) {
+            partial_gradient += params->block_fc1_weight[row * dimension + input] * partial[row];
+          }
+          depth_gradient = initialized ? depth_gradient + partial_gradient : partial_gradient;
+          initialized = true;
+        }
+        const size_t depth_index = round * dimension + input;
+        grads->d_depth_embedding[depth_index] = depth_gradient;
+        if (grads->depth_max_level != nullptr) grads->depth_max_level[depth_index] = highest_level;
       }
     }
   }

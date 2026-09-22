@@ -62,6 +62,8 @@ target_link_libraries(omega_recurrent_matrix_view_test PRIVATE omega_recurrent)
 add_executable(omega_recurrent_runtime_test omega_recurrent_runtime_test.cpp)
 target_link_libraries(omega_recurrent_runtime_test PRIVATE omega_recurrent)
 
+add_executable(omega_depth_reduction_local_test omega_depth_reduction_local_test.cpp)
+
 add_executable(omega_fc1_microbenchmark fc1_microbenchmark.cpp)
 add_executable(omega_fc2_microbenchmark fc2_microbenchmark.cpp)
 add_executable(omega_qkv_microbenchmark qkv_microbenchmark.cpp)
@@ -72,6 +74,7 @@ if(MSVC)
   target_compile_options(omega_recurrent_instrumentation_equivalence_test PRIVATE /W4 /permissive- /fp:precise)
   target_compile_options(omega_recurrent_matrix_view_test PRIVATE /W4 /permissive- /fp:precise)
   target_compile_options(omega_recurrent_runtime_test PRIVATE /W4 /permissive- /fp:precise)
+  target_compile_options(omega_depth_reduction_local_test PRIVATE /O2 /W4 /permissive- /fp:precise /arch:AVX2)
   target_compile_options(omega_fc1_microbenchmark PRIVATE /O2 /W4 /permissive- /fp:precise /arch:AVX2)
   target_compile_options(omega_fc2_microbenchmark PRIVATE /O2 /W4 /permissive- /fp:precise /arch:AVX2)
   target_compile_options(omega_qkv_microbenchmark PRIVATE /O2 /W4 /permissive- /fp:precise /arch:AVX2)
@@ -81,6 +84,7 @@ else()
   target_compile_options(omega_recurrent_instrumentation_equivalence_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   target_compile_options(omega_recurrent_matrix_view_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   target_compile_options(omega_recurrent_runtime_test PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+  target_compile_options(omega_depth_reduction_local_test PRIVATE -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   target_compile_options(omega_fc1_microbenchmark PRIVATE -O2 -mavx2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   target_compile_options(omega_fc2_microbenchmark PRIVATE -O2 -mavx2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
   target_compile_options(omega_qkv_microbenchmark PRIVATE -O2 -mavx2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
@@ -150,4 +154,8 @@ add_test(
 add_test(
   NAME omega_recurrent_runtime
   COMMAND omega_recurrent_runtime_test
+)
+add_test(
+  NAME omega_depth_reduction_local
+  COMMAND omega_depth_reduction_local_test
 )

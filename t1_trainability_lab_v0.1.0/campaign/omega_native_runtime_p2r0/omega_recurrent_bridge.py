@@ -8,6 +8,7 @@ native implementation.
 from __future__ import annotations
 
 import ctypes
+import atexit
 import os
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -23,6 +24,8 @@ _LAST_SUM_ABS_CONTRIBUTIONS: dict[str, Tensor] = {}
 _LAST_CONTRIBUTION_COUNTS: dict[str, Tensor] = {}
 _LAST_FP64_D_DEPTH_EMBEDDING: Tensor | None = None
 _LAST_DEPTH_MAX_LEVEL: Tensor | None = None
+_RUNTIME_HANDLES: dict[int, ctypes.c_void_p] = {}
+_SELECTED_RUNTIME_THREADS: int | None = None
 
 
 class _OmegaRecurrentConfig(ctypes.Structure):
@@ -162,6 +165,8 @@ def configure_library(path: str | os.PathLike[str]) -> None:
     resolved = Path(path).resolve()
     if not resolved.is_file():
         raise FileNotFoundError(resolved)
+    if _RUNTIME_HANDLES:
+        shutdown_runtime()
     _LIBRARY = _load_library(resolved)
 
 
@@ -196,6 +201,32 @@ def _load_library(path: Path) -> ctypes.CDLL:
         grads_pointer,
     ]
     library.omega_recurrent_backward.restype = ctypes.c_int
+    try:
+        runtime_create = library.omega_runtime_create
+        runtime_destroy = library.omega_runtime_destroy
+        runtime_workspace_bytes = library.omega_runtime_workspace_bytes
+        runtime_forward = library.omega_runtime_forward
+        runtime_backward = library.omega_runtime_backward
+    except AttributeError:
+        library._omega_runtime_available = False
+    else:
+        runtime_create.argtypes = [ctypes.c_size_t]
+        runtime_create.restype = ctypes.c_void_p
+        runtime_destroy.argtypes = [ctypes.c_void_p]
+        runtime_destroy.restype = None
+        runtime_workspace_bytes.argtypes = [ctypes.c_void_p, _OmegaRecurrentConfig]
+        runtime_workspace_bytes.restype = ctypes.c_size_t
+        runtime_forward.argtypes = [
+            ctypes.c_void_p, config_pointer, params_pointer, _FloatPointer, _FloatPointer,
+            _FloatPointer, _FloatPointer, ctypes.c_void_p, ctypes.c_size_t,
+        ]
+        runtime_forward.restype = ctypes.c_int
+        runtime_backward.argtypes = [
+            ctypes.c_void_p, config_pointer, params_pointer, _FloatPointer, _FloatPointer,
+            _FloatPointer, ctypes.c_void_p, ctypes.c_size_t, grads_pointer,
+        ]
+        runtime_backward.restype = ctypes.c_int
+        library._omega_runtime_available = True
     return library
 
 
@@ -210,6 +241,53 @@ def _library() -> ctypes.CDLL:
         searched = ", ".join(str(path) for path in _candidate_library_paths())
         raise FileNotFoundError(f"omega_recurrent.dll not found; searched: {searched}")
     return _LIBRARY
+
+
+def runtime_abi_available() -> bool:
+    return bool(getattr(_library(), "_omega_runtime_available", False))
+
+
+def configure_runtime(num_threads: int | None) -> None:
+    """Select persistent native runtime; None restores legacy serial ABI."""
+    global _SELECTED_RUNTIME_THREADS
+    if num_threads is None:
+        _SELECTED_RUNTIME_THREADS = None
+        return
+    if isinstance(num_threads, bool) or not isinstance(num_threads, int) or num_threads not in (1, 2, 4):
+        raise ValueError("num_threads must be 1, 2, or 4")
+    library = _library()
+    if not getattr(library, "_omega_runtime_available", False):
+        raise RuntimeError("native library lacks persistent runtime ABI")
+    handle = _RUNTIME_HANDLES.get(num_threads)
+    if handle is None:
+        raw_handle = library.omega_runtime_create(num_threads)
+        if not raw_handle:
+            raise RuntimeError(f"omega_runtime_create({num_threads}) failed")
+        handle = ctypes.c_void_p(raw_handle)
+        _RUNTIME_HANDLES[num_threads] = handle
+    _SELECTED_RUNTIME_THREADS = num_threads
+
+
+def shutdown_runtime() -> None:
+    global _SELECTED_RUNTIME_THREADS
+    library = _LIBRARY
+    if library is not None and getattr(library, "_omega_runtime_available", False):
+        for handle in _RUNTIME_HANDLES.values():
+            library.omega_runtime_destroy(handle)
+    _RUNTIME_HANDLES.clear()
+    _SELECTED_RUNTIME_THREADS = None
+
+
+def _selected_runtime() -> tuple[int, ctypes.c_void_p] | None:
+    if _SELECTED_RUNTIME_THREADS is None:
+        return None
+    handle = _RUNTIME_HANDLES.get(_SELECTED_RUNTIME_THREADS)
+    if handle is None:
+        raise RuntimeError("runtime selection lost its native handle")
+    return _SELECTED_RUNTIME_THREADS, handle
+
+
+atexit.register(shutdown_runtime)
 
 
 def _validate_tensor(value: Tensor, name: str, shape: Sequence[int], *, contiguous: bool = True) -> None:
@@ -308,9 +386,15 @@ class OmegaRecurrentFunction(torch.autograd.Function):
             raise TypeError("rounds must be an integer")
         config, params = _validate_inputs(tensor_args, rounds)  # type: ignore[arg-type]
         library = _library()
-        workspace_bytes = int(library.omega_recurrent_workspace_bytes(config))
+        selected_runtime = _selected_runtime()
+        runtime_handle = None if selected_runtime is None or selected_runtime[0] == 1 else selected_runtime[1]
+        workspace_bytes = int(
+            library.omega_recurrent_workspace_bytes(config)
+            if runtime_handle is None
+            else library.omega_runtime_workspace_bytes(runtime_handle, config)
+        )
         if workspace_bytes <= 0:
-            raise RuntimeError("omega_recurrent_workspace_bytes returned zero")
+            raise RuntimeError("runtime workspace_bytes returned zero")
         token_part, previous_state = tensor_args[:2]  # type: ignore[assignment]
         workspace = torch.empty(workspace_bytes, dtype=torch.uint8, device="cpu")
         next_state = torch.empty_like(previous_state)
@@ -319,19 +403,33 @@ class OmegaRecurrentFunction(torch.autograd.Function):
             dtype=torch.float32,
             device="cpu",
         )
-        status = library.omega_recurrent_forward(
-            ctypes.byref(config),
-            ctypes.byref(params),
-            _float_pointer(token_part),
-            _float_pointer(previous_state),
-            _float_pointer(next_state),
-            _float_pointer(readout_states),
-            ctypes.c_void_p(int(workspace.data_ptr())),
-            workspace_bytes,
-        )
+        if runtime_handle is None:
+            status = library.omega_recurrent_forward(
+                ctypes.byref(config),
+                ctypes.byref(params),
+                _float_pointer(token_part),
+                _float_pointer(previous_state),
+                _float_pointer(next_state),
+                _float_pointer(readout_states),
+                ctypes.c_void_p(int(workspace.data_ptr())),
+                workspace_bytes,
+            )
+        else:
+            status = library.omega_runtime_forward(
+                runtime_handle,
+                ctypes.byref(config),
+                ctypes.byref(params),
+                _float_pointer(token_part),
+                _float_pointer(previous_state),
+                _float_pointer(next_state),
+                _float_pointer(readout_states),
+                ctypes.c_void_p(int(workspace.data_ptr())),
+                workspace_bytes,
+            )
         _raise_status("forward", int(status))
         ctx.save_for_backward(*tensor_args, workspace)  # type: ignore[arg-type]
         ctx.config = config
+        ctx.runtime_handle = runtime_handle
         return next_state, readout_states
 
     @staticmethod
@@ -379,16 +477,30 @@ class OmegaRecurrentFunction(torch.autograd.Function):
             ),
             *(_float_pointer(value) for value in parameters[1:]),
         )
-        status = library.omega_recurrent_backward(
-            ctypes.byref(config),
-            ctypes.byref(params),
-            _float_pointer(token_part),
-            _float_pointer(upstream_readout),
-            _float_pointer(upstream_next),
-            ctypes.c_void_p(int(workspace.data_ptr())),
-            int(workspace.numel()),
-            ctypes.byref(grads),
-        )
+        runtime_handle = getattr(ctx, "runtime_handle", None)
+        if runtime_handle is None:
+            status = library.omega_recurrent_backward(
+                ctypes.byref(config),
+                ctypes.byref(params),
+                _float_pointer(token_part),
+                _float_pointer(upstream_readout),
+                _float_pointer(upstream_next),
+                ctypes.c_void_p(int(workspace.data_ptr())),
+                int(workspace.numel()),
+                ctypes.byref(grads),
+            )
+        else:
+            status = library.omega_runtime_backward(
+                runtime_handle,
+                ctypes.byref(config),
+                ctypes.byref(params),
+                _float_pointer(token_part),
+                _float_pointer(upstream_readout),
+                _float_pointer(upstream_next),
+                ctypes.c_void_p(int(workspace.data_ptr())),
+                int(workspace.numel()),
+                ctypes.byref(grads),
+            )
         _raise_status("backward", int(status))
         _LAST_SUM_ABS_CONTRIBUTIONS = {
             name: value.detach().clone()

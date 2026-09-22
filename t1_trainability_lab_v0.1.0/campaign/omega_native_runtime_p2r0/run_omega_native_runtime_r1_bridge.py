@@ -356,6 +356,7 @@ def run_comparison(
     cache_file: Path,
     dll_path: Path | None,
     progress_log: Path | None,
+    threads: int = 1,
 ) -> dict[str, Any]:
     if k not in (1, 4):
         raise ValueError("K must be 1 or 4")
@@ -363,6 +364,7 @@ def run_comparison(
         raise ValueError("updates must be positive")
     if dll_path is not None:
         bridge.configure_library(dll_path)
+    bridge.configure_runtime(threads)
     documents, _, payload, teacher_weight, teacher_bias = _load_p0_inputs(manifest_path, cache_file)
     reference_model = ce.fresh_model(20260913, k)
     candidate_model = ce.fresh_model(20260913, k)
@@ -439,25 +441,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, default=p0.SEALED_MANIFEST)
     parser.add_argument("--cache-file", type=Path, default=p0.DEFAULT_CACHE_FILE)
     parser.add_argument("--dll", type=Path, default=None)
+    parser.add_argument("--threads", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--output", type=Path, default=HERE / "results" / "r1_bridge_report.json")
     parser.add_argument("--progress-log", type=Path, default=None)
     args = parser.parse_args(argv)
     require_real_authorization(args.confirm_real_execution)
     combinations = args.k or [1, 4]
-    report: dict[str, Any] = {"campaign_id": "OMEGA-NATIVE-RUNTIME-R1-BRIDGE", "status": "PASS", "combinations": {}}
-    for k in combinations:
-        report["combinations"][f"K{k}"] = run_comparison(
-            k=k,
-            updates=args.updates,
-            manifest_path=args.manifest,
-            cache_file=args.cache_file,
-            dll_path=args.dll,
-            progress_log=args.progress_log or args.output.with_suffix(".progress.jsonl"),
-        )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps({"campaign_id": report["campaign_id"], "status": report["status"], "combinations": list(report["combinations"]), "output": str(args.output)}, sort_keys=True))
-    return 0
+    try:
+        report: dict[str, Any] = {
+            "campaign_id": "OMEGA-NATIVE-RUNTIME-R1-BRIDGE",
+            "status": "PASS",
+            "threads": args.threads,
+            "combinations": {},
+        }
+        for k in combinations:
+            report["combinations"][f"K{k}"] = run_comparison(
+                k=k,
+                updates=args.updates,
+                manifest_path=args.manifest,
+                cache_file=args.cache_file,
+                dll_path=args.dll,
+                progress_log=args.progress_log or args.output.with_suffix(".progress.jsonl"),
+                threads=args.threads,
+            )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        print(json.dumps({"campaign_id": report["campaign_id"], "status": report["status"], "threads": report["threads"], "combinations": list(report["combinations"]), "output": str(args.output)}, sort_keys=True))
+        return 0
+    finally:
+        bridge.shutdown_runtime()
 
 
 if __name__ == "__main__":
