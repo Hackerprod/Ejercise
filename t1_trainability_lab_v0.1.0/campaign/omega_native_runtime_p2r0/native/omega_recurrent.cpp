@@ -589,6 +589,28 @@ inline float horizontal_sum(__m256 value) {
   return _mm_cvtss_f32(sum);
 }
 
+inline float state_prelude_write(const float* token_part, const OmegaMatrixViewF32& state_part_weight,
+    size_t flattened, const float* mean_state, size_t dimension) {
+  float write = token_part[flattened];
+  const float* state_part_row = state_part_weight.data + flattened * static_cast<size_t>(state_part_weight.row_stride);
+  __m256 sum = _mm256_setzero_ps();
+  size_t input = 0;
+  for (; input + 8 <= dimension; input += 8) {
+    sum = _mm256_add_ps(sum, _mm256_mul_ps(_mm256_loadu_ps(state_part_row + input), _mm256_loadu_ps(mean_state + input)));
+  }
+  write += horizontal_sum(sum);
+  for (; input < dimension; ++input) write += state_part_row[input] * mean_state[input];
+  return write;
+}
+#else
+inline float state_prelude_write(const float* token_part, const OmegaMatrixViewF32& state_part_weight,
+    size_t flattened, const float* mean_state, size_t dimension) {
+  float write = token_part[flattened];
+  const float* state_part_row = state_part_weight.data + flattened * static_cast<size_t>(state_part_weight.row_stride);
+  for (size_t input = 0; input < dimension; ++input) write += state_part_row[input] * mean_state[input];
+  return write;
+}
+
 #endif
 
 void clear_optional_contribution_sums(const OmegaRecurrentConfig& config, const OmegaRecurrentGrads& grads, size_t state_count,
@@ -811,6 +833,24 @@ int recurrent_forward_impl(
       } else {
         OMEGA_PROFILE_SCOPE(ProfileDirection::kForward, ProfileStage::kStatePrelude);
         float* mean_state = mixed + batch * state_dimension;
+#if OMEGA_HAS_AVX2
+        const __m256 inverse_slots = _mm256_set1_ps(1.0F / static_cast<float>(slots));
+        size_t input = 0;
+        for (; input + 8 <= dimension; input += 8) {
+          __m256 mean = _mm256_setzero_ps();
+          for (size_t slot = 0; slot < slots; ++slot) {
+            mean = _mm256_add_ps(mean, _mm256_loadu_ps(state + state_index(batch, slot, input, slots, dimension)));
+          }
+          _mm256_storeu_ps(mean_state + input, _mm256_mul_ps(mean, inverse_slots));
+        }
+        for (; input < dimension; ++input) {
+          float mean = 0.0F;
+          for (size_t slot = 0; slot < slots; ++slot) {
+            mean += state[state_index(batch, slot, input, slots, dimension)];
+          }
+          mean_state[input] = mean / static_cast<float>(slots);
+        }
+#else
         for (size_t input = 0; input < dimension; ++input) {
           float mean = 0.0F;
           for (size_t slot = 0; slot < slots; ++slot) {
@@ -818,14 +858,11 @@ int recurrent_forward_impl(
           }
           mean_state[input] = mean / static_cast<float>(slots);
         }
+#endif
         for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
-          float write = token_part[(batch * config->sequence_length + position) * state_dimension + flattened];
-          for (size_t input = 0; input < dimension; ++input) {
-            const float* state_part_row = params->state_part_weight.data +
-                flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-            write += state_part_row[input] * mean_state[input];
-          }
-          anchor[batch * state_dimension + flattened] = write;
+          const float* token_row = token_part + (batch * config->sequence_length + position) * state_dimension;
+          anchor[batch * state_dimension + flattened] = state_prelude_write(
+              token_row, params->state_part_weight, flattened, mean_state, dimension);
         }
       }
 
@@ -1932,91 +1969,145 @@ int recurrent_backward_impl(
           add_abs_contribution(grads->sum_abs_d_token_part, grads->count_d_token_part, position_index, anchor[index]);
         }
         std::memset(state, 0, state_count * sizeof(float));
-      } else {
-      {
-        OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kStatePrelude);
-     const float* saved_state = training_buffers.state_history + position * state_count;
-     for (size_t batch = 0; batch < config->batch; ++batch) {
-       float pre_norm_sum = 0.0F;
-       for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
-        float write = token_part[(batch * config->sequence_length + position) * state_dimension + flattened];
+       } else {
+       {
+         OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kStatePrelude);
+      const float* saved_state = training_buffers.state_history + position * state_count;
+      for (size_t batch = 0; batch < config->batch; ++batch) {
+        const float* token_row = token_part + (batch * config->sequence_length + position) * state_dimension;
+        float* mean_state = mixed + batch * state_dimension;
+#if OMEGA_HAS_AVX2
+        const __m256 inverse_slots = _mm256_set1_ps(1.0F / static_cast<float>(slots));
+        size_t input = 0;
+        for (; input + 8 <= dimension; input += 8) {
+          __m256 mean = _mm256_setzero_ps();
+          for (size_t slot = 0; slot < slots; ++slot) {
+            mean = _mm256_add_ps(mean, _mm256_loadu_ps(saved_state + state_index(batch, slot, input, slots, dimension)));
+          }
+          _mm256_storeu_ps(mean_state + input, _mm256_mul_ps(mean, inverse_slots));
+        }
+        for (; input < dimension; ++input) {
+          float mean = 0.0F;
+          for (size_t slot = 0; slot < slots; ++slot) {
+            mean += saved_state[state_index(batch, slot, input, slots, dimension)];
+          }
+          mean_state[input] = mean / static_cast<float>(slots);
+        }
+#else
         for (size_t input = 0; input < dimension; ++input) {
           float mean = 0.0F;
           for (size_t slot = 0; slot < slots; ++slot) {
             mean += saved_state[state_index(batch, slot, input, slots, dimension)];
           }
-          mean /= static_cast<float>(slots);
-          const float* state_part_row = params->state_part_weight.data +
-              flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-          write += state_part_row[input] * mean;
+          mean_state[input] = mean / static_cast<float>(slots);
         }
-        const float pre = saved_state[batch * state_dimension + flattened] + write;
-         pre_norm_sum += pre * pre;
-       }
-       const float inverse_rms = 1.0F / std::sqrt(pre_norm_sum / static_cast<float>(state_dimension) + kEpsilon);
-       float norm_dot = 0.0F;
-       for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
-        float write = token_part[(batch * config->sequence_length + position) * state_dimension + flattened];
-        for (size_t input = 0; input < dimension; ++input) {
-          float mean = 0.0F;
-          for (size_t slot = 0; slot < slots; ++slot) {
-            mean += saved_state[state_index(batch, slot, input, slots, dimension)];
-          }
-          mean /= static_cast<float>(slots);
-          const float* state_part_row = params->state_part_weight.data +
-              flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-          write += state_part_row[input] * mean;
+#endif
+        float pre_norm_sum = 0.0F;
+        for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
+         const float write = state_prelude_write(token_row, params->state_part_weight, flattened, mean_state, dimension);
+         const float pre = saved_state[batch * state_dimension + flattened] + write;
+          pre_norm_sum += pre * pre;
         }
-        const float pre = saved_state[batch * state_dimension + flattened] + write;
-         norm_dot += anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * pre;
-       }
-       const float inverse_rms_cubed_over_dimension = inverse_rms * inverse_rms * inverse_rms / static_cast<float>(state_dimension);
-       for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
-        float write = token_part[(batch * config->sequence_length + position) * state_dimension + flattened];
-        for (size_t input = 0; input < dimension; ++input) {
-          float mean = 0.0F;
-          for (size_t slot = 0; slot < slots; ++slot) {
-            mean += saved_state[state_index(batch, slot, input, slots, dimension)];
-          }
-          mean /= static_cast<float>(slots);
-          const float* state_part_row = params->state_part_weight.data +
-              flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-          write += state_part_row[input] * mean;
+        const float inverse_rms = 1.0F / std::sqrt(pre_norm_sum / static_cast<float>(state_dimension) + kEpsilon);
+        float norm_dot = 0.0F;
+        for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
+         const float write = state_prelude_write(token_row, params->state_part_weight, flattened, mean_state, dimension);
+         const float pre = saved_state[batch * state_dimension + flattened] + write;
+          norm_dot += anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * pre;
         }
-        const float pre = saved_state[batch * state_dimension + flattened] + write;
-        const float d_pre = anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * inverse_rms - pre * inverse_rms_cubed_over_dimension * norm_dot;
-        const float prelude_norm_contribution = anchor[batch * state_dimension + flattened] * pre * inverse_rms;
+        const float inverse_rms_cubed_over_dimension = inverse_rms * inverse_rms * inverse_rms / static_cast<float>(state_dimension);
+#if OMEGA_HAS_AVX2
+        std::memset(update + batch * state_dimension, 0, dimension * sizeof(float));
+        for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
+         const float write = state_prelude_write(token_row, params->state_part_weight, flattened, mean_state, dimension);
+         const float pre = saved_state[batch * state_dimension + flattened] + write;
+         const float d_pre = anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * inverse_rms - pre * inverse_rms_cubed_over_dimension * norm_dot;
+         const float prelude_norm_contribution = anchor[batch * state_dimension + flattened] * pre * inverse_rms;
         grads->d_prelude_norm_weight[flattened] += prelude_norm_contribution;
         add_abs_contribution(grads->sum_abs_d_prelude_norm_weight, grads->count_d_prelude_norm_weight, flattened, prelude_norm_contribution);
         grads->d_token_part[(batch * config->sequence_length + position) * state_dimension + flattened] += d_pre;
-        add_abs_contribution(grads->sum_abs_d_token_part, grads->count_d_token_part, (batch * config->sequence_length + position) * state_dimension + flattened, d_pre);
-        state[batch * state_dimension + flattened] = d_pre;
-        for (size_t input = 0; input < dimension; ++input) {
-          float mean = 0.0F;
-          for (size_t slot = 0; slot < slots; ++slot) {
-            mean += saved_state[state_index(batch, slot, input, slots, dimension)];
+         add_abs_contribution(grads->sum_abs_d_token_part, grads->count_d_token_part, (batch * config->sequence_length + position) * state_dimension + flattened, d_pre);
+         state[batch * state_dimension + flattened] = d_pre;
+         const float* state_part_row = params->state_part_weight.data +
+             flattened * static_cast<size_t>(params->state_part_weight.row_stride);
+         float* gradient_row = grads->d_state_part_weight + flattened * dimension;
+         const __m256 d_pre_vector = _mm256_set1_ps(d_pre);
+          size_t input_index = 0;
+          for (; input_index + 8 <= dimension; input_index += 8) {
+            const __m256 mean_vector = _mm256_loadu_ps(mean_state + input_index);
+            const __m256 contribution = _mm256_mul_ps(d_pre_vector, mean_vector);
+            _mm256_storeu_ps(gradient_row + input_index, _mm256_add_ps(_mm256_loadu_ps(gradient_row + input_index), contribution));
+            _mm256_storeu_ps(update + batch * state_dimension + input_index, _mm256_add_ps(
+                _mm256_loadu_ps(update + batch * state_dimension + input_index),
+                _mm256_mul_ps(_mm256_loadu_ps(state_part_row + input_index), d_pre_vector)));
+            for (size_t lane = 0; lane < 8; ++lane) {
+              const float state_part_contribution = d_pre * mean_state[input_index + lane];
+              add_abs_contribution(grads->sum_abs_d_state_part_weight, grads->count_d_state_part_weight,
+                  flattened * dimension + input_index + lane, state_part_contribution);
+            }
           }
-          mean /= static_cast<float>(slots);
-          const float state_part_contribution = d_pre * mean;
-          grads->d_state_part_weight[flattened * dimension + input] += state_part_contribution;
-           add_abs_contribution(grads->sum_abs_d_state_part_weight, grads->count_d_state_part_weight, flattened * dimension + input, state_part_contribution);
-         }
-       }
-       for (size_t input = 0; input < dimension; ++input) {
-        float d_mean = 0.0F;
-        for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
-          const float* state_part_row = params->state_part_weight.data +
-              flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-          d_mean += state[batch * state_dimension + flattened] * state_part_row[input];
+          for (; input_index < dimension; ++input_index) {
+            const float state_part_contribution = d_pre * mean_state[input_index];
+            gradient_row[input_index] += state_part_contribution;
+            update[batch * state_dimension + input_index] += d_pre * state_part_row[input_index];
+            add_abs_contribution(grads->sum_abs_d_state_part_weight, grads->count_d_state_part_weight,
+                flattened * dimension + input_index, state_part_contribution);
+          }
         }
-        anchor[batch * state_dimension + input] = d_mean / static_cast<float>(slots);
-      }
-      for (size_t slot = 0; slot < slots; ++slot) {
+        for (size_t tail_input = dimension & ~size_t{7}; tail_input < dimension; ++tail_input) {
+          update[batch * state_dimension + tail_input] /= static_cast<float>(slots);
+        }
+        for (size_t vector_input = 0; vector_input + 8 <= dimension; vector_input += 8) {
+          _mm256_storeu_ps(update + batch * state_dimension + vector_input, _mm256_mul_ps(
+              _mm256_loadu_ps(update + batch * state_dimension + vector_input), inverse_slots));
+        }
+#else
+        for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
+         const float write = state_prelude_write(token_row, params->state_part_weight, flattened, mean_state, dimension);
+         const float pre = saved_state[batch * state_dimension + flattened] + write;
+         const float d_pre = anchor[batch * state_dimension + flattened] * params->prelude_norm_weight[flattened] * inverse_rms - pre * inverse_rms_cubed_over_dimension * norm_dot;
+         const float prelude_norm_contribution = anchor[batch * state_dimension + flattened] * pre * inverse_rms;
+         grads->d_prelude_norm_weight[flattened] += prelude_norm_contribution;
+         add_abs_contribution(grads->sum_abs_d_prelude_norm_weight, grads->count_d_prelude_norm_weight, flattened, prelude_norm_contribution);
+         grads->d_token_part[(batch * config->sequence_length + position) * state_dimension + flattened] += d_pre;
+          add_abs_contribution(grads->sum_abs_d_token_part, grads->count_d_token_part, (batch * config->sequence_length + position) * state_dimension + flattened, d_pre);
+          state[batch * state_dimension + flattened] = d_pre;
+          for (size_t input = 0; input < dimension; ++input) {
+           const float state_part_contribution = d_pre * mean_state[input];
+           grads->d_state_part_weight[flattened * dimension + input] += state_part_contribution;
+           add_abs_contribution(grads->sum_abs_d_state_part_weight, grads->count_d_state_part_weight,
+               flattened * dimension + input, state_part_contribution);
+         }
+        }
         for (size_t input = 0; input < dimension; ++input) {
-          state[state_index(batch, slot, input, slots, dimension)] += anchor[batch * state_dimension + input];
+         float d_mean = 0.0F;
+         for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
+           const float* state_part_row = params->state_part_weight.data +
+               flattened * static_cast<size_t>(params->state_part_weight.row_stride);
+           d_mean += state[batch * state_dimension + flattened] * state_part_row[input];
+         }
+         update[batch * state_dimension + input] = d_mean / static_cast<float>(slots);
+       }
+#endif
+       for (size_t slot = 0; slot < slots; ++slot) {
+#if OMEGA_HAS_AVX2
+          const size_t base = state_index(batch, slot, 0, slots, dimension);
+          size_t distribution_input = 0;
+          for (; distribution_input + 8 <= dimension; distribution_input += 8) {
+            _mm256_storeu_ps(state + base + distribution_input, _mm256_add_ps(
+                _mm256_loadu_ps(state + base + distribution_input),
+                _mm256_loadu_ps(update + batch * state_dimension + distribution_input)));
+          }
+          for (; distribution_input < dimension; ++distribution_input) {
+            state[base + distribution_input] += update[batch * state_dimension + distribution_input];
+          }
+#else
+         for (size_t input = 0; input < dimension; ++input) {
+           state[state_index(batch, slot, input, slots, dimension)] += update[batch * state_dimension + input];
+         }
+#endif
+       }
       }
-      }
-    }
    }
    }
   }
