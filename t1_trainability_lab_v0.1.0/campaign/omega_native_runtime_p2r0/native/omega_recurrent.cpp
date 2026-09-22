@@ -810,17 +810,20 @@ int recurrent_forward_impl(
             state_dimension * sizeof(float));
       } else {
         OMEGA_PROFILE_SCOPE(ProfileDirection::kForward, ProfileStage::kStatePrelude);
+        float* mean_state = mixed + batch * state_dimension;
+        for (size_t input = 0; input < dimension; ++input) {
+          float mean = 0.0F;
+          for (size_t slot = 0; slot < slots; ++slot) {
+            mean += state[state_index(batch, slot, input, slots, dimension)];
+          }
+          mean_state[input] = mean / static_cast<float>(slots);
+        }
         for (size_t flattened = 0; flattened < state_dimension; ++flattened) {
           float write = token_part[(batch * config->sequence_length + position) * state_dimension + flattened];
           for (size_t input = 0; input < dimension; ++input) {
-            float mean = 0.0F;
-            for (size_t slot = 0; slot < slots; ++slot) {
-              mean += state[state_index(batch, slot, input, slots, dimension)];
-            }
-            mean /= static_cast<float>(slots);
             const float* state_part_row = params->state_part_weight.data +
                 flattened * static_cast<size_t>(params->state_part_weight.row_stride);
-            write += state_part_row[input] * mean;
+            write += state_part_row[input] * mean_state[input];
           }
           anchor[batch * state_dimension + flattened] = write;
         }
