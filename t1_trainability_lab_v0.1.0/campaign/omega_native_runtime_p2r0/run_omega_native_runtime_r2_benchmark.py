@@ -374,11 +374,19 @@ def run_preflight(*, route: str) -> dict[str, Any]:
     return result
 
 
-def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: Path, cache_file: Path, profile: bool = False) -> dict[str, Any]:
+def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: Path, cache_file: Path,
+               profile: bool = False, dll_path: Path | None = None, runtime_threads: int = 4) -> dict[str, Any]:
     if updates <= 0 or warmup_updates < 0:
         raise ValueError("updates must be positive and warmup_updates non-negative")
     p0, ce, bridge = _load_r1_modules()
     native, k = route_parts(route)
+    if native:
+        if dll_path is None:
+            raise ValueError("native stable phase requires --dll")
+        bridge.configure_library(dll_path)
+        if not bridge.runtime_abi_available():
+            raise RuntimeError("native stable phase requires persistent runtime ABI")
+        bridge.configure_runtime(runtime_threads)
     if profile and (not native or k != 1):
         raise ValueError("profile phase is restricted to native-k1")
     documents, payload, teacher_weight, teacher_bias = _load_inputs(p0, manifest_path, cache_file)
@@ -430,6 +438,7 @@ def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: 
         "route": route,
         "K": k,
         "native": native,
+        "runtime_threads": runtime_threads if native else None,
         "warmup": {"updates": warmup_updates, "measured": False},
         "measured": {"updates": updates, "measured": True},
         "updates": measured_records,
@@ -442,7 +451,7 @@ def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: 
     return result
 
 
-def run_profile(*, manifest_path: Path, cache_file: Path) -> dict[str, Any]:
+def run_profile(*, manifest_path: Path, cache_file: Path, dll_path: Path | None = None) -> dict[str, Any]:
     """Run only the explicitly authorized bounded native K1 profile route."""
     return run_stable(
         route="native-k1",
@@ -451,6 +460,7 @@ def run_profile(*, manifest_path: Path, cache_file: Path) -> dict[str, Any]:
         manifest_path=manifest_path,
         cache_file=cache_file,
         profile=True,
+        dll_path=dll_path,
     )
 
 
@@ -463,6 +473,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--confirm-real-execution", action="store_true")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--cache-file", type=Path)
+    parser.add_argument("--dll", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
@@ -490,6 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "campaign_id": "OMEGA-NATIVE-RUNTIME-P2-R2",
                 "phase": args.phase,
                 "policy": policy_metadata(),
+                "runtime_threads": 4 if any(route.startswith("native-") for route in routes) else None,
                 "routes": route_reports,
                 "aggregation": aggregate_performance(route_reports),
             }
@@ -503,6 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     warmup_updates=args.warmup_updates,
                     manifest_path=args.manifest,
                     cache_file=args.cache_file,
+                    dll_path=args.dll,
                 )
                 for route in routes
             }
@@ -510,6 +523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "campaign_id": "OMEGA-NATIVE-RUNTIME-P2-R2",
                 "phase": args.phase,
                 "policy": policy_metadata(),
+                "runtime_threads": 4 if any(route.startswith("native-") for route in routes) else None,
                 "routes": route_reports,
                 "aggregation": aggregate_performance(route_reports),
             }
@@ -524,7 +538,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "phase": "profile",
                 "real_corpus_or_model_benchmark": True,
                 "authorization": "explicit --confirm-real-execution",
-                "route": run_profile(manifest_path=args.manifest, cache_file=args.cache_file),
+                "route": run_profile(manifest_path=args.manifest, cache_file=args.cache_file, dll_path=args.dll),
             }
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.output is not None:
