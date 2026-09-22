@@ -105,6 +105,20 @@ typedef struct OmegaRecurrentGrads {
   size_t* depth_max_level;
 } OmegaRecurrentGrads;
 
+typedef struct OmegaRuntime OmegaRuntime;
+
+enum {
+  OMEGA_RUNTIME_STATUS_OK = 0,
+  OMEGA_RUNTIME_STATUS_INVALID_HANDLE = 100,
+  OMEGA_RUNTIME_STATUS_INVALID_WORKER_COUNT = 101,
+  OMEGA_RUNTIME_STATUS_INVALID_PARTITION = 102,
+  OMEGA_RUNTIME_STATUS_PROFILE_GUARD = 103,
+  OMEGA_RUNTIME_STATUS_WORKSPACE = 104,
+  OMEGA_RUNTIME_STATUS_BUSY = 105,
+  OMEGA_RUNTIME_STATUS_INVALID_ARGUMENT = 106,
+  OMEGA_RUNTIME_STATUS_WORKER_FAILURE = 107,
+};
+
 /* Temporary high-level regression profile. Present only in profile builds. */
 #ifdef OMEGA_PROFILE_INTERNAL
 typedef struct OmegaRecurrentProfileDirection {
@@ -139,6 +153,29 @@ typedef struct OmegaRecurrentProfileSnapshot {
 } OmegaRecurrentProfileSnapshot;
 #endif
 
+#ifdef OMEGA_P2R_DIAGNOSTIC
+enum {
+  OMEGA_DIAGNOSTIC_ELIDE_ATTENTION_SCORES_SOFTMAX_MIXING = 1u << 0,
+  OMEGA_DIAGNOSTIC_ELIDE_DEPTH_EMBEDDING_PAIRWISE = 1u << 1,
+  OMEGA_DIAGNOSTIC_ELIDE_RMSNORM_GATES = 1u << 2,
+  OMEGA_DIAGNOSTIC_ELIDE_STATE_PRELUDE = 1u << 3,
+  OMEGA_DIAGNOSTIC_ELIDE_HISTORY_BUFFER = 1u << 4,
+  OMEGA_DIAGNOSTIC_ELIDE_DEPTH_EMBEDDING_CARRY = 1u << 5,
+};
+
+typedef struct OmegaRuntimeDiagnosticSnapshot {
+  uint64_t call_sequence;
+  size_t worker_count;
+  uint64_t dispatch_start_ns;
+  uint64_t worker_start_ns[4];
+  uint64_t worker_end_ns[4];
+  uint64_t all_workers_done_ns;
+  uint64_t final_gradient_reduction_start_ns;
+  uint64_t final_gradient_reduction_end_ns;
+  uint64_t return_ns;
+} OmegaRuntimeDiagnosticSnapshot;
+#endif
+
 /* Returns zero for invalid dimensions or size overflow. */
 OMEGA_RECURRENT_API size_t omega_recurrent_workspace_bytes(OmegaRecurrentConfig config);
 
@@ -164,11 +201,48 @@ OMEGA_RECURRENT_API int omega_recurrent_backward(
     size_t workspace_bytes,
     OmegaRecurrentGrads* grads);
 
+/* Persistent batch-parallel runtime. Invalid worker counts return nullptr. */
+OMEGA_RECURRENT_API OmegaRuntime* omega_runtime_create(size_t num_threads);
+OMEGA_RECURRENT_API int omega_runtime_create_status(size_t num_threads, OmegaRuntime** runtime);
+OMEGA_RECURRENT_API void omega_runtime_destroy(OmegaRuntime* runtime);
+
+/* Returns zero for invalid handles, dimensions, or a non-divisible batch. */
+OMEGA_RECURRENT_API size_t omega_runtime_workspace_bytes(
+    const OmegaRuntime* runtime, OmegaRecurrentConfig config);
+
+OMEGA_RECURRENT_API int omega_runtime_forward(
+    OmegaRuntime* runtime,
+    const OmegaRecurrentConfig* config,
+    const OmegaRecurrentParams* params,
+    const float* token_part,
+    const float* previous_state,
+    float* next_state,
+    float* readout_states,
+    void* workspace,
+    size_t workspace_bytes);
+
+OMEGA_RECURRENT_API int omega_runtime_backward(
+    OmegaRuntime* runtime,
+    const OmegaRecurrentConfig* config,
+    const OmegaRecurrentParams* params,
+    const float* token_part,
+    const float* d_readout_states,
+    const float* d_next_state,
+    void* workspace,
+    size_t workspace_bytes,
+    OmegaRecurrentGrads* grads);
+
 /* Temporary profiling ABI. Exported only from OMEGA_PROFILE_INTERNAL builds. */
 #ifdef OMEGA_PROFILE_INTERNAL
 OMEGA_RECURRENT_API void omega_recurrent_profile_set_enabled(int enabled);
 OMEGA_RECURRENT_API void omega_recurrent_profile_reset(void);
 OMEGA_RECURRENT_API int omega_recurrent_profile_snapshot(OmegaRecurrentProfileSnapshot* snapshot);
+#endif
+
+/* Independent diagnostic runtime timing ABI. Exported only from diagnostic builds. */
+#ifdef OMEGA_P2R_DIAGNOSTIC
+OMEGA_RECURRENT_API int omega_runtime_diagnostic_snapshot(
+    const OmegaRuntime* runtime, OmegaRuntimeDiagnosticSnapshot* snapshot);
 #endif
 
 #ifdef __cplusplus
