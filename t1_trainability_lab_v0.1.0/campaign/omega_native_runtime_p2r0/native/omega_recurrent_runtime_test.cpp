@@ -242,7 +242,7 @@ int main() {
       OmegaRecurrentConfig{256, 8, 8, 128, 4, 1, 1},
   };
   const std::array<size_t, 4> expected_t1_workspace_bytes = {
-      428104, 110037064, 526432, 388532320,
+      430152, 110039112, 528480, 388534368,
   };
   OmegaRuntime* workspace_runtime = omega_runtime_create(1);
   assert(workspace_runtime != nullptr);

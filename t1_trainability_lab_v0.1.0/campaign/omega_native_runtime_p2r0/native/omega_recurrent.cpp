@@ -19,6 +19,13 @@
 #include <new>
 #include <thread>
 
+#if defined(OMEGA_FC2_GELU_COUNT_GUARD) && !defined(OMEGA_PROFILE_INTERNAL) && !defined(OMEGA_P2R_DIAGNOSTIC)
+#include <cstdio>
+#define OMEGA_FC2_GELU_COUNT_GUARD_ACTIVE 1
+#else
+#define OMEGA_FC2_GELU_COUNT_GUARD_ACTIVE 0
+#endif
+
 #if defined(__AVX2__) || defined(_M_AVX2)
 #define OMEGA_HAS_AVX2 1
 #include <immintrin.h>
@@ -354,6 +361,10 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
   if (!checked_mul(state_count, 4, &fc1_count)) {
     return 0;
   }
+  size_t activation_count = 0;
+  if (!checked_mul(4, config.dimension, &activation_count)) {
+    return 0;
+  }
   size_t depth_bias_count = 0;
   if (!checked_mul(config.rounds, config.dimension, &depth_bias_count) || !checked_mul(depth_bias_count, 4, &depth_bias_count)) {
     return 0;
@@ -372,7 +383,8 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
       return 0;
     }
   }
-  if (!append_floats(slot_scores, &total) || !append_floats(fc1_count, &total) || !append_floats(depth_bias_count, &total)) {
+  if (!append_floats(slot_scores, &total) || !append_floats(fc1_count, &total) ||
+      !append_floats(activation_count, &total) || !append_floats(depth_bias_count, &total)) {
     return 0;
   }
   if (config.training != 0 && !append_training_storage(config, state_count, &total)) {
@@ -722,6 +734,23 @@ int recurrent_forward_impl(
   if (required == 0 || workspace_bytes < required) {
     return 2;
   }
+#if OMEGA_FC2_GELU_COUNT_GUARD_ACTIVE
+  size_t expected_activations = 0;
+  size_t expected_hidden_count = 0;
+  if (!checked_mul(4, config->dimension, &expected_hidden_count) ||
+      !checked_mul(config->batch, config->sequence_length, &expected_activations) ||
+      !checked_mul(expected_activations, config->rounds, &expected_activations) ||
+      !checked_mul(expected_activations, config->slots, &expected_activations) ||
+      !checked_mul(expected_activations, expected_hidden_count, &expected_activations)) {
+    std::fprintf(stderr,
+        "FC2 GELU count guard batch=%zu sequence_length=%zu rounds=%zu slots=%zu dimension=%zu training=%d instrumentation=%d actual=0 expected=overflow pass=0\n",
+        config->batch, config->sequence_length, config->rounds, config->slots, config->dimension,
+        config->training, config->instrumentation);
+    return 3;
+  }
+  size_t actual_activations = 0;
+  bool actual_activations_overflow = false;
+#endif
   OMEGA_PROFILE_CALL(ProfileDirection::kForward);
 
   const size_t state_count = element_count(*config);
@@ -731,6 +760,10 @@ int recurrent_forward_impl(
   }
   size_t fc1_count = 0;
   if (!checked_mul(state_count, 4, &fc1_count)) {
+    return 3;
+  }
+  size_t activation_count = 0;
+  if (!checked_mul(4, config->dimension, &activation_count)) {
     return 3;
   }
   size_t depth_bias_count = 0;
@@ -748,8 +781,9 @@ int recurrent_forward_impl(
   float* update = cursor.take(state_count);
   float* scores = cursor.take(slot_scores);
   float* fc1 = cursor.take(fc1_count);
+  float* gelu_activated = cursor.take(activation_count);
   float* depth_bias = cursor.take(depth_bias_count);
-  if (state == nullptr || anchor == nullptr || candidate == nullptr || q == nullptr || key == nullptr || value == nullptr || mixed == nullptr || update == nullptr || scores == nullptr || fc1 == nullptr || depth_bias == nullptr) {
+  if (state == nullptr || anchor == nullptr || candidate == nullptr || q == nullptr || key == nullptr || value == nullptr || mixed == nullptr || update == nullptr || scores == nullptr || fc1 == nullptr || gelu_activated == nullptr || depth_bias == nullptr) {
     return 4;
   }
   TrainingBuffers training_buffers;
@@ -1114,9 +1148,21 @@ int recurrent_forward_impl(
           float sum_squares_update = 0.0F;
           {
             OMEGA_PROFILE_SCOPE(ProfileDirection::kForward, ProfileStage::kFc2);
+            const size_t hidden_count = activation_count;
+            const size_t fc1_base = (batch * slots + slot) * hidden_count;
+            const float* hidden_input = fc1 + fc1_base;
+            for (size_t row = 0; row < hidden_count; ++row) {
+              gelu_activated[row] = gelu(hidden_input[row]);
+#if OMEGA_FC2_GELU_COUNT_GUARD_ACTIVE
+              size_t next_actual_activations = 0;
+              if (!checked_add(actual_activations, 1, &next_actual_activations)) {
+                actual_activations_overflow = true;
+              } else {
+                actual_activations = next_actual_activations;
+              }
+#endif
+            }
 #if OMEGA_HAS_AVX2
-            const size_t hidden_count = 4 * dimension;
-            const float* hidden_input = fc1 + (batch * slots + slot) * hidden_count;
             size_t d = 0;
             for (; d + 4 <= dimension; d += 4) {
               __m256 accumulators[4][4] = {
@@ -1126,14 +1172,10 @@ int recurrent_forward_impl(
                   {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps()}};
               size_t row = 0;
               for (; row + 32 <= hidden_count; row += 32) {
-                float hidden_values[32];
-                for (size_t offset = 0; offset < 32; ++offset) {
-                  hidden_values[offset] = gelu(hidden_input[row + offset]);
-                }
-                const __m256 input0 = _mm256_loadu_ps(hidden_values);
-                const __m256 input1 = _mm256_loadu_ps(hidden_values + 8);
-                const __m256 input2 = _mm256_loadu_ps(hidden_values + 16);
-                const __m256 input3 = _mm256_loadu_ps(hidden_values + 24);
+                const __m256 input0 = _mm256_loadu_ps(gelu_activated + row);
+                const __m256 input1 = _mm256_loadu_ps(gelu_activated + row + 8);
+                const __m256 input2 = _mm256_loadu_ps(gelu_activated + row + 16);
+                const __m256 input3 = _mm256_loadu_ps(gelu_activated + row + 24);
                 for (size_t output = 0; output < 4; ++output) {
                   const float* weight = params->block_fc2_weight + (d + output) * hidden_count + row;
                   accumulators[output][0] = _mm256_add_ps(accumulators[output][0], _mm256_mul_ps(
@@ -1147,11 +1189,7 @@ int recurrent_forward_impl(
                 }
               }
               for (; row + 8 <= hidden_count; row += 8) {
-                float hidden_values[8];
-                for (size_t offset = 0; offset < 8; ++offset) {
-                  hidden_values[offset] = gelu(hidden_input[row + offset]);
-                }
-                const __m256 input = _mm256_loadu_ps(hidden_values);
+                const __m256 input = _mm256_loadu_ps(gelu_activated + row);
                 for (size_t output = 0; output < 4; ++output) {
                   accumulators[output][0] = _mm256_add_ps(accumulators[output][0], _mm256_mul_ps(
                       _mm256_loadu_ps(params->block_fc2_weight + (d + output) * hidden_count + row), input));
@@ -1170,7 +1208,7 @@ int recurrent_forward_impl(
             for (; d < dimension; ++d) {
               float transformed = params->block_fc2_bias[d];
               for (size_t row = 0; row < hidden_count; ++row) {
-                transformed += params->block_fc2_weight[d * hidden_count + row] * gelu(hidden_input[row]);
+                transformed += params->block_fc2_weight[d * hidden_count + row] * gelu_activated[row];
               }
                 const float gate = diagnostic_elide(OMEGA_DIAGNOSTIC_ELIDE_RMSNORM_GATES)
                     ? 1.0F : sigmoid(params->gate_logits[round * dimension + d]);
@@ -1181,7 +1219,7 @@ int recurrent_forward_impl(
             for (size_t d = 0; d < dimension; ++d) {
               float transformed = params->block_fc2_bias[d];
               for (size_t row = 0; row < 4 * dimension; ++row) {
-                transformed += params->block_fc2_weight[d * 4 * dimension + row] * gelu(fc1[(batch * slots + slot) * 4 * dimension + row]);
+                transformed += params->block_fc2_weight[d * 4 * dimension + row] * gelu_activated[row];
               }
               const float gate = sigmoid(params->gate_logits[round * dimension + d]);
               const float value_at = candidate[state_index(batch, slot, d, slots, dimension)] + gate * transformed;
@@ -1236,6 +1274,21 @@ int recurrent_forward_impl(
     }
   }
   std::memcpy(next_state, state, state_count * sizeof(float));
+#if OMEGA_FC2_GELU_COUNT_GUARD_ACTIVE
+  if (actual_activations_overflow) {
+    std::fprintf(stderr,
+        "FC2 GELU count guard batch=%zu sequence_length=%zu rounds=%zu slots=%zu dimension=%zu training=%d instrumentation=%d actual=overflow expected=%zu pass=0\n",
+        config->batch, config->sequence_length, config->rounds, config->slots, config->dimension,
+        config->training, config->instrumentation, expected_activations);
+    return 6;
+  }
+  const bool activation_count_pass = actual_activations == expected_activations;
+  std::fprintf(stderr,
+      "FC2 GELU count guard batch=%zu sequence_length=%zu rounds=%zu slots=%zu dimension=%zu training=%d instrumentation=%d actual=%zu expected=%zu pass=%d\n",
+      config->batch, config->sequence_length, config->rounds, config->slots, config->dimension,
+      config->training, config->instrumentation, actual_activations, expected_activations, activation_count_pass ? 1 : 0);
+  if (!activation_count_pass) return 6;
+#endif
   return 0;
 }
 
@@ -1262,13 +1315,15 @@ int recurrent_backward_impl(
   const size_t state_dimension = slots * dimension;
   size_t slot_scores = 0;
   size_t fc1_count = 0;
+  size_t activation_count = 0;
   size_t depth_bias_count = 0;
   size_t depth_output_count = 0;
   size_t depth_hidden_dimension = 0;
   size_t depth_levels = 0;
   size_t depth_partial_count = 0;
   if (!checked_mul(config->batch, slots, &slot_scores) || !checked_mul(slot_scores, slots, &slot_scores) ||
-      !checked_mul(state_count, 4, &fc1_count) || !checked_mul(config->rounds, dimension, &depth_bias_count) ||
+      !checked_mul(state_count, 4, &fc1_count) || !checked_mul(4, dimension, &activation_count) ||
+      !checked_mul(config->rounds, dimension, &depth_bias_count) ||
       !checked_mul(depth_bias_count, 4, &depth_bias_count) ||
       !checked_mul(config->rounds, dimension, &depth_output_count) ||
       !depth_vector_reduction_layout(*config, &depth_hidden_dimension, &depth_levels, &depth_partial_count)) {
@@ -1285,8 +1340,9 @@ int recurrent_backward_impl(
   float* update = cursor.take(state_count);      /* d_u */
   float* scores = cursor.take(slot_scores);      /* d_scores */
   float* fc1 = cursor.take(fc1_count);           /* d_fc1_pre */
+  float* gelu_activated = cursor.take(activation_count);
   float* depth_bias = cursor.take(depth_bias_count);
-  if (state == nullptr || anchor == nullptr || candidate == nullptr || q == nullptr || key == nullptr || value == nullptr || mixed == nullptr || update == nullptr || scores == nullptr || fc1 == nullptr || depth_bias == nullptr) {
+  if (state == nullptr || anchor == nullptr || candidate == nullptr || q == nullptr || key == nullptr || value == nullptr || mixed == nullptr || update == nullptr || scores == nullptr || fc1 == nullptr || gelu_activated == nullptr || depth_bias == nullptr) {
     return 13;
   }
   TrainingBuffers training_buffers;
