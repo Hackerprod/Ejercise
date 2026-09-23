@@ -20,7 +20,11 @@ constexpr size_t kSequence = 3;
 constexpr size_t kBatch = 8;
 constexpr size_t kSlots = 2;
 constexpr size_t kDimension = 10;
-constexpr size_t kRounds = 2;
+#ifndef OMEGA_RUNTIME_TEST_ROUNDS
+#define OMEGA_RUNTIME_TEST_ROUNDS 2
+#endif
+constexpr size_t kRounds = OMEGA_RUNTIME_TEST_ROUNDS;
+static_assert(kRounds == 1 || kRounds == 2 || kRounds == 4);
 constexpr size_t kParameterCount = 13;
 
 size_t state_count(const OmegaRecurrentConfig& config) { return config.batch * config.slots * config.dimension; }

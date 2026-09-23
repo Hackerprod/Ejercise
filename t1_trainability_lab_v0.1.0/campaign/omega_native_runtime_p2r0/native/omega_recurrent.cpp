@@ -1292,7 +1292,8 @@ int recurrent_forward_impl(
   return 0;
 }
 
-int recurrent_backward_impl(
+template <bool CollectDiagnostics>
+int recurrent_backward_impl_body(
     const OmegaRecurrentConfig* config,
     const OmegaRecurrentParams* params,
     const float* token_part,
@@ -1607,25 +1608,29 @@ int recurrent_backward_impl(
                           _mm256_loadu_ps(saved_out + base + input),
                           _mm256_loadu_ps(params->depth_embedding + round * dimension + input));
                       for (size_t lane = 0; lane < 8; ++lane) {
-                        const size_t current_row = row + lane;
-                        const float fc1_value = fc1_values[lane];
-                        const float* weight_row = params->block_fc1_weight + current_row * dimension + input;
+                         const size_t current_row = row + lane;
+                         const float fc1_value = fc1_values[lane];
+                         const __m256 contribution = _mm256_mul_ps(input_values, _mm256_set1_ps(fc1_value));
                         float contribution_values[8];
-                        const __m256 contribution = _mm256_mul_ps(input_values, _mm256_set1_ps(fc1_value));
-                        _mm256_storeu_ps(contribution_values, contribution);
+                        if constexpr (CollectDiagnostics) {
+                          _mm256_storeu_ps(contribution_values, contribution);
+                        }
                         float* gradient_row = grads->d_block_fc1_weight + current_row * dimension + input;
                         _mm256_storeu_ps(gradient_row, _mm256_add_ps(_mm256_loadu_ps(gradient_row), contribution));
-                        for (size_t offset = 0; offset < 8; ++offset) {
-                          add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight,
-                              current_row * dimension + input + offset, contribution_values[offset]);
-                          const size_t depth_index = round * dimension + input + offset;
-                          const float depth_contribution = weight_row[offset] * fc1_value;
-                          if (grads->sum_abs_d_depth_embedding != nullptr) {
-                            grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
-                          }
-                          if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
-                          if (grads->fp64_d_depth_embedding != nullptr) {
-                            grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                        if constexpr (CollectDiagnostics) {
+                          const float* weight_row = params->block_fc1_weight + current_row * dimension + input;
+                          for (size_t offset = 0; offset < 8; ++offset) {
+                            add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight,
+                                current_row * dimension + input + offset, contribution_values[offset]);
+                            const size_t depth_index = round * dimension + input + offset;
+                            const float depth_contribution = weight_row[offset] * fc1_value;
+                            if (grads->sum_abs_d_depth_embedding != nullptr) {
+                              grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                            }
+                            if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                            if (grads->fp64_d_depth_embedding != nullptr) {
+                              grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                            }
                           }
                         }
                       }
@@ -1638,16 +1643,18 @@ int recurrent_backward_impl(
                           const size_t current_row = row + lane;
                           const float contribution = fc1_values[lane] * input_value;
                           grads->d_block_fc1_weight[current_row * dimension + input_index] += contribution;
-                          add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight,
-                              current_row * dimension + input_index, contribution);
-                          const size_t depth_index = round * dimension + input_index;
-                          const float depth_contribution = params->block_fc1_weight[current_row * dimension + input_index] * fc1_values[lane];
-                          if (grads->sum_abs_d_depth_embedding != nullptr) {
-                            grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
-                          }
-                          if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
-                          if (grads->fp64_d_depth_embedding != nullptr) {
-                            grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                          if constexpr (CollectDiagnostics) {
+                            add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight,
+                                current_row * dimension + input_index, contribution);
+                            const size_t depth_index = round * dimension + input_index;
+                            const float depth_contribution = params->block_fc1_weight[current_row * dimension + input_index] * fc1_values[lane];
+                            if (grads->sum_abs_d_depth_embedding != nullptr) {
+                              grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                            }
+                            if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                            if (grads->fp64_d_depth_embedding != nullptr) {
+                              grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                            }
                           }
                         }
                       }
@@ -1691,19 +1698,24 @@ int recurrent_backward_impl(
                 add_abs_contribution(grads->sum_abs_d_block_fc1_bias, grads->count_d_block_fc1_bias, row, fc1[fc_index]);
                 {
                   OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kDepthEmbeddingPairwiseReduction);
-                  for (size_t input = 0; input < dimension; ++input) {
-                    const float fc1_weight_contribution = fc1[fc_index] * (saved_out[base + input] + params->depth_embedding[round * dimension + input]);
-                    const float depth_contribution = params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
-                    grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
-                    add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
-                    const size_t depth_index = round * dimension + input;
-                    if (grads->sum_abs_d_depth_embedding != nullptr) {
-                      grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
-                    }
-                    if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
-                    if (grads->fp64_d_depth_embedding != nullptr) {
-                      grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
-                    }
+                   for (size_t input = 0; input < dimension; ++input) {
+                     const float fc1_weight_contribution = fc1[fc_index] * (saved_out[base + input] + params->depth_embedding[round * dimension + input]);
+                     float depth_contribution = 0.0F;
+                     if constexpr (CollectDiagnostics) {
+                       depth_contribution = params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
+                     }
+                     grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
+                     if constexpr (CollectDiagnostics) {
+                       add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
+                       const size_t depth_index = round * dimension + input;
+                       if (grads->sum_abs_d_depth_embedding != nullptr) {
+                         grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                       }
+                       if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                       if (grads->fp64_d_depth_embedding != nullptr) {
+                         grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                       }
+                     }
                     mixed[base + input] += params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
                   }
                 }
@@ -1722,16 +1734,21 @@ int recurrent_backward_impl(
                   OMEGA_PROFILE_SCOPE(ProfileDirection::kBackward, ProfileStage::kDepthEmbeddingPairwiseReduction);
                   for (size_t input = 0; input < dimension; ++input) {
                     const float fc1_weight_contribution = fc1[fc_index] * (saved_out[base + input] + params->depth_embedding[round * dimension + input]);
-                    const float depth_contribution = params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
-                    grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
-                    add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
-                    const size_t depth_index = round * dimension + input;
-                    if (grads->sum_abs_d_depth_embedding != nullptr) {
-                      grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                    float depth_contribution = 0.0F;
+                    if constexpr (CollectDiagnostics) {
+                      depth_contribution = params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
                     }
-                    if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
-                    if (grads->fp64_d_depth_embedding != nullptr) {
-                      grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                    grads->d_block_fc1_weight[row * dimension + input] += fc1_weight_contribution;
+                    if constexpr (CollectDiagnostics) {
+                      add_abs_contribution(grads->sum_abs_d_block_fc1_weight, grads->count_d_block_fc1_weight, row * dimension + input, fc1_weight_contribution);
+                      const size_t depth_index = round * dimension + input;
+                      if (grads->sum_abs_d_depth_embedding != nullptr) {
+                        grads->sum_abs_d_depth_embedding[depth_index] += std::fabs(depth_contribution);
+                      }
+                      if (grads->count_d_depth_embedding != nullptr) ++grads->count_d_depth_embedding[depth_index];
+                      if (grads->fp64_d_depth_embedding != nullptr) {
+                        grads->fp64_d_depth_embedding[depth_index] += static_cast<double>(depth_contribution);
+                      }
                     }
                     mixed[base + input] += params->block_fc1_weight[row * dimension + input] * fc1[fc_index];
                   }
@@ -2173,6 +2190,27 @@ int recurrent_backward_impl(
   }
   std::memcpy(grads->d_previous_state, state, state_count * sizeof(float));
   return 0;
+}
+
+int recurrent_backward_impl(
+    const OmegaRecurrentConfig* config,
+    const OmegaRecurrentParams* params,
+    const float* token_part,
+    const float* d_readout_states,
+    const float* d_next_state,
+    void* workspace,
+    size_t workspace_bytes,
+    OmegaRecurrentGrads* grads) {
+  const bool collect_diagnostics = grads != nullptr &&
+      (grads->sum_abs_d_block_fc1_weight != nullptr || grads->count_d_block_fc1_weight != nullptr ||
+       grads->sum_abs_d_depth_embedding != nullptr || grads->count_d_depth_embedding != nullptr ||
+       grads->fp64_d_depth_embedding != nullptr);
+  if (collect_diagnostics) {
+    return recurrent_backward_impl_body<true>(config, params, token_part, d_readout_states, d_next_state,
+        workspace, workspace_bytes, grads);
+  }
+  return recurrent_backward_impl_body<false>(config, params, token_part, d_readout_states, d_next_state,
+      workspace, workspace_bytes, grads);
 }
 
 extern "C" int omega_recurrent_forward(
