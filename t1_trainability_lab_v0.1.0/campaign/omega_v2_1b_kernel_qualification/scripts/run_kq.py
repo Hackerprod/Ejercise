@@ -360,7 +360,7 @@ def make_test_rows(
         s_native=computed_speed,
     )
     speed_formula_pass = abs(computed_speed - pytorch["S_native_cells"]["d512_m8_K4"]["S_native"]) < 1e-12
-    measured_candidate_dirs = [path for path in RESULTS_BASE.glob("candidate_*") if any(path.glob("native_kq_candidate_*.json"))]
+    measured_candidate_dirs = [path for path in RESULTS_BASE.glob("candidate_*") if any(path.rglob("native_kq_candidate_*.json"))]
     candidate_limit_pass = candidate_id in ("candidate_01", "candidate_02") and len(measured_candidate_dirs) <= 2
     kq_main_source = (UNIT_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
     no_abc_calls = all(name not in kq_main_source for name in ("run_full_sweep", "full_block_abc_correctness", "probe_eviction"))
@@ -493,8 +493,9 @@ def main() -> int:
     attempt02_before = validate_attempt02_preservation()
     vswhere = find_vswhere()
     cmake, vs_install, cmake_version = find_msvc_cmake(vswhere)
-    if (RESULTS_BASE / args.candidate_id).exists():
-        raise FileExistsError(f"immutable KQ result directory already exists: {RESULTS_BASE / args.candidate_id}")
+    candidate_results_root = RESULTS_BASE / args.candidate_id
+    if candidate_results_root.exists() and any(candidate_results_root.rglob("native_kq_candidate_*.json")):
+        raise FileExistsError(f"candidate KQ measurement already exists and is immutable: {candidate_results_root}")
 
     source_hashes_before = file_hashes()
     dependency_hashes = {str(path.resolve()): sha256_file(path) for path in dependency_files()}
@@ -504,7 +505,13 @@ def main() -> int:
     if source_hashes_before != source_hashes_after:
         raise RuntimeError("KQ_SOURCE_HOLD: KQ source/configuration changed during build")
 
-    results_root = RESULTS_BASE / args.candidate_id
+    if not candidate_results_root.exists():
+        results_root = candidate_results_root
+    else:
+        run_index = 2
+        while (candidate_results_root / f"run_{run_index:02d}").exists():
+            run_index += 1
+        results_root = candidate_results_root / f"run_{run_index:02d}"
     results_root.mkdir(parents=True, exist_ok=False)
     build_manifest = {
         "schema": "omega-v2-1b-kq-build-manifest-v1",

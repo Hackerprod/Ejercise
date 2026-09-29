@@ -448,8 +448,13 @@ int main(int argc, char** argv) {
         if (results_env.empty()) throw std::runtime_error("OMEGA_V2_1B_RESULTS_ROOT is required");
         const std::filesystem::path result_root = std::filesystem::path(results_env);
         const std::filesystem::path base_result_root = unit_root / "results" / "omega_v2_1b_kernel_qualification";
-        if (!result_root.is_absolute() || result_root.parent_path() != base_result_root) {
-            throw std::runtime_error("KQ results root must be an immutable candidate child of the KQ results directory");
+        const std::filesystem::path candidate_root = result_root.parent_path();
+        const bool root_is_candidate = candidate_root == base_result_root
+            && (result_root.filename() == "candidate_01" || result_root.filename() == "candidate_02");
+        const bool root_is_candidate_run = candidate_root.parent_path() == base_result_root
+            && (candidate_root.filename() == "candidate_01" || candidate_root.filename() == "candidate_02");
+        if (!result_root.is_absolute() || (!root_is_candidate && !root_is_candidate_run)) {
+            throw std::runtime_error("KQ results root must be a candidate directory or its immutable run child");
         }
         std::filesystem::create_directories(result_root);
         if (std::filesystem::exists(result_root / "native_kq_candidate_01.json")) {
