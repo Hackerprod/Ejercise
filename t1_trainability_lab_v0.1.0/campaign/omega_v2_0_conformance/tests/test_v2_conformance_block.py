@@ -14,7 +14,8 @@ class ConformanceBlockTests(unittest.TestCase):
     def test_v2_conformance_block(self):
         path = RESULTS / "OMEGA_CONFORMANCE_BLOCK.yaml"
         self.assertTrue(path.is_file(), "run_conformance.py must materialize the block before tests")
-        block = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(path.read_text(encoding="utf-8"))
+        block = document["OMEGA_CONFORMANCE_BLOCK"]
         self.assertEqual(block["authority"]["snapshot_commit"], "38061477d4c2b0c5c20d75d902b21dd1ef0a2611")
         self.assertEqual(block["authority"]["conversacion_md_blob"], "7027e2ac9d1ba89db08dda73c81e244f3b9b19db")
         self.assertIn(block["status"], ("CONFORMANT", "CONFORMANCE_HOLD"))

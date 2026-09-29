@@ -112,6 +112,7 @@ def _contract_block(parameter_ledger: dict[str, Any], implementation_commit: str
             },
             "phase": "ENGINEERING",
             "implementation_commit": implementation_commit,
+            "implementation_parent": _git("show", "-s", "--format=%P", "HEAD").split()[0],
             "contract_target": {"candidates": targets},
             "actual_candidate": {
                 "status": "PENDING_ACCEPTANCE",
@@ -240,10 +241,11 @@ def main() -> int:
     parent = _git("show", "-s", "--format=%P", "HEAD").split()
     unit_status = _git("status", "--porcelain", "--", "t1_trainability_lab_v0.1.0/campaign/omega_v2_0_conformance")
     conversacion_blob = _git("rev-parse", "HEAD:Conversacion.md")
-    if branch != "main" or len(parent) != 1 or parent[0] != SNAPSHOT_COMMIT or conversacion_blob != CONVERSACION_BLOB or unit_status:
+    merge_base = _git("merge-base", "HEAD", SNAPSHOT_COMMIT)
+    if branch != "main" or len(parent) != 1 or merge_base != SNAPSHOT_COMMIT or conversacion_blob != CONVERSACION_BLOB or unit_status:
         raise RuntimeError(
-            "CONFORMANCE_HOLD: require a clean local implementation commit directly atop the authorized snapshot; "
-            f"branch={branch}, commit={implementation_commit}, parent={parent}, conversacion_blob={conversacion_blob}, unit_status={unit_status!r}"
+            "CONFORMANCE_HOLD: require a clean local implementation commit on main descending from the authorized snapshot; "
+            f"branch={branch}, commit={implementation_commit}, parent={parent}, merge_base={merge_base}, conversacion_blob={conversacion_blob}, unit_status={unit_status!r}"
         )
 
     configure_reference_execution()
