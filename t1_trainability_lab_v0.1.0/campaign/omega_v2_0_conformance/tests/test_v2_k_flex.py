@@ -24,6 +24,10 @@ class KFlexTests(unittest.TestCase):
                     output = core(state, K=k)
                     self.assertEqual(tuple(output.shape), (1, m, d))
                     self.assertTrue(torch.isfinite(output).all().item())
+                    explicit = state
+                    for _ in range(k):
+                        explicit = core.block.step(explicit)
+                    self.assertTrue(torch.equal(output, explicit), f"K={k} differed from explicit repeated step loop")
                     self.assertEqual(tuple(core.state_dict()), initial_keys)
                     self.assertEqual(tensor_shapes(core), initial_shapes)
                     self.assertEqual(sum(parameter.numel() for parameter in core.parameters()), initial_count)
