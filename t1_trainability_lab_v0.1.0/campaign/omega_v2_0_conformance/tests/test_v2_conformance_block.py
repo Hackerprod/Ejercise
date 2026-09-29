@@ -19,6 +19,8 @@ class ConformanceBlockTests(unittest.TestCase):
         self.assertEqual(block["authority"]["snapshot_commit"], "38061477d4c2b0c5c20d75d902b21dd1ef0a2611")
         self.assertEqual(block["authority"]["conversacion_md_blob"], "7027e2ac9d1ba89db08dda73c81e244f3b9b19db")
         self.assertIn(block["status"], ("CONFORMANT", "CONFORMANCE_HOLD"))
+        self.assertEqual(block["global_conformance_status"], "CONFORMANCE_HOLD")
+        self.assertEqual(block["permitted_follow_on_if_v2_0_passes"], "OMEGA-V2-1 T0 PHYSICAL ONLY")
         self.assertEqual(block["deviations"], [])
         self.assertEqual(block["authorized_deviation_ids"], [])
         self.assertTrue(block["actual_candidate"]["values_obtained_by_introspection"])
