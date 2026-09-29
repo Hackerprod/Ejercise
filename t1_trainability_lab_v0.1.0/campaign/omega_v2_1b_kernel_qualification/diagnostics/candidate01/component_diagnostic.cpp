@@ -140,14 +140,22 @@ void dequantize_row(const Q4Matrix& matrix, int row, float* scratch) {
 struct DequantJob {
     const Q4Matrix* matrix;
     double* row_checksums;
+    std::int64_t* dequant_ticks;
+    std::int64_t* checksum_ticks;
 };
 
 void dequant_row_job(void* opaque, std::size_t index) {
     auto* job = static_cast<DequantJob*>(opaque);
     alignas(64) float row[4 * kD640];
+    const std::int64_t dequant_start = qpc_ticks();
     dequantize_row(*job->matrix, static_cast<int>(index), row);
+    const std::int64_t dequant_stop = qpc_ticks();
+    job->dequant_ticks[index] += dequant_stop - dequant_start;
+    const std::int64_t checksum_start = qpc_ticks();
     double sum = 0.0;
     for (int col = 0; col < job->matrix->cols; ++col) sum += row[col];
+    const std::int64_t checksum_stop = qpc_ticks();
+    job->checksum_ticks[index] += checksum_stop - checksum_start;
     job->row_checksums[index] = sum;
 }
 
@@ -327,15 +335,39 @@ int main(int argc, char** argv) {
         });
 
         std::array<std::vector<double>, 7> row_sums;
-        for (std::size_t i = 0; i < matrices.size(); ++i) row_sums[i].resize(static_cast<std::size_t>(matrices[i]->rows));
+        std::array<std::vector<std::int64_t>, 7> row_dequant_ticks, row_checksum_ticks;
+        for (std::size_t i = 0; i < matrices.size(); ++i) {
+            row_sums[i].resize(static_cast<std::size_t>(matrices[i]->rows));
+            row_dequant_ticks[i].resize(static_cast<std::size_t>(matrices[i]->rows));
+            row_checksum_ticks[i].resize(static_cast<std::size_t>(matrices[i]->rows));
+        }
         auto dequant_only_batch = [&] {
             for (int round = 0; round < kK; ++round) {
                 for (std::size_t matrix_index = 0; matrix_index < matrices.size(); ++matrix_index) {
                     const Q4Matrix* matrix = matrices[matrix_index];
-                    DequantJob job{matrix, row_sums[matrix_index].data()};
+                    DequantJob job{matrix, row_sums[matrix_index].data(), row_dequant_ticks[matrix_index].data(), row_checksum_ticks[matrix_index].data()};
                     pool.parallel_for(static_cast<std::size_t>(matrix->rows), &job, dequant_row_job);
                 }
             }
+        };
+        auto dequant_wall_times = [&] {
+            std::pair<double, double> wall{0.0, 0.0};
+            for (std::size_t matrix_index = 0; matrix_index < matrices.size(); ++matrix_index) {
+                const auto ranges = pool.row_shards(static_cast<std::size_t>(matrices[matrix_index]->rows));
+                std::int64_t slowest_dequant = 0, slowest_checksum = 0;
+                for (const auto& range : ranges) {
+                    std::int64_t dequant_ticks = 0, checksum_ticks = 0;
+                    for (std::size_t row = range.first; row < range.second; ++row) {
+                        dequant_ticks += row_dequant_ticks[matrix_index][row];
+                        checksum_ticks += row_checksum_ticks[matrix_index][row];
+                    }
+                    slowest_dequant = (std::max)(slowest_dequant, dequant_ticks);
+                    slowest_checksum = (std::max)(slowest_checksum, checksum_ticks);
+                }
+                wall.first += static_cast<double>(slowest_dequant) / qpc_frequency();
+                wall.second += static_cast<double>(slowest_checksum) / qpc_frequency();
+            }
+            return wall;
         };
         auto consume_dequant_checksums = [&] {
             volatile double checksum = 0.0;
@@ -345,6 +377,9 @@ int main(int argc, char** argv) {
         auto pretouch_core = [&] { touch_weights(weights, hardware.cache_line_bytes); };
         Series dequant_only;
         dequant_only.samples.reserve(kSamples);
+        std::vector<double> dequant_decode_wall_samples, dequant_checksum_wall_samples;
+        dequant_decode_wall_samples.reserve(kSamples);
+        dequant_checksum_wall_samples.reserve(kSamples);
         for (int warmup = 0; warmup < kWarmups; ++warmup) {
             pretouch_core();
             dequant_only_batch();
@@ -352,12 +387,17 @@ int main(int argc, char** argv) {
         }
         for (int sample = 0; sample < kSamples; ++sample) {
             pretouch_core();
+            for (auto& rows : row_dequant_ticks) std::fill(rows.begin(), rows.end(), 0);
+            for (auto& rows : row_checksum_ticks) std::fill(rows.begin(), rows.end(), 0);
             const std::int64_t start = qpc_ticks();
             dequant_only_batch();
             const std::int64_t stop = qpc_ticks();
             if (stop <= start) throw std::runtime_error("dequant-only diagnostic timer failed");
+            const auto row_components = dequant_wall_times();
             consume_dequant_checksums();
             dequant_only.samples.push_back(static_cast<double>(stop - start) / qpc_frequency());
+            dequant_decode_wall_samples.push_back(row_components.first);
+            dequant_checksum_wall_samples.push_back(row_components.second);
         }
         dequant_only.median_seconds = median(dequant_only.samples);
 
@@ -426,6 +466,8 @@ int main(int argc, char** argv) {
             << ",\"dequant_only_full_K4_28_dispatches\":{\"median_seconds_including_28_dispatches_and_row_checksum\":" << dequant_only.median_seconds
             << ",\"median_seconds_28_empty_dispatches\":" << empty_dispatch_28.median_seconds
             << ",\"estimated_dequant_plus_checksum_no_dispatch_seconds\":" << dequant_no_dispatch
+            << ",\"per_row_qpc_dequant_wall_estimate_seconds\":" << median(dequant_decode_wall_samples)
+            << ",\"per_row_qpc_checksum_wall_estimate_seconds\":" << median(dequant_checksum_wall_samples)
             << ",\"dispatch_count_per_sample\":" << 7 * kK << ",\"observed_dispatch_count\":" << 7 * kK
             << ",\"q4_core_physical_bytes\":" << total_round_bytes << ",\"samples_seconds\":[";
         for (std::size_t i=0;i<dequant_only.samples.size();++i){if(i)out<<',';out<<dequant_only.samples[i];}

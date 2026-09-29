@@ -19,7 +19,8 @@ V2_1_ROOT = CAMPAIGN_ROOT / "omega_v2_1_physical"
 RESULTS_BASE = KQ_ROOT / "results" / "omega_v2_1b_kernel_qualification"
 KQ1_RESULTS = RESULTS_BASE / "candidate_01" / "run_02"
 ATTEMPT02_RESULTS = V2_1_ROOT / "results" / "omega_v2_1_physical" / "attempt_02"
-RESULTS_ROOT = RESULTS_BASE / "candidate_01" / "diagnostics"
+RESULTS_BASE = RESULTS_BASE / "candidate_01" / "diagnostics"
+RESULTS_ROOT = RESULTS_BASE / "run_02"
 BUILD_ROOT = DIAG_ROOT / "build"
 EXECUTABLE = BUILD_ROOT / "Release" / "omega_v2_1b_candidate01_diag.exe"
 FROZEN_CPU_IDS = [266, 264, 258, 270]
@@ -92,8 +93,11 @@ def verify_preserved_evidence() -> dict[str, Any]:
         })
     kq1_build = json.loads((KQ1_RESULTS / "build_manifest.json").read_text(encoding="utf-8"))
     kq1_exe = Path(kq1_build["executable_absolute_path"])
+    first_diagnostic = RESULTS_BASE / "candidate01_component_diagnostic.json"
+    first_diag_sha = sha256_file(first_diagnostic) if first_diagnostic.is_file() else None
     return {
         "evidence": evidence,
+        "previous_diagnostic_attempt_sha256": first_diag_sha,
         "candidate01_kq_executable_abs": str(kq1_exe.resolve()),
         "candidate01_kq_executable_sha256": sha256_file(kq1_exe),
     }
@@ -196,7 +200,7 @@ def main() -> int:
         raise RuntimeError("candidate_01 diagnostic process failed: " + native.stderr[-4000:])
     native_path = RESULTS_ROOT / "candidate01_component_diagnostic.json"
     native_report = json.loads(native_path.read_text(encoding="utf-8"))
-    if native_report.get("attempt03_executed") is not False or native_report.get("a_b_c_executed") is not False or native_report.get("rho_residency_gate_read_or_calculated") is not False:
+    if native_report.get("attempt03_executed") is not False or native_report.get("a_b_c_executed") is not False or native_report.get("residency_gates_evaluated") is not False:
         raise RuntimeError("candidate_01 component diagnostic violated its KQ-only scope")
 
     preserved_after = verify_preserved_evidence()
@@ -255,6 +259,8 @@ def main() -> int:
         f"- dequant-only full K4, including checksum and 28 dispatches: `{native_report['dequant_only_full_K4_28_dispatches']['median_seconds_including_28_dispatches_and_row_checksum']:.9f} s`",
         f"- 28 empty dispatches: `{native_report['dispatch_overhead_28_empty']['median_seconds']:.9f} s`",
         f"- estimated dequant+checksum, subtracting empty dispatches: `{native_report['dequant_only_full_K4_28_dispatches']['estimated_dequant_plus_checksum_no_dispatch_seconds']:.9f} s`",
+        f"- row-timed dequant wall estimate (dispatch/checksum excluded): `{native_report['dequant_only_full_K4_28_dispatches']['per_row_qpc_dequant_wall_estimate_seconds']:.9f} s`",
+        f"- row-timed checksum wall estimate (reported separately): `{native_report['dequant_only_full_K4_28_dispatches']['per_row_qpc_checksum_wall_estimate_seconds']:.9f} s`",
         f"- dequant+FMA Q4 matmuls full K4, including 28 dispatches: `{native_report['q4_dequant_plus_fma_full_K4_28_dispatches']['median_seconds_including_dispatches']:.9f} s`",
         f"- estimated dequant+FMA, subtracting empty dispatches: `{native_report['q4_dequant_plus_fma_full_K4_28_dispatches']['estimated_dequant_plus_FMA_no_dispatch_seconds']:.9f} s`",
         f"- full-block QKVO: `{native_report['full_block_component_breakdown']['median_QKVO_seconds']:.9f} s`",
@@ -263,7 +269,7 @@ def main() -> int:
         f"- QKV matmuls / attention / W_O: `{native_report['full_block_component_breakdown']['median_QKV_matmul_seconds']:.9f}` / `{native_report['full_block_component_breakdown']['median_attention_seconds']:.9f}` / `{native_report['full_block_component_breakdown']['median_WO_seconds']:.9f} s`",
         f"- gate+up / SiLU+Hadamard / down: `{native_report['full_block_component_breakdown']['median_gate_up_seconds']:.9f}` / `{native_report['full_block_component_breakdown']['median_SiLU_hadamard_seconds']:.9f}` / `{native_report['full_block_component_breakdown']['median_down_seconds']:.9f} s`",
         "", "## Method note", "",
-        "Dequant-only consumes each transient row tile into a checksum to keep the decode writes observable; it reports the raw interval and a diagnostic subtraction of the separately measured empty-dispatch interval. The q4_matmul batch includes dequant plus FMA for the seven matrices over four rounds. Component timers are diagnostic, not gates.",
+        "Dequant-only consumes each transient row tile into a checksum to keep decode writes observable. It reports the full wall interval, empty-dispatch-subtracted interval, and row-QPC dequant/checksum estimates separately. The q4_matmul batch includes dequant plus FMA for seven matrices over four rounds; its empty-dispatch-subtracted value is an estimate. Component timers are diagnostic, not gates.",
         "", "## SHA-256", "",
     ]
     report_path = RESULTS_ROOT / "CANDIDATE01_COMPONENT_DIAGNOSTIC.md"
