@@ -2,3 +2,21 @@ __pycache__/
 *.pyc
 cpu-native-arch/build/
 node_modules/
+.tmp
+
+# Secrets - never commit
+Desktop_ssh.py
+
+# Tool-internal state, not project content
+.claude/
+.claude_scratch/
+.codegraph/
+
+# Campaign run outputs: checkpoints, logs, profiling captures (large, regenerable)
+**/results/
+**/build-*/
+**/native/build*/
+*.obj
+*.etl
+*.log
+t1_trainability_lab_v0.1.0/campaign/t7_noop_none_lexical_paired_*/seed_*/cases.jsonl

@@ -107,6 +107,27 @@ typedef struct OmegaRecurrentGrads {
 
 typedef struct OmegaRuntime OmegaRuntime;
 
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+typedef struct OmegaFc2ReplayGroupIdentity {
+  size_t position;
+  size_t round;
+  size_t batch;
+} OmegaFc2ReplayGroupIdentity;
+
+typedef void (*OmegaFc2ReplayCaptureCallback)(
+    size_t worker_index,
+    size_t position,
+    size_t round,
+    size_t batch,
+    const float* fc1_preactivation,
+    const float* activated,
+    const float* output_gradient,
+    const float* dweight_before,
+    const float* dweight_control_after,
+    const float* dweight_candidate_after,
+    void* user_data);
+#endif
+
 enum {
   OMEGA_RUNTIME_STATUS_OK = 0,
   OMEGA_RUNTIME_STATUS_INVALID_HANDLE = 100,
@@ -231,6 +252,14 @@ OMEGA_RECURRENT_API int omega_runtime_backward(
     void* workspace,
     size_t workspace_bytes,
     OmegaRecurrentGrads* grads);
+
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+OMEGA_RECURRENT_API int omega_fc2_replay_capture_set_targets(
+    const OmegaFc2ReplayGroupIdentity* targets,
+    size_t target_count,
+    OmegaFc2ReplayCaptureCallback callback,
+    void* user_data);
+#endif
 
 /* Temporary profiling ABI. Exported only from OMEGA_PROFILE_INTERNAL builds. */
 #ifdef OMEGA_PROFILE_INTERNAL

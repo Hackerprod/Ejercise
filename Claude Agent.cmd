@@ -1,1 +1,1 @@
-claude --dangerously-load-development-channels server:claude-channel
+claude --dangerously-load-development-channels server:devmcp-channel

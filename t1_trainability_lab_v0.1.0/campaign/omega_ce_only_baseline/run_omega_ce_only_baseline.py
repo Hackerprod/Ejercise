@@ -1203,7 +1203,7 @@ def build_generation_audit_report(
     *,
     repo_root: Path = REPO_ROOT,
     ce_generation_report: Mapping[str, Any] | None = None,
-    equal_cost_records: list[Mapping[str, Any]] | None = None,
+    equal_cost_generation_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     historical, records = load_historical_generation_records(repo_root)
     report: dict[str, Any] = {
@@ -1227,13 +1227,19 @@ def build_generation_audit_report(
         "historical_generations": records,
         "ce_generations": list(ce_generation_report.get("generations", [])) if ce_generation_report else None,
         "ce_vs_historical_comparison": compare_generation_records(ce_generation_report["generations"], records) if ce_generation_report else None,
-        "optional_equal_cost_audit": equal_cost_records,
+        "equal_cost_generations": list(equal_cost_generation_report.get("generations", [])) if equal_cost_generation_report else None,
+        "equal_cost_vs_historical_comparison": compare_generation_records(equal_cost_generation_report["generations"], records) if equal_cost_generation_report else None,
     }
     return _self_hashed(report)
 
 
-def run_ce_generation_from_checkpoints(ce_root: Path, *, repo_root: Path = REPO_ROOT) -> dict[str, Any]:
-    """Run guarded CE generation from four Phase A checkpoint_02000 files."""
+def run_ce_generation_from_checkpoints(
+    ce_root: Path,
+    *,
+    equal_cost_root: Path | None = None,
+    repo_root: Path = REPO_ROOT,
+) -> dict[str, Any]:
+    """Run guarded CE generation from Phase A and optional equal-cost checkpoints."""
     historical, historical_r1 = load_historical_generation_records(repo_root)
     prompts: list[dict[str, Any]] = []
     seen_prompt_ids: set[str] = set()
@@ -1250,16 +1256,36 @@ def run_ce_generation_from_checkpoints(ce_root: Path, *, repo_root: Path = REPO_
 
     tokenizer = AutoTokenizer.from_pretrained("distilbert/distilgpt2", revision="2290a62682d06624634c1f46a6ad5be0f47f38aa", use_fast=True, local_files_only=True)
 
-    def loader(spec: Mapping[str, Any]) -> OmegaCoreLMFast:
-        path = ce_root / "runs" / f"CE-K{int(spec['K'])}_seed_{int(spec['seed'])}" / "checkpoint_02000.pt"
+    def load_model(root: Path, spec: Mapping[str, Any]) -> OmegaCoreLMFast:
+        update = int(spec["checkpoint_update"])
+        run_root = root / "runs" if (root / "runs").is_dir() else root
+        path = run_root / f"CE-K{int(spec['K'])}_seed_{int(spec['seed'])}" / f"checkpoint_{update:05d}.pt"
         payload = torch.load(path, map_location="cpu", weights_only=False)
         model = OmegaCoreLMFast(vocab_size=TOKENIZER_VOCAB, dimension=DIMENSION, slots=SLOTS, rounds=int(spec["K"]), variant="shared")
         model.load_state_dict(payload["model"])
         return model
 
-    generation = run_ce_generation_audit(specs, prompts, tokenizer, loader)
+    generation = run_ce_generation_audit(
+        specs,
+        prompts,
+        tokenizer,
+        lambda spec: load_model(ce_root, spec),
+    )
     generation["historical_source_commit"] = HISTORICAL_GENERATION_COMMIT
     generation["historical_source_rows"] = len(historical_r1)
+    if equal_cost_root is not None:
+        equal_specs = [
+            {"K": k, "seed": seed, "checkpoint_update": 6254 if k == 1 else 4554}
+            for seed in SEEDS
+            for k in KS
+        ]
+        equal_generation = run_ce_generation_audit(
+            equal_specs,
+            prompts,
+            tokenizer,
+            lambda spec: load_model(equal_cost_root, spec),
+        )
+        generation["equal_cost_generation_report"] = equal_generation
     return generation
 
 
@@ -1386,6 +1412,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--correct-phase0-report", type=Path)
     parser.add_argument("--corrected-output", type=Path)
     parser.add_argument("--ce-root", type=Path)
+    parser.add_argument("--equal-cost-root", type=Path)
     parser.add_argument("--output-dir", type=Path, default=HERE / "results")
     args = parser.parse_args(argv)
     if args.correct_phase0_report is not None:
@@ -1408,8 +1435,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.generation_audit:
         require_real_authorization(args.confirm_real_execution, "generation audit")
-        ce_generation = run_ce_generation_from_checkpoints(args.ce_root) if args.ce_root is not None else None
-        report = build_generation_audit_report(ce_generation_report=ce_generation)
+        ce_generation = (
+            run_ce_generation_from_checkpoints(args.ce_root, equal_cost_root=args.equal_cost_root)
+            if args.ce_root is not None
+            else None
+        )
+        equal_cost_generation = ce_generation.pop("equal_cost_generation_report", None) if ce_generation else None
+        report = build_generation_audit_report(
+            ce_generation_report=ce_generation,
+            equal_cost_generation_report=equal_cost_generation,
+        )
         write_json(args.output_dir / "generation_audit_report.json", report)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0

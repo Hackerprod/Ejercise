@@ -432,7 +432,12 @@ def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: 
         bridge.reset_profile()
     state = model.initial_state(physical_batch, device=__import__("torch").device("cpu"))
     measured_records: list[dict[str, Any]] = []
-    run_items(schedule(updates), measured_records)
+    measured_schedule = schedule(updates)
+    measured_interval_start_utc_ns = time.time_ns()
+    measured_interval_start_perf_counter_ns = time.perf_counter_ns()
+    run_items(measured_schedule, measured_records)
+    measured_interval_end_perf_counter_ns = time.perf_counter_ns()
+    measured_interval_end_utc_ns = time.time_ns()
     result: dict[str, Any] = {
         "phase": "profile" if profile else "stable",
         "route": route,
@@ -441,6 +446,14 @@ def run_stable(*, route: str, updates: int, warmup_updates: int, manifest_path: 
         "runtime_threads": runtime_threads if native else None,
         "warmup": {"updates": warmup_updates, "measured": False},
         "measured": {"updates": updates, "measured": True},
+        "measured_interval": {
+            "start_utc_ns": measured_interval_start_utc_ns,
+            "start_perf_counter_ns": measured_interval_start_perf_counter_ns,
+            "end_perf_counter_ns": measured_interval_end_perf_counter_ns,
+            "end_utc_ns": measured_interval_end_utc_ns,
+            "start_point": "immediately before measured run_items",
+            "end_point": "immediately after measured run_items",
+        },
         "updates": measured_records,
     }
     if dll_metadata is not None:

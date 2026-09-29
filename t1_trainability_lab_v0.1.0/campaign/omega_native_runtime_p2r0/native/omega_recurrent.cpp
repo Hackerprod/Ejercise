@@ -1,5 +1,7 @@
 #include "omega_recurrent.h"
 
+#include "fc2_dweight_m8.h"
+
 #include <algorithm>
 #ifdef OMEGA_PROFILE_INTERNAL
 #include <atomic>
@@ -38,6 +40,43 @@ namespace {
 constexpr size_t kAlignment = 64;
 constexpr float kEpsilon = 1.0e-6F;
 constexpr float kSqrtTwo = 1.4142135623730950488F;
+constexpr size_t kFc2DWeightGroupSlots = 8;
+constexpr size_t kFc2DWeightGroupDimension = 128;
+
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+constexpr size_t kFc2ReplaySlots = 8;
+constexpr size_t kFc2ReplayDimension = 128;
+constexpr size_t kFc2ReplayHidden = 512;
+
+const OmegaFc2ReplayGroupIdentity* g_fc2_replay_targets = nullptr;
+size_t g_fc2_replay_target_count = 0;
+OmegaFc2ReplayCaptureCallback g_fc2_replay_callback = nullptr;
+void* g_fc2_replay_user_data = nullptr;
+thread_local size_t g_fc2_replay_worker_index = 0;
+
+struct Fc2ReplayCaptureScratch {
+  bool active = false;
+  size_t position = 0;
+  size_t round = 0;
+  size_t batch = 0;
+  std::array<float, kFc2ReplaySlots * kFc2ReplayHidden> preactivation{};
+  std::array<float, kFc2ReplaySlots * kFc2ReplayHidden> activated{};
+  std::array<float, kFc2ReplaySlots * kFc2ReplayDimension> output_gradient{};
+  std::array<float, kFc2ReplayDimension * kFc2ReplayHidden> dweight_before{};
+  std::array<float, kFc2ReplayDimension * kFc2ReplayHidden> dweight_candidate{};
+};
+
+thread_local Fc2ReplayCaptureScratch g_fc2_replay_scratch{};
+
+bool fc2_replay_group_selected(size_t position, size_t round, size_t batch) {
+  if (g_fc2_replay_callback == nullptr || g_fc2_replay_targets == nullptr) return false;
+  for (size_t index = 0; index < g_fc2_replay_target_count; ++index) {
+    const OmegaFc2ReplayGroupIdentity& target = g_fc2_replay_targets[index];
+    if (target.position == position && target.round == round && target.batch == batch) return true;
+  }
+  return false;
+}
+#endif
 
 #ifdef OMEGA_P2R_DIAGNOSTIC
 using DiagnosticClock = std::chrono::steady_clock;
@@ -390,6 +429,17 @@ size_t workspace_bytes_impl(const OmegaRecurrentConfig& config) {
   if (config.training != 0 && !append_training_storage(config, state_count, &total)) {
     return 0;
   }
+  if (config.training != 0 && config.slots == kFc2DWeightGroupSlots &&
+      config.dimension == kFc2DWeightGroupDimension) {
+    size_t grouped_activation_count = 0;
+    size_t grouped_output_gradient_count = 0;
+    if (!checked_mul(config.slots, activation_count, &grouped_activation_count) ||
+        !checked_mul(config.slots, config.dimension, &grouped_output_gradient_count) ||
+        !append_floats(grouped_activation_count, &total) ||
+        !append_floats(grouped_output_gradient_count, &total)) {
+      return 0;
+    }
+  }
   if (!append_floats(depth_partial_count, &total) || !append_uint64s(config.rounds, &total)) {
     return 0;
   }
@@ -546,6 +596,28 @@ float gelu(float value) {
   return 0.5F * value * (1.0F + std::erf(value / kSqrtTwo));
 }
 
+#if OMEGA_HAS_AVX2
+void prepare_fc2_dweight_slot_avx2(
+    const float* preactivation,
+    const float* output_gradient,
+    float* hidden_values,
+    float* grouped_activated,
+    float* grouped_output_gradient,
+    size_t slot,
+    size_t output_count,
+    size_t hidden_count) {
+  for (size_t hidden = 0; hidden < hidden_count; ++hidden) {
+    hidden_values[hidden] = gelu(preactivation[hidden]);
+  }
+  if (grouped_activated != nullptr) {
+    std::memcpy(grouped_activated + slot * hidden_count, hidden_values, hidden_count * sizeof(float));
+  }
+  if (grouped_output_gradient != nullptr) {
+    std::memcpy(grouped_output_gradient + slot * output_count, output_gradient, output_count * sizeof(float));
+  }
+}
+#endif
+
 bool valid_state_part_weight(const OmegaMatrixViewF32& view, const OmegaRecurrentConfig& config) {
   size_t expected_rows = 0;
   if (!checked_mul(config.slots, config.dimension, &expected_rows) || view.data == nullptr ||
@@ -655,6 +727,60 @@ void add_abs_contribution(float* sums, size_t* counts, size_t index, float contr
   if (sums != nullptr) sums[index] += std::fabs(contribution);
   if (counts != nullptr) ++counts[index];
 }
+
+#if OMEGA_HAS_AVX2
+void accumulate_fc2_dweight_slot_avx2(
+    const float* activated,
+    const float* output_gradient,
+    float* dweight,
+    float* sum_abs,
+    size_t* counts,
+    size_t output_count,
+    size_t hidden_count) {
+  for (size_t output = 0; output < output_count; ++output) {
+    const __m256 output_gradient_vector = _mm256_set1_ps(output_gradient[output]);
+    size_t hidden = 0;
+    for (; hidden + 8 <= hidden_count; hidden += 8) {
+      const __m256 hidden_vector = _mm256_loadu_ps(activated + hidden);
+      float* gradient = dweight + output * hidden_count + hidden;
+      const __m256 contribution = _mm256_mul_ps(hidden_vector, output_gradient_vector);
+      _mm256_storeu_ps(gradient, _mm256_add_ps(_mm256_loadu_ps(gradient), contribution));
+      for (size_t lane = 0; lane < 8; ++lane) {
+        add_abs_contribution(sum_abs, counts, output * hidden_count + hidden + lane,
+            activated[hidden + lane] * output_gradient[output]);
+      }
+    }
+    for (; hidden < hidden_count; ++hidden) {
+      const float contribution = output_gradient[output] * activated[hidden];
+      dweight[output * hidden_count + hidden] += contribution;
+      add_abs_contribution(sum_abs, counts, output * hidden_count + hidden, contribution);
+    }
+  }
+}
+
+void accumulate_fc2_dweight_slot_diagnostics_avx2(
+    const float* activated,
+    const float* output_gradient,
+    float* sum_abs,
+    size_t* counts,
+    size_t output_count,
+    size_t hidden_count) {
+  for (size_t output = 0; output < output_count; ++output) {
+    const float gradient = output_gradient[output];
+    size_t hidden = 0;
+    for (; hidden + 8 <= hidden_count; hidden += 8) {
+      for (size_t lane = 0; lane < 8; ++lane) {
+        add_abs_contribution(sum_abs, counts, output * hidden_count + hidden + lane,
+            activated[hidden + lane] * gradient);
+      }
+    }
+    for (; hidden < hidden_count; ++hidden) {
+      const float contribution = gradient * activated[hidden];
+      add_abs_contribution(sum_abs, counts, output * hidden_count + hidden, contribution);
+    }
+  }
+}
+#endif
 
 bool add_depth_hidden_vector(float* partials, std::uint64_t* masks, size_t round, size_t levels,
     size_t hidden_dimension, const float* source) {
@@ -1322,8 +1448,15 @@ int recurrent_backward_impl_body(
   size_t depth_hidden_dimension = 0;
   size_t depth_levels = 0;
   size_t depth_partial_count = 0;
+  size_t grouped_activation_count = 0;
+  size_t grouped_output_gradient_count = 0;
+  const bool fc2_m8_workspace_enabled = slots == kFc2DWeightGroupSlots &&
+      dimension == kFc2DWeightGroupDimension;
   if (!checked_mul(config->batch, slots, &slot_scores) || !checked_mul(slot_scores, slots, &slot_scores) ||
       !checked_mul(state_count, 4, &fc1_count) || !checked_mul(4, dimension, &activation_count) ||
+      (fc2_m8_workspace_enabled &&
+          (!checked_mul(slots, activation_count, &grouped_activation_count) ||
+           !checked_mul(slots, dimension, &grouped_output_gradient_count))) ||
       !checked_mul(config->rounds, dimension, &depth_bias_count) ||
       !checked_mul(depth_bias_count, 4, &depth_bias_count) ||
       !checked_mul(config->rounds, dimension, &depth_output_count) ||
@@ -1353,6 +1486,13 @@ int recurrent_backward_impl_body(
   if (diagnostic_elide(OMEGA_DIAGNOSTIC_ELIDE_HISTORY_BUFFER)) {
     clear_training_storage(*config, state_count, &training_buffers);
   }
+  float* fc2_group_activated = nullptr;
+  float* fc2_group_output_gradient = nullptr;
+  if (fc2_m8_workspace_enabled) {
+    fc2_group_activated = cursor.take(grouped_activation_count);
+    fc2_group_output_gradient = cursor.take(grouped_output_gradient_count);
+    if (fc2_group_activated == nullptr || fc2_group_output_gradient == nullptr) return 14;
+  }
   float* depth_partials = cursor.take(depth_partial_count);
   std::uint64_t* depth_masks = cursor.take_uint64(config->rounds);
   if (depth_partials == nullptr || depth_masks == nullptr) {
@@ -1360,6 +1500,14 @@ int recurrent_backward_impl_body(
   }
   std::memset(depth_partials, 0, depth_partial_count * sizeof(float));
   std::memset(depth_masks, 0, config->rounds * sizeof(std::uint64_t));
+
+#if OMEGA_HAS_AVX2
+  bool use_fc2_m8_candidate = fc2_m8_workspace_enabled;
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+  /* Keep the Step-A capture DLL on the original per-slot control route. */
+  use_fc2_m8_candidate = false;
+#endif
+#endif
 
   std::memset(grads->d_token_part, 0, config->batch * config->sequence_length * state_dimension * sizeof(float));
   std::memset(grads->d_previous_state, 0, state_count * sizeof(float));
@@ -1475,30 +1623,62 @@ int recurrent_backward_impl_body(
               const size_t hidden_count = 4 * dimension;
               const size_t fc1_base = (batch * slots + slot) * hidden_count;
               float* hidden_values = fc1 + fc1_base;
-              for (size_t row = 0; row < hidden_count; ++row) {
-                hidden_values[row] = gelu(saved_fc1_pre[fc1_base + row]);
-              }
-              for (size_t d = 0; d < dimension; ++d) {
-                const float output_gradient = update[base + d];
-                const __m256 output_gradient_vector = _mm256_set1_ps(output_gradient);
-                size_t row = 0;
-                for (; row + 8 <= hidden_count; row += 8) {
-                  const __m256 hidden_vector = _mm256_loadu_ps(hidden_values + row);
-                  float* gradient = grads->d_block_fc2_weight + d * hidden_count + row;
-                  const __m256 contribution = _mm256_mul_ps(hidden_vector, output_gradient_vector);
-                  _mm256_storeu_ps(gradient, _mm256_add_ps(_mm256_loadu_ps(gradient), contribution));
-                  for (size_t lane = 0; lane < 8; ++lane) {
-                    add_abs_contribution(grads->sum_abs_d_block_fc2_weight, grads->count_d_block_fc2_weight,
-                        d * hidden_count + row + lane, hidden_values[row + lane] * output_gradient);
-                  }
-                }
-                for (; row < hidden_count; ++row) {
-                  const float contribution = output_gradient * hidden_values[row];
-                  grads->d_block_fc2_weight[d * hidden_count + row] += contribution;
-                  add_abs_contribution(grads->sum_abs_d_block_fc2_weight, grads->count_d_block_fc2_weight,
-                      d * hidden_count + row, contribution);
+              prepare_fc2_dweight_slot_avx2(saved_fc1_pre + fc1_base, update + base, hidden_values,
+                  fc2_m8_workspace_enabled ? fc2_group_activated : nullptr,
+                  fc2_m8_workspace_enabled ? fc2_group_output_gradient : nullptr,
+                  slot, dimension, hidden_count);
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+              const size_t global_batch = g_fc2_replay_worker_index * config->batch + batch;
+              if (slot == 0) {
+                Fc2ReplayCaptureScratch& capture = g_fc2_replay_scratch;
+                capture.active = slots == kFc2ReplaySlots && dimension == kFc2ReplayDimension &&
+                    fc2_replay_group_selected(position, round, global_batch);
+                if (capture.active) {
+                  capture.position = position;
+                  capture.round = round;
+                  capture.batch = global_batch;
+                  std::memcpy(capture.dweight_before.data(), grads->d_block_fc2_weight,
+                      capture.dweight_before.size() * sizeof(float));
                 }
               }
+              if (g_fc2_replay_scratch.active) {
+                Fc2ReplayCaptureScratch& capture = g_fc2_replay_scratch;
+                std::memcpy(capture.preactivation.data() + slot * kFc2ReplayHidden,
+                    saved_fc1_pre + fc1_base, kFc2ReplayHidden * sizeof(float));
+                std::memcpy(capture.activated.data() + slot * kFc2ReplayHidden,
+                    hidden_values, kFc2ReplayHidden * sizeof(float));
+                std::memcpy(capture.output_gradient.data() + slot * kFc2ReplayDimension,
+                    update + base, kFc2ReplayDimension * sizeof(float));
+              }
+#endif
+              if (use_fc2_m8_candidate) {
+                accumulate_fc2_dweight_slot_diagnostics_avx2(hidden_values, update + base,
+                    grads->sum_abs_d_block_fc2_weight, grads->count_d_block_fc2_weight, dimension, hidden_count);
+              } else {
+                accumulate_fc2_dweight_slot_avx2(hidden_values, update + base,
+                    grads->d_block_fc2_weight, grads->sum_abs_d_block_fc2_weight,
+                    grads->count_d_block_fc2_weight, dimension, hidden_count);
+              }
+              if (use_fc2_m8_candidate && slot + 1 == slots) {
+                omega_fc2_local_reduction::accumulate_dweight_m8(
+                    fc2_group_activated, fc2_group_output_gradient, grads->d_block_fc2_weight,
+                    dimension, hidden_count);
+              }
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+              if (g_fc2_replay_scratch.active && slot + 1 == slots) {
+                Fc2ReplayCaptureScratch& capture = g_fc2_replay_scratch;
+                std::memcpy(capture.dweight_candidate.data(), capture.dweight_before.data(),
+                    capture.dweight_before.size() * sizeof(float));
+                omega_fc2_local_reduction::accumulate_dweight_m8(
+                    capture.activated.data(), capture.output_gradient.data(), capture.dweight_candidate.data(),
+                    kFc2ReplayDimension, kFc2ReplayHidden);
+                g_fc2_replay_callback(g_fc2_replay_worker_index, capture.position, capture.round, capture.batch,
+                    capture.preactivation.data(), capture.activated.data(), capture.output_gradient.data(),
+                    capture.dweight_before.data(), grads->d_block_fc2_weight, capture.dweight_candidate.data(),
+                    g_fc2_replay_user_data);
+                capture.active = false;
+              }
+#endif
               size_t d = 0;
               for (; d + 8 <= dimension; d += 8) {
                 const __m256 contribution = _mm256_loadu_ps(update + base + d);
@@ -1836,9 +2016,9 @@ int recurrent_backward_impl_body(
 #endif
              }
            for (size_t input = 0; input < dimension; ++input) {
-            mixed[base + input] = q[base + input];
-          }
-          }
+             mixed[base + input] = q[base + input];
+           }
+           }
           }
         }
 
@@ -2590,8 +2770,16 @@ struct OmegaRuntime {
     local_grads.count_d_gate_logits = grads_->count_d_gate_logits == nullptr ? nullptr : counts[12];
     local_grads.fp64_d_depth_embedding = grads_->fp64_d_depth_embedding == nullptr ? nullptr : arena.fp64;
     local_grads.depth_max_level = grads_->depth_max_level == nullptr ? nullptr : arena.depth_max;
-    return recurrent_backward_impl(&local, params_, token_part_ + token_offset,
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+    const size_t prior_worker_index = g_fc2_replay_worker_index;
+    g_fc2_replay_worker_index = worker_index;
+#endif
+    const int status = recurrent_backward_impl(&local, params_, token_part_ + token_offset,
         d_readout_states_ + token_offset, d_next_state_ + batch_offset, arena.core, arena.core_bytes, &local_grads);
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+    g_fc2_replay_worker_index = prior_worker_index;
+#endif
+    return status;
   }
 
   size_t worker_count_;
@@ -2699,6 +2887,21 @@ bool runtime_common_valid(const OmegaRuntime* runtime, const OmegaRecurrentConfi
 }
 
 }  // namespace
+
+#ifdef OMEGA_FC2_REPLAY_CAPTURE
+extern "C" int omega_fc2_replay_capture_set_targets(
+    const OmegaFc2ReplayGroupIdentity* targets,
+    size_t target_count,
+    OmegaFc2ReplayCaptureCallback callback,
+    void* user_data) {
+  if (target_count == 0 || targets == nullptr || callback == nullptr) return OMEGA_RUNTIME_STATUS_INVALID_ARGUMENT;
+  g_fc2_replay_targets = targets;
+  g_fc2_replay_target_count = target_count;
+  g_fc2_replay_callback = callback;
+  g_fc2_replay_user_data = user_data;
+  return OMEGA_RUNTIME_STATUS_OK;
+}
+#endif
 
 extern "C" OmegaRuntime* omega_runtime_create(size_t num_threads) {
   OmegaRuntime* runtime = nullptr;

@@ -270,6 +270,10 @@ def test_ce_generation_metrics_and_historical_comparison_are_documentary() -> No
     assert report["ce_vs_historical_comparison"]["quality_gate"] is None
     assert report["documentary_only"] is True
     assert runner.verify_self_hash(report)
+    equal_report = runner.build_generation_audit_report(equal_cost_generation_report={"generations": ce_records})
+    assert equal_report["equal_cost_vs_historical_comparison"]["comparison_count"] == 32
+    assert equal_report["equal_cost_generations"] == ce_records
+    assert runner.verify_self_hash(equal_report)
 
 
 def test_real_entrypoints_require_authorization_and_default_does_not_execute() -> None:

@@ -29,12 +29,17 @@ COPY scripts/run_omega_core_lm_0_r1_training_technical_preflight.py /opt/omega/s
 COPY scripts/audit_omega_core_lm_0_design.py /opt/omega/audit_omega_core_lm_0_design.py
 COPY t1_trainability/model.py /opt/omega/t1_trainability/model.py
 COPY campaign/omega_core_lm_0_gpu_environment_preparation/docker/omega_image_package_init.py /opt/omega/t1_trainability/__init__.py
+COPY campaign/omega_core_lm_0_r1_pilot_execution_readiness/verify_image_contents.py /opt/omega/verify_image_contents.py
+COPY campaign/omega_core_lm_0_r1_pilot_execution_readiness/Dockerfile.frozen.6f2ddb87d7485411abc5d77084caa749c0b3a02531724a5cedc4902a4d260432 /opt/omega/Dockerfile.frozen.6f2ddb87d7485411abc5d77084caa749c0b3a02531724a5cedc4902a4d260432
+COPY campaign/omega_core_lm_0_r1_pilot_execution_readiness/readiness_report.json /opt/omega/readiness_report.json
 RUN chmod 0755 /usr/local/bin/omega-runpod-entrypoint
 RUN cd /opt/omega \
     && python -m py_compile omega_nominal_microbatch_runner.py budget_controller.py vps_control.py \
+        verify_image_contents.py \
     && python -c "from t1_trainability.model import CoreMLP, RMSNorm, SlotMix; print('OMEGA package import: PASS')" \
     && python test_budget_controller.py \
-    && python test_omega_nominal_microbatch_runner.py
+    && python test_omega_nominal_microbatch_runner.py \
+    && python verify_image_contents.py --in-image
 
 EXPOSE 22
 
