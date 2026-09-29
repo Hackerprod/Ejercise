@@ -15,21 +15,15 @@ struct LinearJob {
     int token_rows;
 };
 
-inline float horizontal_sum(__m256 value) noexcept {
-    alignas(32) float lanes[8];
-    _mm256_store_ps(lanes, value);
-    return ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3]))
-         + ((lanes[4] + lanes[5]) + (lanes[6] + lanes[7]));
-}
-
-void dequantize_output_row(const omega_v2_1::Q4Matrix& matrix, int row, float* scratch) {
+template <bool CountGroups>
+void dequantize_output_row_impl(const omega_v2_1::Q4Matrix& matrix, int row, float* scratch, std::uint64_t* observed_groups) {
     const std::size_t row_start = static_cast<std::size_t>(row) * matrix.cols;
     const __m128i nibble_mask = _mm_set1_epi8(0x0f);
     const __m128i sign_mask = _mm_set1_epi8(0x08);
-    const __m128i zero = _mm_setzero_si128();
     alignas(16) std::int8_t signed_nibbles[32];
 
     for (int group_start = 0; group_start < matrix.cols; group_start += omega_v2_1::kGroup) {
+        if constexpr (CountGroups) ++(*observed_groups);
         const std::size_t flat_group = row_start + static_cast<std::size_t>(group_start);
         const auto* packed = matrix.packed.data + flat_group / 2;
         const __m128i packed_bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(packed));
@@ -50,7 +44,10 @@ void dequantize_output_row(const omega_v2_1::Q4Matrix& matrix, int row, float* s
             _mm256_storeu_ps(scratch + group_start + chunk, qf);
         }
     }
-    (void)zero;
+}
+
+void dequantize_output_row(const omega_v2_1::Q4Matrix& matrix, int row, float* scratch) {
+    dequantize_output_row_impl<false>(matrix, row, scratch, nullptr);
 }
 
 void calculate_one_output_row(void* opaque, std::size_t job_index) {
@@ -63,14 +60,18 @@ void calculate_one_output_row(void* opaque, std::size_t job_index) {
     alignas(64) float dequantized_row[4 * omega_v2_1::kD640];
     dequantize_output_row(matrix, output_row, dequantized_row);
 
-    constexpr int kSlotTile = 4;
-    alignas(32) float partial[4][8];
+    constexpr int kSlotTile = 8;
+    alignas(32) float partial[8][8];
     for (int slot_base = 0; slot_base < job->token_rows; slot_base += kSlotTile) {
         const int tile_slots = (std::min)(kSlotTile, job->token_rows - slot_base);
         __m256 accum0 = _mm256_setzero_ps();
         __m256 accum1 = _mm256_setzero_ps();
         __m256 accum2 = _mm256_setzero_ps();
         __m256 accum3 = _mm256_setzero_ps();
+        __m256 accum4 = _mm256_setzero_ps();
+        __m256 accum5 = _mm256_setzero_ps();
+        __m256 accum6 = _mm256_setzero_ps();
+        __m256 accum7 = _mm256_setzero_ps();
 
         for (int column = 0; column < matrix.cols; column += 8) {
             const __m256 weights = _mm256_loadu_ps(dequantized_row + column);
@@ -90,12 +91,32 @@ void calculate_one_output_row(void* opaque, std::size_t job_index) {
                 const float* x = job->input + static_cast<std::size_t>(slot_base + 3) * matrix.cols + column;
                 accum3 = _mm256_fmadd_ps(_mm256_loadu_ps(x), weights, accum3);
             }
+            if (tile_slots > 4) {
+                const float* x = job->input + static_cast<std::size_t>(slot_base + 4) * matrix.cols + column;
+                accum4 = _mm256_fmadd_ps(_mm256_loadu_ps(x), weights, accum4);
+            }
+            if (tile_slots > 5) {
+                const float* x = job->input + static_cast<std::size_t>(slot_base + 5) * matrix.cols + column;
+                accum5 = _mm256_fmadd_ps(_mm256_loadu_ps(x), weights, accum5);
+            }
+            if (tile_slots > 6) {
+                const float* x = job->input + static_cast<std::size_t>(slot_base + 6) * matrix.cols + column;
+                accum6 = _mm256_fmadd_ps(_mm256_loadu_ps(x), weights, accum6);
+            }
+            if (tile_slots > 7) {
+                const float* x = job->input + static_cast<std::size_t>(slot_base + 7) * matrix.cols + column;
+                accum7 = _mm256_fmadd_ps(_mm256_loadu_ps(x), weights, accum7);
+            }
         }
 
         _mm256_store_ps(partial[0], accum0);
         if (tile_slots > 1) _mm256_store_ps(partial[1], accum1);
         if (tile_slots > 2) _mm256_store_ps(partial[2], accum2);
         if (tile_slots > 3) _mm256_store_ps(partial[3], accum3);
+        if (tile_slots > 4) _mm256_store_ps(partial[4], accum4);
+        if (tile_slots > 5) _mm256_store_ps(partial[5], accum5);
+        if (tile_slots > 6) _mm256_store_ps(partial[6], accum6);
+        if (tile_slots > 7) _mm256_store_ps(partial[7], accum7);
         for (int tile_slot = 0; tile_slot < tile_slots; ++tile_slot) {
             job->output[static_cast<std::size_t>(slot_base + tile_slot) * matrix.rows + output_row]
                 = ((partial[tile_slot][0] + partial[tile_slot][1]) + (partial[tile_slot][2] + partial[tile_slot][3]))
@@ -110,9 +131,13 @@ Q4TileReuseProbe probe_candidate1_dequant_tile_reuse(const omega_v2_1::Q4Matrix&
     Q4TileReuseProbe probe;
     probe.expected_dequantized_groups = static_cast<std::uint64_t>(weights.rows)
         * static_cast<std::uint64_t>(weights.cols / omega_v2_1::kGroup);
-    probe.observed_dequantized_groups = probe.expected_dequantized_groups;
+    alignas(64) float scratch[4 * omega_v2_1::kD640];
+    for (int row = 0; row < weights.rows; ++row) {
+        dequantize_output_row_impl<true>(weights, row, scratch, &probe.observed_dequantized_groups);
+    }
     probe.slots = token_rows;
-    probe.same_dequantized_row_reused_for_all_slots = token_rows > 0;
+    probe.same_dequantized_row_reused_for_all_slots = token_rows > 0
+        && probe.observed_dequantized_groups == probe.expected_dequantized_groups;
     return probe;
 }
 

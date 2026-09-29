@@ -326,14 +326,28 @@ def make_test_rows(
 ) -> list[dict[str, Any]]:
     q4_scalar_pass = native["correctness"]["toy_d32_m4_k2"]["pass"] is True
     tile = native["dequant_tile_reuse"]["Q_W_m16"]
-    no_copy = native["persistent_weight_format"] == "signed symmetric Q4 + FP16 group32 scales only" and native["predequantized_weight_copy_persistent"] is False
+    candidate_source = (UNIT_ROOT / "src" / "q4_kernel_candidate1.cpp").read_text(encoding="utf-8")
+    dequant_call_position = candidate_source.find("dequantize_output_row(matrix, output_row, dequantized_row)")
+    slot_loop_position = candidate_source.find("for (int slot_base = 0; slot_base < job->token_rows")
+    tile_reuse_static = dequant_call_position >= 0 and slot_loop_position > dequant_call_position
+    no_copy = (
+        native["persistent_weight_format"] == "signed symmetric Q4 + FP16 group32 scales only"
+        and native["predequantized_weight_copy_persistent"] is False
+        and "alignas(64) float dequantized_row[" in candidate_source
+        and "static float dequantized_row" not in candidate_source
+    )
     scratch_pass = native["scratch_per_worker_bytes"] <= 64 * 1024
-    fma_pass = native["fma_l1"]["series"]["median_macs_per_second"] > 0 and native["fma_l1"]["tile_fits_l1d"]
-    h0_formula_pass = abs(native["efficiencies"]["E_Q4"] - native["h0_q4"]["m16"]["median_macs_per_second"] / native["fma_l1"]["series"]["median_macs_per_second"]) < 1e-12
+    fma_source = (UNIT_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+    fma_body = fma_source.split("void fma_pair_job", 1)[1].split("Series measure_fma_peak", 1)[0]
+    fma_no_reduction = "horizontal_sum" not in fma_body and "std::accumulate" not in fma_body
+    fma_no_alloc = all(value == 0 for value in native["fma_l1"]["series"]["timed_heap_allocations"])
+    fma_pass = native["fma_l1"]["series"]["median_macs_per_second"] > 0 and native["fma_l1"]["tile_fits_l1d"] and fma_no_alloc and fma_no_reduction
+    h0_no_alloc = all(value == 0 for m in ("m1", "m4", "m16") for value in native["h0_q4"][m]["timed_heap_allocations"])
+    h0_formula_pass = h0_no_alloc and abs(native["efficiencies"]["E_Q4"] - native["h0_q4"]["m16"]["median_macs_per_second"] / native["fma_l1"]["series"]["median_macs_per_second"]) < 1e-12
     full_formula_pass = all(
         abs(native["efficiencies"][f"E_FULL_{m}"] - native["full_resident"][f"m{m}_k1"]["median_macs_per_second"] / native["h0_q4"][f"m{m}"]["median_macs_per_second"]) < 1e-12
         for m in (4, 16)
-    )
+    ) and all(value == 0 for name in ("m4_k1", "m16_k1", "m8_k4_for_s_native") for value in native["full_resident"][name]["timed_heap_allocations"])
     source_equal = pytorch["source"]["source_weight_value_sha256"] == source["weight_state_sha256"]
     native_k4 = native["full_resident"]["m8_k4_for_s_native"]["median_seconds"]
     pytorch_k4 = pytorch["S_native_cells"]["d512_m8_K4"]["pytorch_fp32_original_median_seconds"]
@@ -346,11 +360,18 @@ def make_test_rows(
         s_native=computed_speed,
     )
     speed_formula_pass = abs(computed_speed - pytorch["S_native_cells"]["d512_m8_K4"]["S_native"]) < 1e-12
-    candidate_limit_pass = candidate_id in ("candidate_01", "candidate_02") and len([candidate_id]) <= 2
+    measured_candidate_dirs = [path for path in RESULTS_BASE.glob("candidate_*") if any(path.glob("native_kq_candidate_*.json"))]
+    candidate_limit_pass = candidate_id in ("candidate_01", "candidate_02") and len(measured_candidate_dirs) <= 2
+    kq_main_source = (UNIT_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+    no_abc_calls = all(name not in kq_main_source for name in ("run_full_sweep", "full_block_abc_correctness", "probe_eviction"))
     attempt02_pass = attempt02_before["artifact_hashes_verified_before_kq"] and attempt02_before["artifact_manifest_sha256"] == attempt02_after["artifact_manifest_sha256"] and attempt02_after["artifact_hashes_verified_after_kq"]
     m1_pass = all(str(d) in m1_diag and m1_diag[str(d)]["gate"] is False for d in (512, 640))
     machine = native["machine_balance_diagnostic"]
-    machine_pass = machine["dram_working_set_bytes"] >= 4 * native["hardware"]["llc_bytes"] and machine["affinity_ok"] is True
+    machine_pass = (
+        machine["dram_working_set_bytes"] >= 4 * native["hardware"]["llc_bytes"]
+        and machine["affinity_ok"] is True
+        and all(value == 0 for value in machine["dram_stream"]["timed_heap_allocations"])
+    )
     conformance = {
         "phase": "T0_PHYSICAL_KERNEL_QUALIFICATION_AND_REPLICATION",
         "prior_evidence": {
@@ -375,19 +396,20 @@ def make_test_rows(
         "candidate_decision": candidate_decision["terminal_status"],
         "status": "CONFORMANCE_HOLD",
     }
+    affinity_match = pytorch["process_affinity"]["logical_processor_ids"] == attempt02_before["frozen_worker_logical_ids"]
     rows = [
         ("test_v2_1b_vectorized_q4_matches_scalar", q4_scalar_pass, native["correctness"]["toy_d32_m4_k2"]),
-        ("test_v2_1b_dequant_tile_reused_across_slots", tile["pass"] is True and tile["slots_reusing_each_row_tile"] == 16, tile),
+        ("test_v2_1b_dequant_tile_reused_across_slots", tile["pass"] is True and tile["slots_reusing_each_row_tile"] == 16 and tile_reuse_static, {**tile, "source_order_confirms_dequant_before_slot_loop": tile_reuse_static}),
         ("test_v2_1b_no_full_predequantized_weight_copy", no_copy, {"persistent_weight_format": native["persistent_weight_format"], "persistent_copy": native["predequantized_weight_copy_persistent"]}),
         ("test_v2_1b_scratch_per_worker_le_64k", scratch_pass, {"scratch_bytes": native["scratch_per_worker_bytes"], "limit_bytes": 65536}),
-        ("test_v2_1b_fma_peak_fixture", fma_pass, native["fma_l1"]),
+        ("test_v2_1b_fma_peak_fixture", fma_pass, {**native["fma_l1"], "no_timed_allocations": fma_no_alloc, "no_timed_reductions": fma_no_reduction}),
         ("test_v2_1b_h0_efficiency_formula", h0_formula_pass, {"E_Q4": native["efficiencies"]["E_Q4"]}),
         ("test_v2_1b_full_efficiency_formula", full_formula_pass, {"E_FULL_4": native["efficiencies"]["E_FULL_4"], "E_FULL_16": native["efficiencies"]["E_FULL_16"]}),
         ("test_v2_1b_kernel_quality_thresholds", q4_gate and full4_gate and full16_gate and q4_scalar_pass, {"E_Q4_pass": q4_gate, "E_FULL_4_pass": full4_gate, "E_FULL_16_pass": full16_gate, "correctness_pass": q4_scalar_pass}),
-        ("test_v2_1b_pytorch_reference_same_equations", source_equal and pytorch["threads"] == 4 and pytorch["interop_threads"] == 1 and pytorch["eval"] and not pytorch["grad_enabled"], {"source_weight_hash_match": source_equal, "torch_version": pytorch["torch_version"], "threads": pytorch["threads"], "interop_threads": pytorch["interop_threads"], "eval": pytorch["eval"], "grad_enabled": pytorch["grad_enabled"]}),
+        ("test_v2_1b_pytorch_reference_same_equations", source_equal and affinity_match and pytorch["threads"] == 4 and pytorch["interop_threads"] == 1 and pytorch["eval"] and not pytorch["grad_enabled"], {"source_weight_hash_match": source_equal, "same_four_p_core_logical_ids": affinity_match, "torch_version": pytorch["torch_version"], "threads": pytorch["threads"], "interop_threads": pytorch["interop_threads"], "eval": pytorch["eval"], "grad_enabled": pytorch["grad_enabled"]}),
         ("test_v2_1b_pytorch_speedup_formula", speed_formula_pass, {"S_native": computed_speed, "formula": "median(T_PyTorch_FP32_pre-Q4)/median(T_native_Q4)"}),
-        ("test_v2_1b_candidate_limit_two", candidate_limit_pass, {"candidate_id": candidate_id, "max_candidates": 2, "measured_candidate_count": 1}),
-        ("test_v2_1b_no_abc_before_kernel_freeze", native["kq_scope"]["a_b_c_executed"] is False and native["kq_scope"]["attempt03_executed"] is False, native["kq_scope"]),
+        ("test_v2_1b_candidate_limit_two", candidate_limit_pass, {"candidate_id": candidate_id, "max_candidates": 2, "measured_candidate_count": len(measured_candidate_dirs)}),
+        ("test_v2_1b_no_abc_before_kernel_freeze", native["kq_scope"]["a_b_c_executed"] is False and native["kq_scope"]["attempt03_executed"] is False and no_abc_calls, {**native["kq_scope"], "native_entrypoint_has_no_residency_runner_calls": no_abc_calls}),
         ("test_v2_1b_attempt02_preserved", attempt02_pass, {"before": attempt02_before, "after": attempt02_after}),
         ("test_v2_1b_attempt03_same_72_cells", conformance["scientific_attempt"]["cell_count"] == 72 and not conformance["scientific_attempt"]["executed_during_kq"], conformance["scientific_attempt"]),
         ("test_v2_1b_m1_residency_diagnostic", m1_pass, m1_diag),
@@ -469,7 +491,6 @@ def main() -> int:
     provenance = source_provenance()
     seal_validation = validate_v2_0_seal()
     attempt02_before = validate_attempt02_preservation()
-    attempt02_m1 = attempt02_m1_diagnostics()
     vswhere = find_vswhere()
     cmake, vs_install, cmake_version = find_msvc_cmake(vswhere)
     if (RESULTS_BASE / args.candidate_id).exists():
@@ -603,6 +624,7 @@ def main() -> int:
     )
     all_freeze_gates = candidate_decision["all_five_gates_pass"]
 
+    # M1 is opened only after the KQ-only candidate decision and never feeds candidate selection.
     attempt02_after = validate_attempt02_preservation()
     m1_diag = attempt02_m1_diagnostics()
     tests, conformance = make_test_rows(native, pytorch, q4_gate, full4_gate, full16_gate, speed_gate, attempt02_before, attempt02_after, m1_diag, source_weight_info, args.candidate_id)

@@ -213,11 +213,12 @@ FullMeasurement measure_full_resident(const CoreWeights& weights, int m, int K, 
     scratch.resize_for(kDimension, m);
     const std::vector<float> initial = initial_state(m);
     const std::uint64_t macs = 16ull * m * kDimension * kDimension + 2ull * m * m * kDimension;
+    auto reset = [&] { std::copy(initial.begin(), initial.end(), scratch.state.begin()); };
     auto run = [&] {
-        std::copy(initial.begin(), initial.end(), scratch.state.begin());
         for (int round = 0; round < K; ++round) v2_full_block_round(weights, scratch, pool);
     };
     for (int warmup = 0; warmup < kWarmups; ++warmup) {
+        reset();
         touch_weights(weights, cache_line_bytes);
         run();
     }
@@ -226,6 +227,7 @@ FullMeasurement measure_full_resident(const CoreWeights& weights, int m, int K, 
     result.timing.samples.reserve(kSamples);
     result.timing.allocation_counts.reserve(kSamples);
     for (int sample = 0; sample < kSamples; ++sample) {
+        reset();
         touch_weights(weights, cache_line_bytes);
         begin_timed_allocation_count();
         const std::int64_t start = qpc_ticks();
@@ -302,11 +304,12 @@ void fma_pair_job(void* opaque, std::size_t pair_index) {
     }
 }
 
-Series measure_fma_peak(WorkerPool& pool, int repeats, std::size_t& working_set_bytes) {
+Series measure_fma_peak(WorkerPool& pool, int repeats, std::size_t& working_set_bytes, std::uint64_t l1d_bytes_per_worker) {
     constexpr std::size_t input_bytes = static_cast<std::size_t>(kFmaM) * kDimension * sizeof(float);
     constexpr std::size_t weight_bytes = static_cast<std::size_t>(kFmaRows) * kDimension * sizeof(float);
     constexpr std::size_t output_bytes = static_cast<std::size_t>(kFmaRows) * kFmaM * 8 * sizeof(float);
     working_set_bytes = input_bytes + weight_bytes / 4 + output_bytes / 4;
+    if (working_set_bytes > l1d_bytes_per_worker) throw std::runtime_error("P_FMA tile does not fit in measured P-core L1D");
     std::vector<float> input(static_cast<std::size_t>(kFmaM) * kDimension);
     std::vector<float> weights(static_cast<std::size_t>(kFmaRows) * kDimension);
     std::vector<float> output(static_cast<std::size_t>(kFmaRows) * kFmaM * 8, 0.0f);
@@ -396,6 +399,23 @@ std::string selected_workers_json(const std::vector<CoreRecord>& workers) {
     }
     out << ']';
     return out.str();
+}
+
+std::uint64_t l1d_bytes_for_cpu_set(const HardwareInfo& hardware, DWORD cpu_set_id) {
+    const CpuSetRecord* cpu = nullptr;
+    for (const CoreRecord& core : hardware.cores) {
+        for (const CpuSetRecord& record : core.cpu_sets) if (record.id == cpu_set_id) cpu = &record;
+    }
+    if (!cpu) return 0;
+    std::uint64_t size = 0;
+    const KAFFINITY bit = static_cast<KAFFINITY>(1) << cpu->logical_index;
+    for (const CacheRecord& cache : hardware.caches) {
+        if (cache.level != 1 || cache.type != CacheData) continue;
+        for (const auto& group_mask : cache.group_masks) {
+            if (group_mask.first == cpu->group && (group_mask.second & bit)) size = (std::max)(size, static_cast<std::uint64_t>(cache.size_bytes));
+        }
+    }
+    return size;
 }
 
 std::string series_field(const char* name, const Series& value) {
@@ -493,10 +513,16 @@ int main(int argc, char** argv) {
             throw std::runtime_error("KQ source/attempt provenance or transient output paths are incomplete");
         }
 
-        std::string affinity_error;
         WorkerPool fma_pool(equal_fma_workers);
         std::size_t fma_working_set_bytes = 0;
-        const Series p_fma = measure_fma_peak(fma_pool, kFmaRepeats, fma_working_set_bytes);
+        std::uint64_t minimum_worker_l1d_bytes = std::numeric_limits<std::uint64_t>::max();
+        for (const CoreRecord& worker : workers) {
+            minimum_worker_l1d_bytes = (std::min)(minimum_worker_l1d_bytes, l1d_bytes_for_cpu_set(hardware, worker.cpu_sets.front().id));
+        }
+        if (minimum_worker_l1d_bytes == 0 || minimum_worker_l1d_bytes == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::runtime_error("KQ could not introspect L1D size for all frozen P-core workers");
+        }
+        const Series p_fma = measure_fma_peak(fma_pool, kFmaRepeats, fma_working_set_bytes, minimum_worker_l1d_bytes);
         const bool fma_affinity_ok = fma_pool.affinity_intact();
         fma_pool.stop();
 
@@ -549,7 +575,8 @@ int main(int argc, char** argv) {
             << ",\"compile_candidate_id\":\"KQ1_DEQUANT_ROW_REUSE\""
             << ",\"fma_l1\":{" << series_field("series", p_fma)
             << ",\"working_set_bytes_per_worker\":" << fma_working_set_bytes
-            << ",\"l1d_bytes_per_worker\":49152,\"tile_fits_l1d\":" << (fma_working_set_bytes <= 49152 ? "true" : "false")
+            << ",\"l1d_bytes_per_worker\":" << minimum_worker_l1d_bytes
+            << ",\"tile_fits_l1d\":" << (fma_working_set_bytes <= minimum_worker_l1d_bytes ? "true" : "false")
             << ",\"affinity_ok\":" << (fma_affinity_ok ? "true" : "false") << "}"
             << ",\"h0_q4\":{" << series_field("m1", h0_m1) << ',' << series_field("m4", h0_m4) << ',' << series_field("m16", h0_m16) << "}"
             << ",\"full_resident\":{" << series_field("m1_k1", full_m1.timing) << ',' << series_field("m4_k1", full_m4.timing)
@@ -570,7 +597,7 @@ int main(int argc, char** argv) {
             << ",\"machine_balance_diagnostic\":{" << series_field("dram_stream", dram)
             << ",\"dram_working_set_bytes\":" << dram_working_set_bytes
             << ",\"minimum_working_set_bytes\":" << 4ull * hardware.llc_bytes
-            << ",\"l1d_bytes_per_worker\":49152,\"physical_q4_core_bytes\":" << weights.physical_buffer_bytes
+            << ",\"l1d_bytes_per_worker\":" << minimum_worker_l1d_bytes << ",\"physical_q4_core_bytes\":" << weights.physical_buffer_bytes
             << ",\"BW_DRAM_bytes_per_second\":" << static_cast<double>(dram_working_set_bytes) / dram.median_seconds
             << ",\"AI_m4_MAC_per_byte\":" << ai_m4 << ",\"M_machine_MAC_per_byte\":" << p_full_over_bw
             << ",\"rho_optimistic\":" << rho_optimistic << ",\"affinity_ok\":" << (dram_affinity_ok ? "true" : "false") << "}"

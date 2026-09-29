@@ -5,7 +5,7 @@
 namespace omega_v2_1b {
 
 constexpr int kCandidateId = 1;
-constexpr std::size_t kCandidateScratchBytesPerWorker = 4ull * omega_v2_1::kD640 * sizeof(float) + 128ull;
+constexpr std::size_t kCandidateScratchBytesPerWorker = 16ull * 1024ull;
 
 struct Q4TileReuseProbe {
     std::uint64_t expected_dequantized_groups = 0;
