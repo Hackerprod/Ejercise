@@ -18,7 +18,21 @@ from typing import Any
 
 UNIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = UNIT_ROOT.parents[2]
-RESULTS_ROOT = UNIT_ROOT / "results" / "omega_v2_1_physical"
+RESULTS_BASE_ROOT = UNIT_ROOT / "results" / "omega_v2_1_physical"
+
+
+def next_immutable_results_root() -> Path:
+    if not RESULTS_BASE_ROOT.exists():
+        return RESULTS_BASE_ROOT
+    attempt = 2
+    while True:
+        candidate = RESULTS_BASE_ROOT / f"attempt_{attempt:02d}"
+        if not candidate.exists():
+            return candidate
+        attempt += 1
+
+
+RESULTS_ROOT = next_immutable_results_root()
 BUILD_ROOT = UNIT_ROOT / "build"
 EXECUTABLE = BUILD_ROOT / "Release" / "omega_v2_1_bench.exe"
 V2_0_SEAL_PATH = REPO_ROOT / "t1_trainability_lab_v0.1.0" / "campaign" / "omega_v2_0_conformance" / "V2_0_RESULT_SEAL.json"
@@ -458,6 +472,10 @@ def build_test_rows(
         and bool(hardware_preflight.get("h0_measurements"))
         and hw.get("p_core_count", 0) >= 4
         and hw.get("e_core_count", 0) > 0
+        and hw.get("physical_core_count") == 16
+        and hw.get("logical_processor_count") == 24
+        and hw.get("p_core_count") == 8
+        and hw.get("e_core_count") == 8
         and hw.get("physical_core_count") == hw.get("p_core_count", 0) + hw.get("e_core_count", 0)
         and all(core.get("intel_cpuid_core_type") in (0x20, 0x40) for core in hw.get("cores", []))
         and len(hardware_preflight.get("h0_measurements", [])) == hw.get("p_core_count", 0) * 4
@@ -587,7 +605,8 @@ def build_test_rows(
                 and block.get("authority", {}).get("conversacion_md_blob") == CONVERSACION_MD_BLOB
                 and block.get("global_status") == "CONFORMANCE_HOLD"
                 and block.get("status") in ("CONFORMANT", "CONFORMANCE_HOLD")
-                and block.get("actual_candidate", {}).get("values_obtained_by_introspection_and_native_measurement") is True
+                and block.get("actual_candidate", {}).get("values_obtained_by_introspection_and_native_measurement") is (native_status == "SWEEP_COMPLETE")
+                and {row.get("candidate_id") for row in block.get("actual_candidate", {}).get("candidates", [])} == {"V2-512", "V2-640"}
             )
         except (OSError, ValueError, KeyError):
             block_ok = False
@@ -633,6 +652,9 @@ def build_test_report(
     # When the native sweep did not complete, report contractual post-sweep tests as SKIP explicitly.
     if native_status != "SWEEP_COMPLETE":
         post_sweep = {
+            "test_v2_1_b_round_storages_are_disjoint",
+            "test_v2_1_b_values_equal_a",
+            "test_v2_1_b_pool_exceeds_2p5_llc",
             "test_v2_1_no_heap_allocation_in_timed_kernel",
             "test_v2_1_flop_mac_ledger_matches_v2_0",
             "test_v2_1_same_compute_abc",
@@ -850,6 +872,8 @@ def main() -> int:
     }
     write_json(RESULTS_ROOT / "build_manifest.json", build_manifest)
     run_timeout_seconds = 8 * 60 * 60
+    native_env = os.environ.copy()
+    native_env["OMEGA_V2_1_RESULTS_ROOT"] = str(RESULTS_ROOT.resolve())
     try:
         native_process = subprocess.run(
             [str(executable), "--run"],
@@ -857,6 +881,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             timeout=run_timeout_seconds,
+            env=native_env,
         )
         (RESULTS_ROOT / "native_stdout.log").write_text(native_process.stdout, encoding="utf-8", newline="\n")
         (RESULTS_ROOT / "native_stderr.log").write_text(native_process.stderr, encoding="utf-8", newline="\n")

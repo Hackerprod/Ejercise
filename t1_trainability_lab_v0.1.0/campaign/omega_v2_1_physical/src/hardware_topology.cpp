@@ -58,13 +58,22 @@ bool collect_cpu_sets(std::vector<CpuSetRecord>& sets, std::string& error) {
         return false;
     }
     std::size_t offset = 0;
-    while (offset + sizeof(SYSTEM_CPU_SET_INFORMATION) <= bytes) {
+    constexpr std::size_t cpu_set_header_bytes = offsetof(SYSTEM_CPU_SET_INFORMATION, CpuSet);
+    while (offset < bytes) {
+        if (bytes - offset < cpu_set_header_bytes) {
+            error = "truncated SYSTEM_CPU_SET_INFORMATION header";
+            return false;
+        }
         const auto* record = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
-        if (record->Size == 0 || offset + record->Size > bytes) {
+        if (record->Size < cpu_set_header_bytes || offset + record->Size > bytes) {
             error = "malformed CPU-set record size";
             return false;
         }
         if (record->Type == CpuSetInformation) {
+            if (record->Size < cpu_set_header_bytes + sizeof(record->CpuSet)) {
+                error = "truncated CPU-set payload";
+                return false;
+            }
             CpuSetRecord row;
             row.id = record->CpuSet.Id;
             row.group = record->CpuSet.Group;
@@ -100,14 +109,26 @@ bool collect_processor_cores(const std::vector<CpuSetRecord>& sets, std::vector<
         return false;
     }
     std::size_t offset = 0;
-    while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= bytes) {
+    constexpr std::size_t relationship_header_bytes = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor);
+    while (offset < bytes) {
+        if (bytes - offset < relationship_header_bytes) {
+            error = "truncated processor-core relationship header";
+            return false;
+        }
         const auto* item = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
-        if (item->Size == 0 || offset + item->Size > bytes) {
+        if (item->Size < relationship_header_bytes || offset + item->Size > bytes) {
             error = "malformed processor-core relationship size";
             return false;
         }
         if (item->Relationship == RelationProcessorCore) {
             const auto& processor = item->Processor;
+            const std::size_t processor_payload_bytes = item->Size - relationship_header_bytes;
+            const std::size_t required_processor_bytes = offsetof(PROCESSOR_RELATIONSHIP, GroupMask)
+                + static_cast<std::size_t>(processor.GroupCount) * sizeof(GROUP_AFFINITY);
+            if (processor.GroupCount == 0 || processor_payload_bytes < required_processor_bytes) {
+                error = "truncated processor-core group-mask payload";
+                return false;
+            }
             for (WORD group_slot = 0; group_slot < processor.GroupCount; ++group_slot) {
                 const GROUP_AFFINITY& mask = processor.GroupMask[group_slot];
                 CoreRecord core;
@@ -144,6 +165,15 @@ bool collect_processor_cores(const std::vector<CpuSetRecord>& sets, std::vector<
         error = "no physical processor cores enumerated";
         return false;
     }
+    for (const CpuSetRecord& set : sets) {
+        const std::size_t mappings = static_cast<std::size_t>(std::count_if(cores.begin(), cores.end(), [&](const CoreRecord& core) {
+            return std::any_of(core.cpu_sets.begin(), core.cpu_sets.end(), [&](const CpuSetRecord& mapped) { return mapped.id == set.id; });
+        }));
+        if (mappings != 1) {
+            error = "CPU-set ID " + std::to_string(set.id) + " maps to " + std::to_string(mappings) + " processor-core relations instead of exactly one";
+            return false;
+        }
+    }
     return true;
 }
 
@@ -160,14 +190,26 @@ bool collect_caches(HardwareInfo& info, std::string& error) {
         return false;
     }
     std::size_t offset = 0;
-    while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= bytes) {
+    constexpr std::size_t relationship_header_bytes = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Cache);
+    while (offset < bytes) {
+        if (bytes - offset < relationship_header_bytes) {
+            error = "truncated cache relationship header";
+            return false;
+        }
         const auto* item = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
-        if (item->Size == 0 || offset + item->Size > bytes) {
+        if (item->Size < relationship_header_bytes || offset + item->Size > bytes) {
             error = "malformed cache relationship size";
             return false;
         }
         if (item->Relationship == RelationCache) {
             const auto& c = item->Cache;
+            const std::size_t cache_payload_bytes = item->Size - relationship_header_bytes;
+            const std::size_t required_cache_bytes = offsetof(CACHE_RELATIONSHIP, GroupMasks)
+                + static_cast<std::size_t>(c.GroupCount) * sizeof(GROUP_AFFINITY);
+            if (c.GroupCount == 0 || cache_payload_bytes < required_cache_bytes) {
+                error = "truncated cache group-mask payload";
+                return false;
+            }
             CacheRecord row;
             row.level = c.Level;
             row.type = static_cast<BYTE>(c.Type);
@@ -244,9 +286,26 @@ bool query_hardware(HardwareInfo& info, std::string& error) {
 
     std::vector<CpuSetRecord> cpu_sets;
     if (!collect_cpu_sets(cpu_sets, error)) return false;
+    if (cpu_sets.size() != info.logical_processor_count) {
+        error = "Windows CPU-set enumeration returned " + std::to_string(cpu_sets.size())
+            + " records for " + std::to_string(info.logical_processor_count) + " active logical processors";
+        return false;
+    }
     if (!collect_processor_cores(cpu_sets, info.cores, error)) return false;
     if (!classify_intel_hybrid_cores(info, error)) return false;
     info.physical_core_count = static_cast<DWORD>(info.cores.size());
+    if (info.cpu_model.find("i7-13700F") != std::string::npos) {
+        const bool p_threading = std::all_of(info.cores.begin(), info.cores.end(), [](const CoreRecord& core) {
+            return core.classified_p_core ? core.cpu_sets.size() == 2 : core.cpu_sets.size() == 1;
+        });
+        if (info.physical_core_count != 16 || info.logical_processor_count != 24
+            || info.p_core_count != 8 || info.e_core_count != 8 || !p_threading) {
+            error = "MEASUREMENT_INVALID_HARDWARE_TOPOLOGY: i7-13700F must enumerate 16 physical cores (8 P/8 E) and 24 logical processors; observed physical="
+                + std::to_string(info.physical_core_count) + ",P=" + std::to_string(info.p_core_count)
+                + ",E=" + std::to_string(info.e_core_count) + ",logical=" + std::to_string(info.logical_processor_count);
+            return false;
+        }
+    }
     if (!collect_caches(info, error)) return false;
     if (info.logical_processor_count == 0 || info.processor_group_count == 0 || info.llc_bytes == 0 || info.cache_line_bytes == 0) {
         error = "hardware preflight lacks logical processors, groups, LLC, or cache-line size";

@@ -221,15 +221,23 @@ std::string preflight_q4_ledger_json(const std::vector<CoreWeights>& weights, co
 }
 
 double measure_qpc_overhead_ns() {
-    std::vector<std::int64_t> deltas;
-    deltas.reserve(1001);
-    for (int i = 0; i < 1001; ++i) {
+    constexpr int calls_per_batch = 1024;
+    constexpr int batch_count = 31;
+    std::vector<double> nanoseconds_per_call;
+    nanoseconds_per_call.reserve(batch_count);
+    for (int batch = 0; batch < batch_count; ++batch) {
         const auto start = qpc_ticks();
+        std::int64_t sink = 0;
+        for (int call = 0; call < calls_per_batch; ++call) sink ^= qpc_ticks();
         const auto stop = qpc_ticks();
-        deltas.push_back(stop - start);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        (void)sink;
+        if (stop <= start) return 0.0;
+        nanoseconds_per_call.push_back(1e9 * static_cast<double>(stop - start)
+            / static_cast<double>(qpc_frequency()) / calls_per_batch);
     }
-    std::sort(deltas.begin(), deltas.end());
-    return 1e9 * static_cast<double>(deltas[deltas.size() / 2]) / static_cast<double>(qpc_frequency());
+    std::sort(nanoseconds_per_call.begin(), nanoseconds_per_call.end());
+    return nanoseconds_per_call[nanoseconds_per_call.size() / 2];
 }
 
 std::string preflight_json(const HardwareInfo& hardware,
@@ -291,7 +299,20 @@ int main(int argc, char** argv) {
         const std::filesystem::path executable = std::filesystem::absolute(argv[0]);
         const std::filesystem::path unit_root = executable.parent_path().parent_path().parent_path();
         const std::filesystem::path repo_root = unit_root.parent_path().parent_path().parent_path();
-        const std::filesystem::path result_root = unit_root / "results" / "omega_v2_1_physical";
+        const std::filesystem::path base_result_root = unit_root / "results" / "omega_v2_1_physical";
+        std::filesystem::path result_root = base_result_root;
+        std::vector<wchar_t> result_root_environment(32768, L'\0');
+        const DWORD result_root_environment_length = GetEnvironmentVariableW(
+            L"OMEGA_V2_1_RESULTS_ROOT", result_root_environment.data(), static_cast<DWORD>(result_root_environment.size()));
+        if (result_root_environment_length >= result_root_environment.size()) {
+            throw std::runtime_error("OMEGA_V2_1_RESULTS_ROOT exceeds the supported Windows path length");
+        }
+        if (result_root_environment_length > 0) {
+            result_root = std::filesystem::path(result_root_environment.data());
+            if (!result_root.is_absolute() || (result_root != base_result_root && result_root.parent_path() != base_result_root)) {
+                throw std::runtime_error("OMEGA_V2_1_RESULTS_ROOT must be the contract results directory or one immutable attempt child");
+            }
+        }
         std::filesystem::create_directories(result_root);
         for (const char* immutable_name : {"hardware_preflight.json", "native_run_status.json", "raw_measurements.csv"}) {
             if (std::filesystem::exists(result_root / immutable_name)) {
@@ -430,7 +451,8 @@ int main(int argc, char** argv) {
                 b_pool_valid = b_pool_valid && pool_bytes >= b_pool_min && static_cast<double>(pool_bytes) / hardware.llc_bytes >= 2.5;
             }
         }
-        const bool qpc_valid = qpc_monotonic && qpc_frequency() > 0 && hardware.qpc_overhead_ns > 0.0;
+        const bool qpc_timer_valid = qpc_monotonic && qpc_frequency() > 0;
+        const bool qpc_overhead_valid = hardware.qpc_overhead_ns > 0.0;
         const bool q4_valid = q4_roundtrip.find("\"signed_range_test\":true") != std::string::npos
             && q4_roundtrip.find("\"fp16_scales_positive\":true") != std::string::npos
             && q4_roundtrip.find("\"aligned_packed\":true") != std::string::npos
@@ -450,7 +472,8 @@ int main(int argc, char** argv) {
             });
         std::string preflight_status = "READY";
         std::string preflight_reason;
-        if (!qpc_valid) { preflight_status = "MEASUREMENT_INVALID"; preflight_reason = "QPC monotonicity/frequency test failed"; }
+        if (!qpc_timer_valid) { preflight_status = "MEASUREMENT_INVALID"; preflight_reason = "QPC monotonicity/frequency test failed"; }
+        else if (!qpc_overhead_valid) { preflight_status = "MEASUREMENT_INVALID"; preflight_reason = "QPC overhead measurement was non-positive"; }
         else if (!q4_valid) { preflight_status = "CORRECTNESS_HOLD"; preflight_reason = "Q4 layout/pack/unpack test failed"; }
         else if (!scalar_valid) { preflight_status = "CORRECTNESS_HOLD"; preflight_reason = "Q4 scalar-reference test failed"; }
         else if (!full_scalar_valid) { preflight_status = "CORRECTNESS_HOLD"; preflight_reason = "full-block scalar-reference test failed"; }
@@ -481,7 +504,8 @@ int main(int argc, char** argv) {
                        << "\"},{\"name\":\"test_v2_1_full_block_scalar_reference\",\"status\":\"" << (full_scalar_valid ? "PASS" : "FAIL")
                       << "\"},{\"name\":\"test_v2_1_abc_numerical_identity\",\"status\":\"" << (abc_valid ? "PASS" : "FAIL")
                       << "\"},{\"name\":\"test_v2_1_fixed_affinity_preserved\",\"status\":\"" << (worker_affinity_valid ? "PASS" : "FAIL")
-                      << "\"},{\"name\":\"test_v2_1_qpc_monotonic\",\"status\":\"" << (qpc_valid ? "PASS" : "FAIL") << "\"}] }";
+                       << "\"},{\"name\":\"test_v2_1_qpc_monotonic\",\"status\":\"" << (qpc_timer_valid ? "PASS" : "FAIL")
+                       << "\"},{\"name\":\"test_v2_1_qpc_overhead_recorded\",\"status\":\"" << (qpc_overhead_valid ? "PASS" : "FAIL") << "\"}] }";
         write_text(result_root / "native_test_report.json", native_tests.str());
 
         if (preflight_status != "READY") {
