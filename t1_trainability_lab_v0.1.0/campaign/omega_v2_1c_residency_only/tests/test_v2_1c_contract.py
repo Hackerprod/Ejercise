@@ -43,8 +43,29 @@ class V21cContractTests(unittest.TestCase):
         self.assertIn("${KQ2_SOURCE_DIR}/q4_kernel_candidate2.cpp", cmake)
         self.assertIn("${KQ2_SOURCE_DIR}/full_block_candidate2.cpp", cmake)
         self.assertIn("omega_v2_1b_candidate_02/src", cmake)
+        self.assertIn("select_p_cores_by_h0=select_p_cores_by_h0_v2_1c_frozen", cmake)
+        self.assertIn("measure_h0_cores=measure_h0_cores_v2_1c_frozen", cmake)
         self.assertNotIn("q4_kernel_candidate1.cpp", cmake)
         self.assertNotIn("${V2_1_SOURCE_DIR}/v2_full_block.cpp", cmake)
+
+    def test_sweep_consumes_sealed_selection_without_remeasurement(self) -> None:
+        selector = (UNIT_ROOT / "src" / "select_v2_1c_workers.cpp").read_text(encoding="utf-8")
+        wrapper = (UNIT_ROOT / "src" / "main_v2_1c.cpp").read_text(encoding="utf-8")
+        self.assertIn("OMEGA_V2_1C_SELECTED_CPU_SET_IDS", selector)
+        self.assertIn("OMEGA_V2_1C_SELECTED_V_I", selector)
+        self.assertIn("return {};", selector)
+        self.assertIn("--core-selection-preflight", wrapper)
+        self.assertIn("monotonic_qpc_test(error)", wrapper)
+        self.assertIn("measure_qpc_overhead_ns()", wrapper)
+
+    def test_preflight_cli_enforces_md313_order_and_explicit_sweep_go(self) -> None:
+        phases = (UNIT_ROOT / "scripts" / "v2_1c_phases.py").read_text(encoding="utf-8")
+        self.assertLess(phases.index("def binding_stage"), phases.index("def core_selection_stage"))
+        self.assertLess(phases.index("def core_selection_stage"), phases.index("def correctness_stage"))
+        self.assertIn("--seal-preflight-only", phases)
+        self.assertIn("--go-medicion", phases)
+        self.assertIn("requires the judge's explicit GO medicion", phases)
+        self.assertIn("DIAGNOSTIC_ONLY / NOT_PAIRED_KERNEL_COMPARISON", phases)
 
     def test_no_native_speed_gate_is_declared_for_v2_1c(self) -> None:
         spec = (UNIT_ROOT / "OMEGA_V2_1C_RESIDENCY_ONLY_SPEC.md").read_text(encoding="utf-8")

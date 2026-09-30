@@ -118,15 +118,6 @@ double median(std::vector<double> values) {
 
 struct TimedSeries { double median_seconds=0,median_macs_per_second=0; int warmups=10,repetitions=31; std::vector<std::uint64_t> allocations; bool no_timed_allocations=false; };
 
-TimedSeries time_h0(const CoreWeights& weights,int m,WorkerPool& pool,DWORD line_bytes) {
-    const auto input=fixed_state(m); std::vector<float> output(input.size());
-    const std::uint64_t macs=static_cast<std::uint64_t>(m)*kD*kD;
-    for(int warmup=0;warmup<10;++warmup){touch_weights(weights,line_bytes);q4_linear(weights.W_Q,input.data(),output.data(),m,pool);}
-    std::vector<double> samples; samples.reserve(31); TimedSeries series; series.allocations.reserve(31);
-    for(int sample=0;sample<31;++sample){touch_weights(weights,line_bytes);begin_timed_allocation_count();const auto start=qpc_ticks();q4_linear(weights.W_Q,input.data(),output.data(),m,pool);const auto stop=qpc_ticks();const auto allocations=end_timed_allocation_count();if(stop<=start||!pool.affinity_intact())throw std::runtime_error("H0 timing/affinity sanity check failed");samples.push_back(static_cast<double>(stop-start)/qpc_frequency());series.allocations.push_back(allocations);}
-    series.median_seconds=median(samples);series.median_macs_per_second=static_cast<double>(macs)/series.median_seconds;series.no_timed_allocations=std::all_of(series.allocations.begin(),series.allocations.end(),[](std::uint64_t value){return value==0;});return series;
-}
-
 TimedSeries time_full(const CoreWeights& weights,int m,int rounds,WorkerPool& pool,DWORD line_bytes) {
     const auto initial=fixed_state(m); Scratch scratch; scratch.resize_for(kD,m);
     const std::uint64_t macs=static_cast<std::uint64_t>(rounds)*(16ull*m*kD*kD+2ull*m*m*kD);
@@ -149,7 +140,10 @@ void write_json(const std::filesystem::path& path,const std::string& text) {
 
 int main(int argc,char**argv) {
     using namespace omega_v2_1;
-    if(argc!=5||std::string(argv[1])!="--verify-frozen-candidate02")return 2;
+    const std::string mode=argc>1?argv[1]:"";
+    const bool binding_mode=mode=="--binding-preflight";
+    const bool correctness_mode=mode=="--correctness-preflight";
+    if(argc!=5||(!binding_mode&&!correctness_mode))return 2;
     try {
         const auto golden_dir=std::filesystem::path(argv[3]);
         const auto output_path=std::filesystem::absolute(argv[4]);
@@ -157,11 +151,16 @@ int main(int argc,char**argv) {
         HardwareInfo hardware;std::string error;
         if(!query_hardware(hardware,error))throw std::runtime_error("equivalence topology query failed: "+error);
         const auto shard_weights=parse_csv(env_utf8(L"OMEGA_V2_1C_SHARD_WEIGHTS"));
+        auto selected_ids_raw=parse_csv(env_utf8(L"OMEGA_V2_1C_WORKER_CPU_SET_IDS"));
+        std::vector<DWORD> selected_ids;
+        for(double value:selected_ids_raw)selected_ids.push_back(static_cast<DWORD>(value));
+        if(selected_ids.empty())selected_ids.assign(std::begin(kCpuSetIds),std::end(kCpuSetIds));
         if(shard_weights.size()!=4)throw std::runtime_error("V2-1c equivalence needs four frozen attempt_02 shard weights");
+        if(selected_ids.size()!=4)throw std::runtime_error("V2-1c equivalence needs exactly four selected CPU-set IDs");
         std::vector<CpuSetRecord> workers;
         for(std::size_t index=0;index<4;++index){
             const CpuSetRecord* selected=nullptr;
-            for(const CoreRecord& core:hardware.cores)if(core.classified_p_core)for(const CpuSetRecord& cpu:core.cpu_sets)if(cpu.id==kCpuSetIds[index])selected=&cpu;
+            for(const CoreRecord& core:hardware.cores)if(core.classified_p_core)for(const CpuSetRecord& cpu:core.cpu_sets)if(cpu.id==selected_ids[index])selected=&cpu;
             if(!selected)throw std::runtime_error("frozen attempt_02 CPU-set missing in equivalence preflight");
             CpuSetRecord cpu=*selected;cpu.shard_weight=shard_weights[index];workers.push_back(cpu);
         }
@@ -174,18 +173,20 @@ int main(int argc,char**argv) {
         WorkerPool pool(workers);
         std::vector<std::string> cell_reports;
         bool equivalence_pass=true;
-        struct Cell {int m;int k;};
-        constexpr Cell cells[]={{1,1},{1,4},{4,1},{4,4},{16,1},{16,4}};
-        for(const Cell cell:cells){
-            const auto first=run_full(weights,cell.m,cell.k,pool,false);
-            const auto repeated=run_full(weights,cell.m,cell.k,pool,false);
-            const auto scalar=run_full(weights,cell.m,cell.k,pool,true);
-            const Error error_values=compare_scalar(first,scalar);
-            const bool deterministic=bit_equal(first,repeated);
-            const bool scalar_pass=error_values.max_abs<=1e-5&&error_values.max_rel<=1e-4;
-            equivalence_pass=equivalence_pass&&deterministic&&scalar_pass;
-            std::ostringstream row;row<<std::setprecision(17)<<"{\"d\":512,\"m\":"<<cell.m<<",\"K\":"<<cell.k<<",\"max_abs_error_vs_scalar\":"<<error_values.max_abs<<",\"max_rel_error_vs_scalar\":"<<error_values.max_rel<<",\"abs_tolerance\":1e-5,\"rel_tolerance\":1e-4,\"scalar_oracle_pass\":"<<(scalar_pass?"true":"false")<<",\"deterministic_bit_exact\":"<<(deterministic?"true":"false")<<",\"checksum\":"<<checksum(first)<<'}';
-            cell_reports.push_back(row.str());
+        if(correctness_mode){
+            struct Cell {int m;int k;};
+            constexpr Cell cells[]={{1,1},{1,4},{4,1},{4,4},{16,1},{16,4}};
+            for(const Cell cell:cells){
+                const auto first=run_full(weights,cell.m,cell.k,pool,false);
+                const auto repeated=run_full(weights,cell.m,cell.k,pool,false);
+                const auto scalar=run_full(weights,cell.m,cell.k,pool,true);
+                const Error error_values=compare_scalar(first,scalar);
+                const bool deterministic=bit_equal(first,repeated);
+                const bool scalar_pass=error_values.max_abs<=1e-5&&error_values.max_rel<=1e-4;
+                equivalence_pass=equivalence_pass&&deterministic&&scalar_pass;
+                std::ostringstream row;row<<std::setprecision(17)<<"{\"d\":512,\"m\":"<<cell.m<<",\"K\":"<<cell.k<<",\"max_abs_error_vs_scalar\":"<<error_values.max_abs<<",\"max_rel_error_vs_scalar\":"<<error_values.max_rel<<",\"abs_tolerance\":1e-5,\"rel_tolerance\":1e-4,\"scalar_oracle_pass\":"<<(scalar_pass?"true":"false")<<",\"deterministic_bit_exact\":"<<(deterministic?"true":"false")<<",\"checksum\":"<<checksum(first)<<'}';
+                cell_reports.push_back(row.str());
+            }
         }
         const auto sealed_m4=load_floats(golden_dir/"candidate2_full_m4_k1.bin");
         const auto sealed_m16=load_floats(golden_dir/"candidate2_full_m16_k1.bin");
@@ -194,24 +195,33 @@ int main(int argc,char**argv) {
         const bool frozen_m16=bit_equal(run_full(weights,16,1,pool,false),sealed_m16);
         const bool frozen_m8k4=bit_equal(run_full(weights,8,4,pool,false),sealed_m8k4);
 
-        std::vector<TimedSeries> h0;for(int m:{1,4,16})h0.push_back(time_h0(weights,m,pool,hardware.cache_line_bytes));
-        const TimedSeries f1=time_full(weights,1,1,pool,hardware.cache_line_bytes);
-        const TimedSeries f4=time_full(weights,4,1,pool,hardware.cache_line_bytes);
-        const TimedSeries f16=time_full(weights,16,1,pool,hardware.cache_line_bytes);
-        const TimedSeries f8k4=time_full(weights,8,4,pool,hardware.cache_line_bytes);
+        std::vector<TimedSeries> h0;TimedSeries f4,f16,f8k4;
+        if(binding_mode){
+            f4=time_full(weights,4,1,pool,hardware.cache_line_bytes);
+            f16=time_full(weights,16,1,pool,hardware.cache_line_bytes);
+            f8k4=time_full(weights,8,4,pool,hardware.cache_line_bytes);
+        }
         const bool affinity_ok=pool.affinity_intact();pool.stop();
 
         std::ostringstream out;out.precision(17);
-        const bool timings_no_alloc=f1.no_timed_allocations&&f4.no_timed_allocations&&f16.no_timed_allocations&&f8k4.no_timed_allocations&&h0[0].no_timed_allocations&&h0[1].no_timed_allocations&&h0[2].no_timed_allocations;
-        out<<"{\"schema\":\"omega-v2-1c-candidate02-equivalence-v1\",\"frozen_candidate02_exe_hash\":\"be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0ac2a19d084f\",\"cpu_model\":\""<<hardware.cpu_model<<"\",\"qpc_frequency\":"<<qpc_frequency()<<",\"worker_cpu_set_ids\":[266,264,258,270],\"worker_affinity_ok\":"<<(affinity_ok?"true":"false")
-          <<",\"kq_sealed_output_comparisons\":{\"d512_m4_k1_bit_exact\":"<<(frozen_m4?"true":"false")<<",\"d512_m16_k1_bit_exact\":"<<(frozen_m16?"true":"false")<<",\"d512_m8_k4_bit_exact\":"<<(frozen_m8k4?"true":"false")<<",\"all_available_sealed_outputs_bit_exact\":"<<((frozen_m4&&frozen_m16&&frozen_m8k4)?"true":"false")<<"}"
-          <<",\"unavailable_sealed_outputs\":[\"d512_m1_k1\",\"d512_m1_k4\",\"d512_m4_k4\",\"d512_m16_k4\"]"
-          <<",\"six_cell_scalar_equivalence\":[";
-        for(std::size_t index=0;index<cell_reports.size();++index){if(index)out<<',';out<<cell_reports[index];}
-        out<<"],\"six_cell_scalar_and_determinism_pass\":"<<(equivalence_pass?"true":"false")<<",\"timing_sanity\":{\"protocol\":\"10 warmups,31 samples,QPC,weights pre-touched\",\"no_timed_allocations\":"<<(timings_no_alloc?"true":"false")<<",\"h0_m1\":{\"median_seconds\":"<<h0[0].median_seconds<<",\"median_macs_per_second\":"<<h0[0].median_macs_per_second<<"},\"h0_m4\":{\"median_seconds\":"<<h0[1].median_seconds<<",\"median_macs_per_second\":"<<h0[1].median_macs_per_second<<"},\"h0_m16\":{\"median_seconds\":"<<h0[2].median_seconds<<",\"median_macs_per_second\":"<<h0[2].median_macs_per_second<<"},\"full_m1_k1_seconds\":"<<f1.median_seconds<<",\"full_m4_k1_seconds\":"<<f4.median_seconds<<",\"full_m16_k1_seconds\":"<<f16.median_seconds<<",\"full_m8_k4_seconds\":"<<f8k4.median_seconds<<"},\"pass\":"<<((equivalence_pass&&frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok&&timings_no_alloc)?"true":"false")<<'}';
+        if(binding_mode){
+            const bool no_timed_allocations=f4.no_timed_allocations&&f16.no_timed_allocations&&f8k4.no_timed_allocations;
+            out<<"{\"schema\":\"omega-v2-1c-candidate02-binding-preflight-v1\",\"frozen_candidate02_exe_hash\":\"be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0ac2a19d084f\",\"cpu_model\":\""<<hardware.cpu_model<<"\",\"qpc_frequency\":"<<qpc_frequency()<<",\"worker_cpu_set_ids\":["<<selected_ids[0]<<','<<selected_ids[1]<<','<<selected_ids[2]<<','<<selected_ids[3]<<"],\"worker_affinity_ok\":"<<(affinity_ok?"true":"false")
+                <<",\"sealed_output_comparisons\":{\"d512_m4_k1_bit_exact\":"<<(frozen_m4?"true":"false")<<",\"d512_m16_k1_bit_exact\":"<<(frozen_m16?"true":"false")<<",\"d512_m8_k4_bit_exact\":"<<(frozen_m8k4?"true":"false")<<"}"
+                <<",\"timing_protocol\":{\"warmups\":10,\"samples\":31,\"outside_timer_weight_touch\":true,\"no_timed_allocations\":"<<(no_timed_allocations?"true":"false")<<"}"
+                <<",\"cells\":[{\"cell\":\"d512_m4_K1\",\"median_seconds\":"<<f4.median_seconds<<"},{\"cell\":\"d512_m16_K1\",\"median_seconds\":"<<f16.median_seconds<<"},{\"cell\":\"d512_m8_K4\",\"median_seconds\":"<<f8k4.median_seconds<<"}]"
+                <<",\"pass\":"<<((frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok&&no_timed_allocations)?"true":"false")<<'}';
+        }else{
+            out<<"{\"schema\":\"omega-v2-1c-candidate02-correctness-preflight-v1\",\"frozen_candidate02_exe_hash\":\"be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0ac2a19d084f\",\"cpu_model\":\""<<hardware.cpu_model<<"\",\"qpc_frequency\":"<<qpc_frequency()<<",\"worker_cpu_set_ids\":["<<selected_ids[0]<<','<<selected_ids[1]<<','<<selected_ids[2]<<','<<selected_ids[3]<<"],\"worker_affinity_ok\":"<<(affinity_ok?"true":"false")
+                <<",\"kq_sealed_output_comparisons\":{\"d512_m4_k1_bit_exact\":"<<(frozen_m4?"true":"false")<<",\"d512_m16_k1_bit_exact\":"<<(frozen_m16?"true":"false")<<",\"d512_m8_k4_bit_exact\":"<<(frozen_m8k4?"true":"false")<<",\"all_available_sealed_outputs_bit_exact\":"<<((frozen_m4&&frozen_m16&&frozen_m8k4)?"true":"false")<<"}"
+                <<",\"unavailable_sealed_outputs\":[\"d512_m1_k1\",\"d512_m1_k4\",\"d512_m4_k4\",\"d512_m16_k4\"]"
+                <<",\"six_cell_scalar_equivalence\":[";
+            for(std::size_t index=0;index<cell_reports.size();++index){if(index)out<<',';out<<cell_reports[index];}
+            out<<"],\"six_cell_scalar_and_determinism_pass\":"<<(equivalence_pass?"true":"false")<<",\"timing_sanity_performed\":false,\"pass\":"<<((equivalence_pass&&frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok)?"true":"false")<<'}';
+        }
         write_json(output_path,out.str());
         std::cout<<out.str()<<'\n';
-        return (equivalence_pass&&frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok&&timings_no_alloc)?0:1;
+        return binding_mode?((frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok&&f4.no_timed_allocations&&f16.no_timed_allocations&&f8k4.no_timed_allocations)?0:1):((equivalence_pass&&frozen_m4&&frozen_m16&&frozen_m8k4&&affinity_ok)?0:1);
     } catch(const std::exception& exception) {
         std::cerr<<"V2-1c equivalence failure: "<<exception.what()<<'\n';return 3;
     }

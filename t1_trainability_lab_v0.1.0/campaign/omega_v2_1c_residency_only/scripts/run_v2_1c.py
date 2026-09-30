@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,14 +29,19 @@ KQ2_NATIVE = KQ2_ROOT_RESULTS / "native_kq_candidate_02.json"
 KQ2_OUTPUTS = KQ2_ROOT_RESULTS / "native_correctness_outputs"
 RESULTS_BASE = UNIT_ROOT / "results" / "omega_v2_1_physical"
 RESULTS_ROOT = RESULTS_BASE / "attempt_01"
+BINDING_PREFLIGHT_RESULTS = UNIT_ROOT / "results" / "binding_preflight"
+CORE_SELECTION_RESULTS = UNIT_ROOT / "results" / "core_selection_preflight"
+CORRECTNESS_PREFLIGHT_RESULTS = UNIT_ROOT / "results" / "correctness_preflight"
+PREFLIGHT_RESULTS = UNIT_ROOT / "results" / "sealed_preflight"
 BUILD_ROOT = UNIT_ROOT / "build"
 PREFLIGHT_ROOT = BUILD_ROOT / "preflight"
 BENCH_EXE = BUILD_ROOT / "Release" / "omega_v2_1c_bench.exe"
-EQUIVALENCE_EXE = BUILD_ROOT / "Release" / "omega_v2_1c_equivalence.exe"
+EQUIVALENCE_EXE = BENCH_EXE
+CORRECTNESS_EXE = BUILD_ROOT / "Release" / "omega_v2_1c_correctness.exe"
 FROZEN_CANDIDATE02_EXE_SHA256 = "be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0ac2a19d084f"
 FROZEN_WORKER_IDS = [266, 264, 258, 270]
-SANITY_RATIO_MIN = 0.70
-SANITY_RATIO_MAX = 1.30
+SANITY_RATIO_MIN = 0.90
+SANITY_RATIO_MAX = 1.10
 TEST_NAMES = [
     "test_v2_1c_candidate02_kernel_frozen_hash",
     "test_v2_1c_attempt02_preserved",
@@ -89,7 +95,7 @@ def git(*args: str) -> str:
 
 
 def source_files() -> list[str]:
-    files = [".gitignore", "CMakeLists.txt", "OMEGA_V2_1C_RESIDENCY_ONLY_SPEC.md", "scripts/run_v2_1c.py"]
+    files = [".gitignore", "CMakeLists.txt", "OMEGA_V2_1C_RESIDENCY_ONLY_SPEC.md", "scripts/run_v2_1c.py", "scripts/v2_1c_phases.py"]
     files.extend(f"src/{path.name}" for path in sorted((UNIT_ROOT / "src").glob("*.cpp")))
     files.extend(f"src/{path.name}" for path in sorted((UNIT_ROOT / "src").glob("*.hpp")))
     files.extend(f"tests/{path.name}" for path in sorted((UNIT_ROOT / "tests").glob("*.py")))
@@ -205,10 +211,10 @@ def build_native(cmake: Path) -> dict[str, str]:
     configure = subprocess.run([str(cmake), "-S", str(UNIT_ROOT), "-B", str(BUILD_ROOT), "-G", "Visual Studio 17 2022", "-A", "x64"], cwd=REPO_ROOT, capture_output=True, text=True)
     if configure.returncode:
         raise RuntimeError("V2-1c CMake configure failed: " + configure.stderr[-4000:])
-    build = subprocess.run([str(cmake), "--build", str(BUILD_ROOT), "--config", "Release", "--target", "omega_v2_1c_bench", "omega_v2_1c_equivalence", "-j", "8"], cwd=REPO_ROOT, capture_output=True, text=True)
+    build = subprocess.run([str(cmake), "--build", str(BUILD_ROOT), "--config", "Release", "--target", "omega_v2_1c_bench", "omega_v2_1c_correctness", "-j", "8"], cwd=REPO_ROOT, capture_output=True, text=True)
     if build.returncode:
         raise RuntimeError("V2-1c MSVC Release build failed: " + build.stderr[-5000:])
-    if not BENCH_EXE.is_file() or not EQUIVALENCE_EXE.is_file():
+    if not BENCH_EXE.is_file() or not CORRECTNESS_EXE.is_file():
         raise FileNotFoundError("V2-1c Release executable(s) were not generated")
     return {"configure_stdout": configure.stdout, "configure_stderr": configure.stderr, "build_stdout": build.stdout, "build_stderr": build.stderr}
 
@@ -223,6 +229,18 @@ def run_python_contract_tests() -> dict[str, Any]:
 def validate_kq_kernel_binding(kq2_build: dict[str, Any]) -> dict[str, Any]:
     expected = kq2_build["candidate02_source_sha256"]
     observed = {path.name: sha256_file(path) for path in candidate02_kernel_paths()}
+    c2_cmake=(KQ2_ROOT/"CMakeLists.txt").read_text(encoding="utf-8")
+    c1c_cmake=(UNIT_ROOT/"CMakeLists.txt").read_text(encoding="utf-8")
+    def target_values(content:str,setting:str,target:str)->list[str]:
+        match=re.search(rf"{setting}\({re.escape(target)}\s+(?:PUBLIC|PRIVATE)\s+([^)]+)\)",content)
+        if not match:raise RuntimeError(f"V2_1C_SOURCE_HOLD: missing {setting} for {target}")
+        return match.group(1).split()
+    c2_defs=target_values(c2_cmake,"target_compile_definitions","omega_v2_1b_candidate_02_core")
+    c1c_defs=target_values(c1c_cmake,"target_compile_definitions","omega_v2_1c_candidate02_core")
+    c2_opts=target_values(c2_cmake,"target_compile_options","omega_v2_1b_candidate_02_core")
+    c1c_opts=target_values(c1c_cmake,"target_compile_options","omega_v2_1c_candidate02_core")
+    c2_link=target_values(c2_cmake,"target_link_options","omega_v2_1b_candidate_02_core")
+    c1c_link=target_values(c1c_cmake,"target_link_options","omega_v2_1c_candidate02_core")
     binding = {
         "frozen_candidate02_exe_sha256": sha256_file(Path(kq2_build["executable_absolute_path"])),
         "expected_candidate02_exe_sha256": FROZEN_CANDIDATE02_EXE_SHA256,
@@ -230,6 +248,9 @@ def validate_kq_kernel_binding(kq2_build: dict[str, Any]) -> dict[str, Any]:
         "candidate02_kq_recorded_sha256": {name: expected[f"src/{name}"] for name in ("kq_candidate2.hpp", "q4_kernel_candidate2.cpp", "full_block_candidate2.cpp")},
         "compile_flags_candidate02_core": kq2_build["compile_flags"],
         "compile_flags_v2_1c_candidate02_core": ["/O2", "/GL", "/arch:AVX2", "/fp:precise", "/W4", "/EHsc", "/LTCG"],
+        "compile_defines_candidate02_core":c2_defs,"compile_defines_v2_1c_candidate02_core":c1c_defs,
+        "compile_options_candidate02_core":c2_opts,"compile_options_v2_1c_candidate02_core":c1c_opts,
+        "link_options_candidate02_core":c2_link,"link_options_v2_1c_candidate02_core":c1c_link,
         "compiler_candidate02": kq2_build["compiler"],
         "compiler_v2_1c": "MSVC 19.44.35229.0",
         "toolset_candidate02": kq2_build["visual_studio_installation"],
@@ -237,29 +258,42 @@ def validate_kq_kernel_binding(kq2_build: dict[str, Any]) -> dict[str, Any]:
         "frozen_kq_executable_invoked_for_sweep": False,
         "companion_harness_links_same_kernel_translation_units": True,
         "authorized_companion_harness_executable_hash_separate": True,
+        "compute_defines_match":c2_defs==c1c_defs,
+        "compute_options_match":c2_opts==c1c_opts,
+        "compute_link_options_match":c2_link==c1c_link,
     }
     if binding["frozen_candidate02_exe_sha256"] != FROZEN_CANDIDATE02_EXE_SHA256:
         raise RuntimeError("V2_1C_SOURCE_HOLD: frozen candidate_02 executable SHA-256 changed")
     if not binding["kernel_translation_units_byte_identical"]:
         raise RuntimeError("V2_1C_SOURCE_HOLD: companion harness candidate_02 kernel TU/header hash mismatch")
+    if not binding["compute_defines_match"] or not binding["compute_options_match"] or not binding["compute_link_options_match"]:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: candidate_02 compute compile/link defines or options differ in the companion")
     if kq2_build["compiler"] != binding["compiler_v2_1c"] or kq2_build["compile_flags"] != binding["compile_flags_v2_1c_candidate02_core"]:
         raise RuntimeError("V2_1C_SOURCE_HOLD: candidate_02 kernel compiler/toolset/flags do not match frozen build identity")
     return binding
 
 
-def execute_equivalence(weights_path: Path, golden_dir: Path, output_path: Path) -> dict[str, Any]:
+def execute_equivalence(mode: str, weights_path: Path, golden_dir: Path, output_path: Path,
+                        worker_cpu_set_ids:list[int]|None=None,shard_weights:list[float]|None=None) -> dict[str, Any]:
     PREFLIGHT_ROOT.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
-        raise FileExistsError("candidate_02 equivalence output already exists and is immutable")
+        raise FileExistsError(f"candidate_02 {mode} output already exists and is immutable: {output_path}")
+    if mode not in ("--correctness-preflight","--binding-preflight"):
+        raise ValueError(f"unsupported candidate_02 equivalence mode: {mode}")
     environment = os.environ.copy()
     manifest, attempt_config, _ = validate_attempt02()
-    environment["OMEGA_V2_1C_SHARD_WEIGHTS"] = ",".join(str(row["h0_v_i"]) for row in attempt_config["selected_workers"])
-    process = subprocess.run([str(EQUIVALENCE_EXE), "--verify-frozen-candidate02", str(weights_path), str(golden_dir), str(output_path)], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30*60, env=environment)
-    (PREFLIGHT_ROOT / "equivalence_stdout.log").write_text(process.stdout, encoding="utf-8", newline="\n")
-    (PREFLIGHT_ROOT / "equivalence_stderr.log").write_text(process.stderr, encoding="utf-8", newline="\n")
-    if process.returncode:
-        raise RuntimeError(f"V2-1c frozen-kernel equivalence failed ({process.returncode}):\n{process.stdout}\n{process.stderr}")
-    report = read_json(output_path)
+    ids=worker_cpu_set_ids if worker_cpu_set_ids is not None else [int(row["windows_cpu_set_id"]) for row in attempt_config["selected_workers"]]
+    weights=shard_weights if shard_weights is not None else [float(row["h0_v_i"]) for row in attempt_config["selected_workers"]]
+    environment["OMEGA_V2_1C_WORKER_CPU_SET_IDS"]=",".join(str(value) for value in ids)
+    environment["OMEGA_V2_1C_SHARD_WEIGHTS"] = ",".join(str(value) for value in weights)
+    process = subprocess.run([str(EQUIVALENCE_EXE), mode, str(weights_path), str(golden_dir), str(output_path)], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30*60, env=environment)
+    (PREFLIGHT_ROOT / f"{mode[2:]}_stdout.log").write_text(process.stdout, encoding="utf-8", newline="\n")
+    (PREFLIGHT_ROOT / f"{mode[2:]}_stderr.log").write_text(process.stderr, encoding="utf-8", newline="\n")
+    if output_path.is_file():
+        report=read_json(output_path)
+    else:
+        report={"schema":"omega-v2-1c-equivalence-process-failure-v1","pass":False,"reason":"companion equivalence executable did not produce JSON","stdout":process.stdout,"stderr":process.stderr}
+    report["process_returncode"]=process.returncode
     report["attempt02_artifact_manifest_sha256"] = sha256_file(ATTEMPT02_ROOT / "artifact_hashes.json")
     report["candidate02_kq_artifact_manifest_sha256"] = sha256_file(KQ2_ROOT_RESULTS / "artifact_hashes.json")
     report["candidate02_source_weight_state_sha256"] = read_json(KQ2_ROOT_RESULTS / "source_weight_manifest.json")["weight_state_sha256"]
@@ -267,116 +301,423 @@ def execute_equivalence(weights_path: Path, golden_dir: Path, output_path: Path)
     return report
 
 
-def compare_kq_timing_sanity(eq: dict[str, Any], kq_native: dict[str, Any]) -> dict[str, Any]:
-    timings = eq["timing_sanity"]
-    series = {
-        "H0_m1": (timings["h0_m1"]["median_seconds"], kq_native["h0_q4"]["m1"]["median_seconds"]),
-        "H0_m4": (timings["h0_m4"]["median_seconds"], kq_native["h0_q4"]["m4"]["median_seconds"]),
-        "H0_m16": (timings["h0_m16"]["median_seconds"], kq_native["h0_q4"]["m16"]["median_seconds"]),
-        "FULL_m1_k1": (timings["full_m1_k1_seconds"], kq_native["full_resident"]["m1_k1"]["median_seconds"]),
-        "FULL_m4_k1": (timings["full_m4_k1_seconds"], kq_native["full_resident"]["m4_k1"]["median_seconds"]),
-        "FULL_m16_k1": (timings["full_m16_k1_seconds"], kq_native["full_resident"]["m16_k1"]["median_seconds"]),
-        "FULL_m8_k4": (timings["full_m8_k4_seconds"], kq_native["full_resident"]["m8_k4_for_s_native"]["median_seconds"]),
+def execute_physical_correctness(worker_cpu_set_ids: list[int], shard_weights: list[float]) -> dict[str, Any]:
+    environment=os.environ.copy()
+    if len(worker_cpu_set_ids) != 4 or len(shard_weights) != 4:
+        raise ValueError("V2-1c physical correctness requires four newly selected CPU-set IDs and v_i weights")
+    environment["OMEGA_V2_1C_SELECTED_CPU_SET_IDS"] = ",".join(str(value) for value in worker_cpu_set_ids)
+    environment["OMEGA_V2_1C_SELECTED_V_I"] = ",".join(str(value) for value in shard_weights)
+    _,config,_=validate_attempt02()
+    environment["OMEGA_V2_1C_SHARD_WEIGHTS"]=",".join(str(row["h0_v_i"]) for row in config["selected_workers"])
+    result=subprocess.run([str(CORRECTNESS_EXE)],cwd=REPO_ROOT,capture_output=True,text=True,timeout=60*60,env=environment)
+    (PREFLIGHT_ROOT/"physical_correctness_stdout.log").write_text(result.stdout,encoding="utf-8",newline="\n")
+    (PREFLIGHT_ROOT/"physical_correctness_stderr.log").write_text(result.stderr,encoding="utf-8",newline="\n")
+    if result.returncode:
+        raise RuntimeError(f"V2-1c no-timing correctness preflight failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
+    report = json.loads(result.stdout)
+    write_json(PREFLIGHT_ROOT / "physical_correctness_preflight.json", report)
+    return report
+
+
+def compare_binding_timing(binding: dict[str, Any], kq_native: dict[str, Any]) -> dict[str, Any]:
+    rows={row["cell"]:row["median_seconds"] for row in binding["cells"]}
+    series={
+        "d512_m4_K1":(rows["d512_m4_K1"],kq_native["full_resident"]["m4_k1"]["median_seconds"]),
+        "d512_m16_K1":(rows["d512_m16_K1"],kq_native["full_resident"]["m16_k1"]["median_seconds"]),
+        "d512_m8_K4":(rows["d512_m8_K4"],kq_native["full_resident"]["m8_k4_for_s_native"]["median_seconds"]),
     }
-    ratios = {name: {"companion_seconds": new, "candidate02_kq_seconds": old, "ratio": new / old, "within_sanity_band": SANITY_RATIO_MIN <= new / old <= SANITY_RATIO_MAX} for name,(new,old) in series.items()}
-    return {"allowed_ratio_band": [SANITY_RATIO_MIN,SANITY_RATIO_MAX], "cells": ratios, "pass": all(row["within_sanity_band"] for row in ratios.values()) and timings["no_timed_allocations"] is True}
+    ratios={name:{"companion_seconds":new,"candidate02_kq_seconds":old,"ratio":new/old,"within_sanity_band":SANITY_RATIO_MIN<=new/old<=SANITY_RATIO_MAX} for name,(new,old) in series.items()}
+    return {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":ratios,"no_timed_allocations":binding["no_timed_allocations"],"pass":all(row["within_sanity_band"] for row in ratios.values()) and binding["no_timed_allocations"] is True}
 
 
-def run_preflight(cmake: Path, vs_install: str, cmake_version: str, *, force_build: bool) -> dict[str, Any]:
-    if not force_build and BENCH_EXE.is_file() and EQUIVALENCE_EXE.is_file():
-        build_logs = {"configure_stdout": "REUSED_COMMITTED_BUILD", "configure_stderr": "", "build_stdout": "REUSED_RELEASE_EXECUTABLES", "build_stderr": ""}
+def create_preflight(cmake:Path,vs_install:str,cmake_version:str)->dict[str,Any]:
+    if CORRECTNESS_PREFLIGHT_RESULTS.exists() or PREFLIGHT_RESULTS.exists():
+        raise FileExistsError("V2-1c preflight result directory already exists and is immutable")
+    build_logs=build_native(cmake)
+    python_tests=run_python_contract_tests()
+    kq_native=read_json(KQ2_NATIVE)
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    attempt02_hardware=read_json(ATTEMPT02_ROOT/"hardware_preflight.json")
+    attempt02_ledger=read_json(ATTEMPT02_ROOT/"q4_physical_ledger.json")
+    c2_manifest,c2_summary,c2_build,c2_exe_hash=validate_candidate02()
+    seal=kq_contract.validate_v2_0_seal()
+    provenance=verify_provenance(attempt_sha,sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"))
+    binding=validate_kq_kernel_binding(c2_build)
+    static_before=source_hashes()
+    physical_deps={str(path.resolve()):sha256_file(path) for path in physical_dependency_paths()}
+    candidate2_tus={str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}
+    payload,weight_info=kq_contract.v2_0_fp32_weight_payload()
+    if weight_info["source_weight_value_sha256"]!=kq_native["source_weight_sha256"]:
+        raise RuntimeError("V2_1C_ACCEPTANCE_HOLD: source stream differs from candidate_02 KQ weights")
+    PREFLIGHT_ROOT.mkdir(parents=True,exist_ok=True)
+    weight_file=PREFLIGHT_ROOT/"v2_0_fp32_source_weights.tmp"
+    weight_file.write_bytes(payload)
+
+    c2_correctness_path=PREFLIGHT_ROOT/"candidate02_correctness_preflight.json"
+    c2_correctness=execute_equivalence("--correctness-preflight",weight_file,KQ2_OUTPUTS,c2_correctness_path)
+    c2_correctness_ok=(c2_correctness.get("pass") is True and c2_correctness.get("six_cell_scalar_and_determinism_pass") is True and c2_correctness.get("kq_sealed_output_comparisons",{}).get("all_available_sealed_outputs_bit_exact") is True)
+
+    env=os.environ.copy()
+    env["OMEGA_V2_1C_SHARD_WEIGHTS"]=",".join(str(row["h0_v_i"]) for row in attempt_config["selected_workers"])
+    physical_correctness_process=subprocess.run([str(CORRECTNESS_EXE)],cwd=REPO_ROOT,capture_output=True,text=True,timeout=60*60,env=env)
+    (PREFLIGHT_ROOT/"physical_correctness_stdout.log").write_text(physical_correctness_process.stdout,encoding="utf-8",newline="\n")
+    (PREFLIGHT_ROOT/"physical_correctness_stderr.log").write_text(physical_correctness_process.stderr,encoding="utf-8",newline="\n")
+    try:
+        physical_correctness=json.loads(physical_correctness_process.stdout)
+    except (json.JSONDecodeError,TypeError):
+        physical_correctness={"schema":"omega-v2-1c-physical-correctness-preflight-v1","pass":False,"reason":"correctness executable produced no valid JSON","stdout":physical_correctness_process.stdout,"stderr":physical_correctness_process.stderr}
+    physical_correctness["process_returncode"]=physical_correctness_process.returncode
+    physical_correctness_ok=(physical_correctness_process.returncode==0 and physical_correctness.get("pass") is True)
+
+    if source_hashes()!=static_before or {str(path.resolve()):sha256_file(path) for path in physical_dependency_paths()}!=physical_deps or {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=candidate2_tus:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: source/TU hashes changed during no-timing correctness preflight")
+    correctness_tests=[
+        ("test_v2_1c_python_contract_tests",True),
+        ("test_v2_1c_candidate02_kernel_frozen_hash",binding["kernel_translation_units_byte_identical"] and c2_exe_hash==FROZEN_CANDIDATE02_EXE_SHA256),
+        ("test_v2_1c_candidate02_kq_correctness_preflight",c2_correctness.get("pass") is True),
+        ("test_v2_1c_d512_d640_scalar_and_72_cell_abc_correctness",physical_correctness_ok),
+        ("test_v2_1c_attempt02_preserved",attempt_sha==sha256_file(ATTEMPT02_ROOT/"artifact_hashes.json")),
+    ]
+    correctness_test_report={"schema":"omega-v2-1c-correctness-preflight-tests-v1","test_count":len(correctness_tests),"pass_count":sum(passed for _,passed in correctness_tests),"fail_count":sum(not passed for _,passed in correctness_tests),"skip_count":0,"tests":[{"name":name,"status":"PASS" if passed else "FAIL"} for name,passed in correctness_tests]}
+    correctness_record={
+        "schema":"omega-v2-1c-correctness-preflight-v1","phase":"correctness-only","timing_executed":False,"timed_72_cell_sweep_started":False,
+        "source_provenance":provenance,"v2_1c_source_sha256":static_before,"physical_dependency_sha256":physical_deps,
+        "attempt02_artifact_manifest_sha256":attempt_sha,"attempt02_config":attempt_config,
+        "candidate02_artifact_manifest_sha256":sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"),
+        "candidate02_build_manifest":c2_build,"candidate02_exe_sha256":c2_exe_hash,"candidate02_kernel_tu_sha256":candidate2_tus,
+        "candidate02_kernel_binding":binding,"candidate02_kq_correctness":c2_correctness,
+        "physical_abc_correctness":physical_correctness,"source_weight_manifest":{"source":weight_info["source"],"seed":weight_info["seed"],"weight_state_sha256":weight_info["source_weight_value_sha256"],"weight_stream_sha256":weight_info["source_weight_stream_sha256"],"weight_stream_bytes":weight_info["source_weight_stream_bytes"]},
+        "compiler":"MSVC 19.44.35229.0","visual_studio_installation":vs_install,"cmake_path":str(cmake),"cmake_version":cmake_version,
+        "candidate02_compute_compile_flags":c2_build["compile_flags"],"candidate02_compute_defines":["WIN32_LEAN_AND_MEAN","NOMINMAX","_WIN32_WINNT=0x0A00","OMEGA_V2_1_AVX2=1","OMEGA_V2_1B_CANDIDATE_ID=2"],
+        "companion_bench_exe_abs":str(BENCH_EXE.resolve()),"companion_bench_exe_sha256":sha256_file(BENCH_EXE),
+        "equivalence_exe_abs":str(EQUIVALENCE_EXE.resolve()),"equivalence_exe_sha256":sha256_file(EQUIVALENCE_EXE),
+        "correctness_exe_abs":str(CORRECTNESS_EXE.resolve()),"correctness_exe_sha256":sha256_file(CORRECTNESS_EXE),
+        "build_logs":build_logs,"python_contract_tests":{"status":"PASS","stdout":python_tests["stdout"],"stderr":python_tests["stderr"]},
+    }
+    correctness_status="PASS" if correctness_test_report["fail_count"]==0 else "CORRECTNESS_PREFLIGHT_HOLD"
+    correctness_record["preflight_status"]=correctness_status
+    CORRECTNESS_PREFLIGHT_RESULTS.mkdir(parents=True,exist_ok=False)
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"correctness_preflight.json",correctness_record)
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"test_report.json",correctness_test_report)
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"candidate02_kq_correctness.json",c2_correctness)
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"physical_abc_correctness.json",physical_correctness)
+    attempt_preservation={"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"verified":True,"selected_workers":attempt_config["selected_workers"]}
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"attempt02_preservation.json",attempt_preservation)
+    correctness_paths=[*(UNIT_ROOT/name for name in source_files()),*physical_dependency_paths(),*candidate02_kernel_paths(),
+        V2_0_ROOT/"V2_0_RESULT_SEAL.json",ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",ATTEMPT02_ROOT/"hardware_preflight.json",ATTEMPT02_ROOT/"q4_physical_ledger.json",ATTEMPT02_ROOT/"raw_measurements.csv",
+        KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_ROOT_RESULTS/"native_kq_candidate_02.json",KQ2_ROOT_RESULTS/"build_manifest.json",KQ2_ROOT_RESULTS/"summary_metrics.json",KQ2_ROOT_RESULTS/"source_weight_manifest.json",
+        *(KQ2_OUTPUTS/name for name in ("candidate2_full_m4_k1.bin","candidate2_full_m16_k1.bin","candidate2_full_m8_k4.bin")),
+        Path(c2_build["executable_absolute_path"]),BENCH_EXE,EQUIVALENCE_EXE,CORRECTNESS_EXE,
+        CORRECTNESS_PREFLIGHT_RESULTS/"correctness_preflight.json",CORRECTNESS_PREFLIGHT_RESULTS/"test_report.json",CORRECTNESS_PREFLIGHT_RESULTS/"candidate02_kq_correctness.json",CORRECTNESS_PREFLIGHT_RESULTS/"physical_abc_correctness.json",CORRECTNESS_PREFLIGHT_RESULTS/"attempt02_preservation.json"]
+    correctness_hashes={str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in correctness_paths if path.is_file()}
+    correctness_report=["# V2-1c correctness preflight (no timing)","",f"- status: `{correctness_status}`",f"- implementation commit: `{provenance['implementation_commit']}`",f"- frozen candidate_02 exe SHA-256: `{c2_exe_hash}`",f"- candidate_02 TUs byte-identical: `{binding['kernel_translation_units_byte_identical']}`",f"- candidate_02 KQ six-cell scalar/golden-output checks: `{c2_correctness.get('pass')}`",f"- d512/d640 scalar K1 + toy K1/4/8 + all 72-cell A/B/C repeat/equivalence checks: `{physical_correctness.get('pass')}`","- binding timing not started; 72-cell timed sweep not started.","","## Tests"]
+    correctness_report.extend(f"- {row['status']}: `{row['name']}`" for row in correctness_test_report["tests"])
+    correctness_report.extend(["","## SHA-256"])
+    correctness_report.extend(f"- `{path}`: `{record['sha256']}` ({record['size_bytes']} bytes)" for path,record in sorted(correctness_hashes.items()))
+    correctness_report_path=CORRECTNESS_PREFLIGHT_RESULTS/"V2_1C_CORRECTNESS_PREFLIGHT.md"
+    correctness_report_path.write_text("\n".join(correctness_report)+"\n",encoding="utf-8",newline="\n")
+    correctness_report_sha=sha256_file(correctness_report_path)
+    correctness_sidecar=CORRECTNESS_PREFLIGHT_RESULTS/"V2_1C_CORRECTNESS_PREFLIGHT.md.sha256"
+    correctness_sidecar.write_text(correctness_report_sha+"\n",encoding="ascii",newline="\n")
+    correctness_paths.extend([correctness_report_path,correctness_sidecar])
+    correctness_manifest={"schema":"omega-v2-1c-correctness-preflight-artifact-hashes-v1","implementation_commit":provenance["implementation_commit"],"report_self_sha256":correctness_report_sha,"artifacts":{str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in correctness_paths if path.is_file()}}
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json",correctness_manifest)
+    correctness_verified=all(Path(path).is_file() and sha256_file(Path(path))==row["sha256"] for path,row in correctness_manifest["artifacts"].items()) and sha256_file(correctness_report_path)==correctness_sidecar.read_text(encoding="ascii").strip()
+    write_json(CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes_verified.json",{"verified":correctness_verified,"artifact_count":len(correctness_manifest["artifacts"])})
+    if not correctness_verified:raise RuntimeError("V2_1C_CORRECTNESS_PREFLIGHT_HASH_FAILURE")
+    return {"phase":"correctness-only","preflight_status":correctness_status,"correctness_report_abs":str(correctness_report_path.resolve()),"correctness_report_sha256":correctness_report_sha,"artifact_manifest_abs":str((CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json").resolve()),"artifact_manifest_sha256":sha256_file(CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json"),"artifact_count":len(correctness_manifest["artifacts"]),"hashes_verified":correctness_verified,"correctness_record":correctness_record}
+
+    binding_path=PREFLIGHT_ROOT/"companion_binding_preflight.json"
+    if c2_correctness_ok and physical_correctness_ok:
+        binding_report=execute_equivalence("--binding-preflight",weight_file,KQ2_OUTPUTS,binding_path)
+        binding_sanity=compare_binding_timing(binding_report,kq_native) if binding_report.get("cells") else {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":{},"no_timed_allocations":False,"pass":False,"reason":"binding executable produced no cell samples"}
     else:
-        build_logs = build_native(cmake)
-    tests = run_python_contract_tests()
-    kq_native = read_json(KQ2_NATIVE)
-    attempt_manifest, attempt_config, attempt_sha = validate_attempt02()
-    c2_manifest, c2_summary, c2_build, c2_exe_hash = validate_candidate02()
-    seal = kq_contract.validate_v2_0_seal()
-    provenance = verify_provenance(attempt_sha,sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"))
-    binding = validate_kq_kernel_binding(c2_build)
-    static_before = source_hashes()
-    physical_deps = {str(path.resolve()): sha256_file(path) for path in physical_dependency_paths()}
-    candidate2_tus = {str(path.resolve()): sha256_file(path) for path in candidate02_kernel_paths()}
-    if static_before!=source_hashes():
-        raise RuntimeError("V2_1C_SOURCE_HOLD: source hashes changed before V2-1c preflight")
-    payload, weight_info = kq_contract.v2_0_fp32_weight_payload()
-    if weight_info["source_weight_value_sha256"] != kq_native["source_weight_sha256"]:
-        raise RuntimeError("V2_1C_ACCEPTANCE_HOLD: equivalence source weights differ from candidate_02 KQ")
-    preflight_dir = PREFLIGHT_ROOT
-    preflight_dir.mkdir(parents=True, exist_ok=True)
-    weight_file = preflight_dir / "v2_0_fp32_source_weights.tmp"
-    if not weight_file.exists():
-        weight_file.write_bytes(payload)
-    elif sha256_file(weight_file) != hashlib.sha256(payload).hexdigest():
-        raise RuntimeError("V2_1C_ACCEPTANCE_HOLD: preflight weight stream differs from V2-0 source tensors")
-    kernel_key=hashlib.sha256(json.dumps(candidate2_tus,sort_keys=True).encode("utf-8")).hexdigest()[:16]
-    equivalence_path=preflight_dir/f"candidate02_equivalence_{kernel_key}.json"
-    if not equivalence_path.exists():
-        equivalence=execute_equivalence(weight_file,KQ2_OUTPUTS,equivalence_path)
-    else:
-        equivalence=read_json(equivalence_path)
-    timing_sanity = compare_kq_timing_sanity(equivalence,kq_native)
-    if not timing_sanity["pass"]:
-        raise RuntimeError("V2_1C_ACCEPTANCE_HOLD: companion-kernel H0/FULL timing sanity differs materially from sealed candidate_02 KQ")
-    if equivalence["pass"] is not True or equivalence["six_cell_scalar_and_determinism_pass"] is not True or not equivalence["kq_sealed_output_comparisons"]["all_available_sealed_outputs_bit_exact"]:
-        raise RuntimeError("V2_1C_ACCEPTANCE_HOLD: candidate_02 equivalence/determinism checks failed")
-    if source_hashes() != static_before:
-        raise RuntimeError("V2_1C_SOURCE_HOLD: V2-1c sources changed during preflight")
-    if {str(path.resolve()): sha256_file(path) for path in physical_dependency_paths()} != physical_deps:
-        raise RuntimeError("V2_1C_SOURCE_HOLD: physical harness dependencies changed during preflight")
-    if {str(path.resolve()): sha256_file(path) for path in candidate02_kernel_paths()} != candidate2_tus:
-        raise RuntimeError("V2_1C_SOURCE_HOLD: candidate_02 kernel TUs changed during preflight")
-    if c2_build["cmake_version"]!=cmake_version or c2_build["visual_studio_installation"]!=vs_install:
-        raise RuntimeError("V2_1C_SOURCE_HOLD: candidate_02 CMake/MSVC installation differs from the companion build")
+        binding_report={"schema":"omega-v2-1c-binding-preflight-v1","pass":False,"skipped":True,"reason":"correctness preflight failed; binding timing was not started"}
+        binding_sanity={"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":{},"no_timed_allocations":False,"pass":False,"skipped":True}
+    binding_pass=(binding_report.get("pass") is True and binding_report.get("timing_protocol",{}).get("warmups")==10 and binding_report.get("timing_protocol",{}).get("samples")==31 and binding_sanity.get("pass") is True)
+    if source_hashes()!=static_before or {str(path.resolve()):sha256_file(path) for path in physical_dependency_paths()}!=physical_deps or {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=candidate2_tus:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: source/TU hashes changed during preflight")
+
+    preflight_checks=[
+        ("test_v2_1c_python_contract_tests",True),
+        ("test_v2_1c_candidate02_kernel_frozen_hash",binding["kernel_translation_units_byte_identical"] and c2_exe_hash==FROZEN_CANDIDATE02_EXE_SHA256),
+        ("test_v2_1c_candidate02_kq_correctness_preflight",c2_correctness_ok),
+        ("test_v2_1c_d512_d640_scalar_and_72_cell_abc_correctness",physical_correctness_ok),
+        ("test_v2_1c_companion_binding_three_sealed_cells",binding_pass),
+    ]
+    preflight_tests={"schema":"omega-v2-1c-preflight-test-report-v1","test_count":len(preflight_checks),"pass_count":sum(ok for _,ok in preflight_checks),"fail_count":sum(not ok for _,ok in preflight_checks),"skip_count":sum(bool(binding_report.get("skipped")) and name=="test_v2_1c_companion_binding_three_sealed_cells" for name,_ in preflight_checks),"tests":[{"name":name,"status":"PASS" if ok else ("SKIP" if binding_report.get("skipped") and name=="test_v2_1c_companion_binding_three_sealed_cells" else "FAIL")} for name,ok in preflight_checks]}
     preflight_record={
+        "schema":"omega-v2-1c-preflight-v1",
+        "source_provenance":provenance,
         "v2_1c_source_sha256":static_before,
         "physical_dependency_sha256":physical_deps,
         "attempt02_config":attempt_config,
-        "candidate02_exe_sha256":c2_exe_hash,
-        "candidate02_artifact_manifest_sha256":sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"),
         "attempt02_artifact_manifest_sha256":attempt_sha,
+        "attempt02_benchmark_config_sha256":sha256_file(ATTEMPT02_ROOT/"benchmark_config.json"),
+        "attempt02_hardware_preflight_sha256":sha256_file(ATTEMPT02_ROOT/"hardware_preflight.json"),
+        "attempt02_q4_physical_ledger_sha256":sha256_file(ATTEMPT02_ROOT/"q4_physical_ledger.json"),
+        "attempt02_hardware_summary":{"cpu_model":attempt02_hardware.get("hardware",{}).get("cpu_model"),"qpc_frequency":attempt02_hardware.get("hardware",{}).get("qpc",{}).get("frequency"),"coordinator_cpu_set_id":attempt02_hardware.get("hardware",{}).get("coordinator_cpu_set_id")},
+        "attempt02_protocol":{"cell_count":attempt_config["cell_count"],"d":attempt_config["d"],"m":attempt_config["m"],"K":attempt_config["K"],"variants":attempt_config["variants"],"warmups":attempt_config["warmups_per_cell_variant"],"blocks":attempt_config["measurement_blocks"],"samples_per_block":attempt_config["samples_per_block"],"schedule_seed":attempt_config["schedule_seed"],"qpc_frequency":attempt_config["qpc_frequency"],"eviction_method":attempt_config["eviction_method"],"eviction_effectiveness_E":attempt_config["eviction_effectiveness_E"],"B_pool_by_d_k":attempt02_ledger.get("b_pool_by_d_k",[]),"required_b_pool_bytes":attempt02_ledger.get("required_b_pool_bytes"),"llc_bytes":attempt02_ledger.get("hardware_llc_bytes")},
+        "attempt02_worker_v_i":attempt_config["selected_workers"],
+        "candidate02_artifact_manifest_sha256":sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"),
         "candidate02_build_manifest":c2_build,
+        "candidate02_exe_sha256":c2_exe_hash,
         "candidate02_kernel_tu_sha256":candidate2_tus,
-        "kernel_binding":binding,
-        "candidate02_equivalence":equivalence,
-        "candidate02_equivalence_path_abs":str(equivalence_path.resolve()),
-        "timing_sanity":timing_sanity,
+        "candidate02_kernel_binding":binding,
+        "candidate02_kq_correctness_preflight":c2_correctness,
+        "candidate02_kq_correctness_report_path_abs":str(c2_correctness_path.resolve()),
+        "physical_abc_correctness_preflight":physical_correctness,
+        "physical_correctness_preflight_pass":physical_correctness_ok,
+        "physical_correctness_executable_abs":str(CORRECTNESS_EXE.resolve()),
+        "physical_correctness_report_path_abs":str((PREFLIGHT_RESULTS/"physical_correctness_preflight.json").resolve()),
+        "companion_binding_preflight":binding_report,
+        "companion_binding_report_path_abs":str(binding_path.resolve()),
+        "companion_binding_timing_sanity":binding_sanity,
+        "companion_binding_preflight_pass":binding_pass,
+        "companion_binding_timing_report_path_abs":str((PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json").resolve()),
         "source_weight_manifest":{"source":weight_info["source"],"seed":weight_info["seed"],"weight_state_sha256":weight_info["source_weight_value_sha256"],"weight_stream_sha256":weight_info["source_weight_stream_sha256"],"weight_stream_bytes":weight_info["source_weight_stream_bytes"]},
-        "python_contract_tests_status":"PASS",
-        "v2_0_seal_status":seal["seal"]["terminal_status"],
+        "compiler":"MSVC 19.44.35229.0","visual_studio_installation":vs_install,"cmake_path":str(cmake),"cmake_version":cmake_version,
+        "compile_flags_compute":["/O2","/GL","/arch:AVX2","/fp:precise","/W4","/EHsc","/LTCG"],
+        "compute_defines":["WIN32_LEAN_AND_MEAN","NOMINMAX","_WIN32_WINNT=0x0A00","OMEGA_V2_1_AVX2=1","OMEGA_V2_1B_CANDIDATE_ID=2"],
+        "companion_only_defines":["OMEGA_V2_1C_RESIDENCY_ONLY=1","select_p_cores_by_h0=select_p_cores_by_h0_attempt02"],
+        "candidate02_exe_sha256":c2_exe_hash,
+        "candidate02_exe_abs":str(Path(c2_build["executable_absolute_path"]).resolve()),
+        "companion_bench_exe_abs":str(BENCH_EXE.resolve()),
+        "companion_bench_exe_sha256":sha256_file(BENCH_EXE),
+        "companion_equivalence_exe_abs":str(EQUIVALENCE_EXE.resolve()),
+        "companion_equivalence_exe_sha256":sha256_file(EQUIVALENCE_EXE),
+        "companion_correctness_exe_abs":str(CORRECTNESS_EXE.resolve()),
+        "companion_correctness_exe_sha256":sha256_file(CORRECTNESS_EXE),
+        "build_logs":build_logs,
+        "python_static_contract_tests":{"status":"PASS","stdout":python_tests["stdout"],"stderr":python_tests["stderr"]},
+        "pre_sweep_timing_scope":"binding preflight only: exactly three KQ sealed cells, 10 warmups,31 samples; no H0/FULL timing sanity sweep",
+        "timed_72_cell_sweep_started":False,
+        "attempt03_run":False,
+        "pytorch_s_native_gate":"EXCLUDED",
+        "preflight_status":"PASS" if preflight_tests["fail_count"]==0 and preflight_tests["skip_count"]==0 else "PREFLIGHT_HOLD",
+        "preflight_tests":preflight_tests,
     }
-    return {
-        "source_provenance":provenance,
-        "source_sha256":static_before,
-        "physical_dependency_sha256":physical_deps,
-        "candidate02_kernel_tu_sha256":candidate2_tus,
-        "attempt02_preservation":{"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"frozen_worker_cpu_set_ids":[row["windows_cpu_set_id"] for row in attempt_config["selected_workers"]],"frozen_v_i":[row["h0_v_i"] for row in attempt_config["selected_workers"]]},
-        "candidate02_manifest_sha256":sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"),
-        "preflight_record":preflight_record,
-        "v2_0_seal":seal["seal"],
-        "v2_1c_source_sha256": static_before,
-        "candidate02_exe_sha256": c2_exe_hash,
-        "candidate02_artifact_manifest_sha256": sha256_file(KQ2_ROOT_RESULTS / "artifact_hashes.json"),
-        "attempt02_artifact_manifest_sha256": attempt_sha,
-        "attempt02_artifact_manifest": attempt_manifest,
-        "attempt02_config": attempt_config,
-        "candidate02_summary": c2_summary,
-        "candidate02_build_manifest": c2_build,
-        "kernel_binding": binding,
-        "candidate02_equivalence": equivalence,
-        "candidate02_equivalence_path":str(equivalence_path.resolve()),
-        "timing_sanity": timing_sanity,
-        "source_weight_manifest": {"source": weight_info["source"], "seed": weight_info["seed"], "weight_state_sha256": weight_info["source_weight_value_sha256"], "weight_stream_sha256": weight_info["source_weight_stream_sha256"], "weight_stream_bytes": weight_info["source_weight_stream_bytes"]},
-        "build_logs": build_logs,
-        "visual_studio_installation": vs_install,
-        "cmake_version": cmake_version,
-        "bench_executable_sha256": sha256_file(BENCH_EXE),
-        "equivalence_executable_sha256": sha256_file(EQUIVALENCE_EXE),
-        "equivalence_executable_abs": str(EQUIVALENCE_EXE.resolve()),
-        "bench_executable_abs": str(BENCH_EXE.resolve()),
-        "cmake_path":str(cmake),
-        "python_contract_tests": {"status": "PASS", **tests},
+    PREFLIGHT_RESULTS.mkdir(parents=True,exist_ok=False)
+    write_json(PREFLIGHT_RESULTS/"preflight_record.json",preflight_record)
+    write_json(PREFLIGHT_RESULTS/"preflight_tests.json",preflight_tests)
+    write_json(PREFLIGHT_RESULTS/"candidate02_correctness_preflight.json",c2_correctness)
+    write_json(PREFLIGHT_RESULTS/"physical_correctness_preflight.json",physical_correctness)
+    write_json(PREFLIGHT_RESULTS/"companion_binding_preflight.json",binding_report)
+    write_json(PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json",binding_sanity)
+    write_json(PREFLIGHT_RESULTS/"attempt02_preservation.json",{"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"verified":True,"selected_workers":attempt_config["selected_workers"]})
+    pre_paths=[*(UNIT_ROOT/name for name in source_files()),*physical_dependency_paths(),*candidate02_kernel_paths(),
+        Path(c2_build["executable_absolute_path"]),V2_0_ROOT/"V2_0_RESULT_SEAL.json",ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",ATTEMPT02_ROOT/"hardware_preflight.json",ATTEMPT02_ROOT/"q4_physical_ledger.json",ATTEMPT02_ROOT/"worker_shard_manifest.json",ATTEMPT02_ROOT/"summary_metrics.json",ATTEMPT02_ROOT/"raw_measurements.csv",ATTEMPT02_ROOT/"OMEGA_V2_1_REPORT.md",
+        KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_ROOT_RESULTS/"native_kq_candidate_02.json",KQ2_ROOT_RESULTS/"build_manifest.json",KQ2_ROOT_RESULTS/"summary_metrics.json",
+        *(KQ2_OUTPUTS/name for name in ("candidate2_full_m4_k1.bin","candidate2_full_m16_k1.bin","candidate2_full_m8_k4.bin")),
+        BENCH_EXE,EQUIVALENCE_EXE,CORRECTNESS_EXE,
+        PREFLIGHT_RESULTS/"preflight_record.json",PREFLIGHT_RESULTS/"preflight_tests.json",PREFLIGHT_RESULTS/"candidate02_correctness_preflight.json",PREFLIGHT_RESULTS/"physical_correctness_preflight.json",
+        PREFLIGHT_RESULTS/"companion_binding_preflight.json",PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json",PREFLIGHT_RESULTS/"attempt02_preservation.json"]
+    pre_hashes={str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size,"absolute_path":str(path.resolve())} for path in pre_paths if path.is_file()}
+    pre_report=["# V2-1c candidate_02 preflight seal","",f"- preflight_status: `{preflight_record['preflight_status']}`",f"- tests: `{preflight_tests['pass_count']}/{preflight_tests['test_count']}` PASS; `{preflight_tests['fail_count']}` FAIL; `{preflight_tests['skip_count']}` SKIP",f"- v2_1c_source_commit: `{provenance['implementation_commit']}`",f"- frozen_candidate02_exe_sha256: `{c2_exe_hash}`",f"- candidate02_kernel_TU_binding: `{binding['kernel_translation_units_byte_identical']}`",f"- no-timing correctness preflight: `{physical_correctness['pass']}`",f"- candidate02 KQ-output/scalar correctness preflight: `{c2_correctness['pass']}`",f"- companion binding preflight: `{binding_report['pass']}`",f"- 3-cell timing band [0.90,1.10]: `{binding_sanity['pass']}`","- 72-cell timed sweep started: `false`","","## Binding ratios"]
+    pre_report.extend(f"- {name}: ratio `{row['ratio']:.9g}`; pass `{row['within_sanity_band']}`" for name,row in binding_sanity["cells"].items())
+    pre_report.extend(["","## SHA-256"])
+    pre_report.extend(f"- `{path}`: `{record['sha256']}` ({record['size_bytes']} bytes)" for path,record in sorted(pre_hashes.items()))
+    report_path=PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md"
+    report_path.write_text("\n".join(pre_report)+"\n",encoding="utf-8",newline="\n")
+    report_sha=sha256_file(report_path)
+    sidecar=PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md.sha256"
+    sidecar.write_text(report_sha+"\n",encoding="ascii",newline="\n")
+    pre_paths.extend([report_path,sidecar])
+    pre_manifest={"schema":"omega-v2-1c-preflight-artifact-hashes-v1","implementation_commit":provenance["implementation_commit"],"candidate02_exe_sha256":c2_exe_hash,"report_self_sha256":report_sha,"artifacts":{str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in pre_paths if path.is_file()}}
+    write_json(PREFLIGHT_RESULTS/"artifact_hashes.json",pre_manifest)
+    verified=all(Path(path).is_file() and sha256_file(Path(path))==record["sha256"] for path,record in pre_manifest["artifacts"].items()) and sha256_file(report_path)==sidecar.read_text(encoding="ascii").strip()
+    write_json(PREFLIGHT_RESULTS/"artifact_hashes_verified.json",{"verified":verified,"artifact_count":len(pre_manifest["artifacts"])})
+    if not verified: raise RuntimeError("V2_1C_PREFLIGHT_HASH_FAILURE")
+    return {"preflight_record":preflight_record,"report_path":report_path,"report_sha256":report_sha,"artifact_manifest_path":PREFLIGHT_RESULTS/"artifact_hashes.json","artifact_manifest_sha256":sha256_file(PREFLIGHT_RESULTS/"artifact_hashes.json"),"artifact_count":len(pre_manifest["artifacts"]),"verified":verified}
+
+
+def create_binding_preflight()->dict[str,Any]:
+    if PREFLIGHT_RESULTS.exists():
+        raise FileExistsError(f"V2-1c binding preflight is immutable: {PREFLIGHT_RESULTS}")
+    correctness_manifest=verify_artifact_manifest(CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json")
+    correctness_record=read_json(CORRECTNESS_PREFLIGHT_RESULTS/"correctness_preflight.json")
+    correctness_tests=read_json(CORRECTNESS_PREFLIGHT_RESULTS/"test_report.json")
+    if correctness_record["preflight_status"]!="PASS" or correctness_tests["fail_count"] or correctness_tests["skip_count"]:
+        raise RuntimeError("V2_1C_PREFLIGHT_HOLD: no-timing correctness preflight did not pass")
+    if source_hashes()!=correctness_record["v2_1c_source_sha256"]:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: V2-1c source changed between correctness and binding stages")
+    if {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=correctness_record["candidate02_kernel_tu_sha256"]:
+        raise RuntimeError("V2_1C_STOP: candidate_02 compute TUs changed between preflight stages")
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    if attempt_sha!=correctness_record["attempt02_artifact_manifest_sha256"]:
+        raise RuntimeError("V2_1C_STOP: attempt_02 artifact manifest changed between preflight stages")
+    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
+    if c2_exe_sha!=FROZEN_CANDIDATE02_EXE_SHA256 or c2_exe_sha!=correctness_record["candidate02_exe_sha256"]:
+        raise RuntimeError("V2_1C_STOP: frozen candidate_02 executable changed between preflight stages")
+    payload,source_info=kq_contract.v2_0_fp32_weight_payload()
+    weight_file=PREFLIGHT_ROOT/"v2_0_fp32_source_weights.tmp"
+    if not weight_file.is_file() or sha256_file(weight_file)!=hashlib.sha256(payload).hexdigest() or source_info["source_weight_value_sha256"]!=correctness_record["source_weight_manifest"]["weight_state_sha256"]:
+        raise RuntimeError("V2_1C_STOP: preflight Q4 input stream is missing/changed")
+
+    # This is the only timed preparation step: exactly the three sealed KQ binding cells.
+    binding_path=PREFLIGHT_ROOT/"companion_binding_preflight.json"
+    binding_report=execute_equivalence("--binding-preflight",weight_file,KQ2_OUTPUTS,binding_path)
+    kq_native=read_json(KQ2_NATIVE)
+    binding_timing=compare_binding_timing(binding_report,kq_native) if binding_report.get("cells") else {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":{},"no_timed_allocations":False,"pass":False,"reason":"no three-cell timing samples were produced"}
+    binding_pass=binding_report.get("pass") is True and binding_timing["pass"] is True and binding_report.get("timing_protocol",{}).get("warmups")==10 and binding_report.get("timing_protocol",{}).get("samples")==31
+    current_sources=source_hashes()
+    if current_sources!=correctness_record["source_sha256"] or {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=correctness_record["candidate02_kernel_tu_sha256"]:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: sources changed during binding preflight")
+
+    preflight_record={
+        **correctness_record,
+        "phase":"correctness_then_binding_preflights",
+        "companion_binding_preflight":binding_report,
+        "companion_binding_timing_sanity":binding_timing,
+        "companion_binding_preflight_pass":binding_pass,
+        "correctness_preflight_manifest_sha256":sha256_file(CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json"),
+        "binding_preflight_started_after_correctness_pass":True,
+        "timed_72_cell_sweep_started":False,
+        "preflight_status":"PASS" if binding_pass else "COMPANION_BINDING_INVALID",
     }
+    binding_tests=[
+        {"name":"test_v2_1c_candidate02_correctness_preflight","status":"PASS","detail":"sealed no-timing correctness report passed"},
+        {"name":"test_v2_1c_companion_binding_three_kq_cells_bit_exact","status":"PASS" if binding_report.get("sealed_output_comparisons",{}).get("all_available_sealed_outputs_bit_exact") else "FAIL","detail":binding_report.get("sealed_output_comparisons",{})},
+        {"name":"test_v2_1c_companion_binding_warmups_samples_and_no_allocations","status":"PASS" if binding_report.get("timing_protocol",{}).get("warmups")==10 and binding_report.get("timing_protocol",{}).get("samples")==31 and binding_report.get("timing_protocol",{}).get("no_timed_allocations") is True else "FAIL","detail":binding_report.get("timing_protocol",{})},
+        {"name":"test_v2_1c_companion_binding_timing_ratio_0p90_1p10","status":"PASS" if binding_timing["pass"] else "FAIL","detail":binding_timing},
+        {"name":"test_v2_1c_attempt02_preserved","status":"PASS","detail":{"artifact_manifest_sha256":attempt_sha,"artifact_hashes_verified":True}},
+        {"name":"test_v2_1c_candidate02_kernel_frozen_hash","status":"PASS" if c2_exe_sha==FROZEN_CANDIDATE02_EXE_SHA256 and correctness_record["candidate02_kernel_binding"]["kernel_translation_units_byte_identical"] else "FAIL","detail":correctness_record["candidate02_kernel_binding"]},
+    ]
+    preflight_tests={"schema":"omega-v2-1c-preflight-test-report-v1","test_count":len(binding_tests),"pass_count":sum(row["status"]=="PASS" for row in binding_tests),"fail_count":sum(row["status"]=="FAIL" for row in binding_tests),"skip_count":0,"tests":binding_tests}
+    preflight_record["binding_preflight_test_report"]=preflight_tests
+    PREFLIGHT_RESULTS.mkdir(parents=True,exist_ok=False)
+    write_json(PREFLIGHT_RESULTS/"preflight_record.json",preflight_record)
+    write_json(PREFLIGHT_RESULTS/"test_report.json",preflight_tests)
+    write_json(PREFLIGHT_RESULTS/"companion_binding_preflight.json",binding_report)
+    write_json(PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json",binding_timing)
+    write_json(PREFLIGHT_RESULTS/"correctness_preflight_artifact_hashes.json",correctness_manifest)
+    write_json(PREFLIGHT_RESULTS/"correctness_preflight_record.json",correctness_record)
+
+    inputs=[*(UNIT_ROOT/name for name in source_files()),*physical_dependency_paths(),*candidate02_kernel_paths(),
+        Path(c2_build["executable_absolute_path"]),BENCH_EXE,EQUIVALENCE_EXE,CORRECTNESS_EXE,V2_0_ROOT/"V2_0_RESULT_SEAL.json",
+        ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",ATTEMPT02_ROOT/"hardware_preflight.json",ATTEMPT02_ROOT/"q4_physical_ledger.json",ATTEMPT02_ROOT/"summary_metrics.json",ATTEMPT02_ROOT/"raw_measurements.csv",
+        KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_NATIVE,KQ2_ROOT_RESULTS/"summary_metrics.json",KQ2_ROOT_RESULTS/"build_manifest.json",
+        *(KQ2_OUTPUTS/name for name in ("candidate2_full_m4_k1.bin","candidate2_full_m16_k1.bin","candidate2_full_m8_k4.bin")),
+        CORRECTNESS_PREFLIGHT_RESULTS/"artifact_hashes.json",CORRECTNESS_PREFLIGHT_RESULTS/"V2_1C_CORRECTNESS_PREFLIGHT.md",CORRECTNESS_PREFLIGHT_RESULTS/"V2_1C_CORRECTNESS_PREFLIGHT.md.sha256"]
+    pre_hashes={str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in inputs if path.is_file()}
+    lines=["# V2-1c two-stage preflight seal","",f"- implementation commit: `{correctness_record['source_provenance']['implementation_commit']}`",f"- correctness-only preflight: `{correctness_record['preflight_status']}`",f"- binding preflight: `{preflight_record['preflight_status']}`",f"- frozen candidate_02 exe SHA-256: `{FROZEN_CANDIDATE02_EXE_SHA256}`",f"- source TU identity: `{correctness_record['candidate02_kernel_binding']['kernel_translation_units_byte_identical']}`","- correctness stage: no timer; scalar/oracle, A/B/C equivalence, deterministic repeat.","- binding stage: only three sealed KQ cells; 10 warmups/31 samples; ratio band 0.90–1.10.","- 72-cell sweep started: `false`.","","## Binding ratios"]
+    lines.extend(f"- {name}: ratio `{row['ratio']:.9g}`; pass `{row['within_sanity_band']}`" for name,row in binding_timing["cells"].items())
+    lines.extend(["","## SHA-256"])
+    lines.extend(f"- `{path}`: `{record['sha256']}` ({record['size_bytes']} bytes)" for path,record in sorted(pre_hashes.items()))
+    report_path=PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md"
+    report_path.write_text("\n".join(lines)+"\n",encoding="utf-8",newline="\n")
+    report_sha=sha256_file(report_path)
+    sidecar=PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md.sha256"
+    sidecar.write_text(report_sha+"\n",encoding="ascii",newline="\n")
+    final_paths=[*inputs,PREFLIGHT_RESULTS/"preflight_record.json",PREFLIGHT_RESULTS/"test_report.json",PREFLIGHT_RESULTS/"companion_binding_preflight.json",PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json",PREFLIGHT_RESULTS/"correctness_preflight_artifact_hashes.json",PREFLIGHT_RESULTS/"correctness_preflight_record.json",report_path,sidecar]
+    manifest={"schema":"omega-v2-1c-final-preflight-artifact-hashes-v1","implementation_commit":correctness_record["source_provenance"]["implementation_commit"],"report_self_sha256":report_sha,"candidate02_exe_sha256":FROZEN_CANDIDATE02_EXE_SHA256,"artifacts":{str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in final_paths if path.is_file()}}
+    manifest_path=PREFLIGHT_RESULTS/"artifact_hashes.json"
+    write_json(manifest_path,manifest)
+    verified=all(Path(path).is_file() and sha256_file(Path(path))==rec["sha256"] for path,rec in manifest["artifacts"].items()) and sha256_file(report_path)==sidecar.read_text(encoding="ascii").strip()
+    write_json(PREFLIGHT_RESULTS/"artifact_hashes_verified.json",{"verified":verified,"artifact_count":len(manifest["artifacts"])})
+    if not verified:raise RuntimeError("V2_1C_PREFLIGHT_HASH_FAILURE")
+    return {"preflight_status":preflight_record["preflight_status"],"correctness_preflight_status":correctness_record["preflight_status"],"binding_preflight_status":preflight_record["preflight_status"],"preflight_report_abs":str(report_path.resolve()),"preflight_report_sha256":report_sha,"artifact_manifest_abs":str(manifest_path.resolve()),"artifact_manifest_sha256":sha256_file(manifest_path),"artifact_count":len(manifest["artifacts"]),"verified":verified,"record":preflight_record}
+def seal_preflight_stage(root:Path,record:dict[str,Any],artifact_paths:list[Path],report_name:str,report_title:str)->dict[str,Any]:
+    if root.exists():raise FileExistsError(f"preflight stage is immutable: {root}")
+    root.mkdir(parents=True,exist_ok=False)
+    record_path=root/"preflight_record.json";write_json(record_path,record)
+    test_path=root/"test_report.json";write_json(test_path,record["test_report"])
+    paths=[*artifact_paths,record_path,test_path]
+    unique={str(path.resolve()):path for path in paths if path.is_file()}
+    hashes={name:{"sha256":sha256_file(path),"size_bytes":path.stat().st_size,"absolute_path":name} for name,path in unique.items()}
+    lines=[report_title,"",f"- status: `{record['preflight_status']}`",f"- implementation_commit: `{record['source_provenance']['implementation_commit']}`"]
+    lines.extend(record.get("report_summary_lines",[]))
+    lines.extend(["","## Contractual preflight tests"])
+    lines.extend(f"- {row['status']}: `{row['name']}`" for row in record["test_report"]["tests"])
+    lines.extend(["","## SHA-256"])
+    lines.extend(f"- `{name}`: `{item['sha256']}` ({item['size_bytes']} bytes)" for name,item in sorted(hashes.items()))
+    report_path=root/report_name;report_path.write_text("\n".join(lines)+"\n",encoding="utf-8",newline="\n")
+    report_sha=sha256_file(report_path)
+    sidecar=root/(report_name+".sha256");sidecar.write_text(report_sha+"\n",encoding="ascii",newline="\n")
+    final_paths=[*unique.values(),report_path,sidecar]
+    manifest={"schema":"omega-v2-1c-preflight-stage-artifact-hashes-v1","implementation_commit":record["source_provenance"]["implementation_commit"],"report_self_sha256":report_sha,"artifacts":{str(path.resolve()):{"sha256":sha256_file(path),"size_bytes":path.stat().st_size} for path in final_paths if path.is_file()}}
+    manifest_path=root/"artifact_hashes.json";write_json(manifest_path,manifest)
+    verified=all(Path(path).is_file() and sha256_file(Path(path))==item["sha256"] for path,item in manifest["artifacts"].items()) and sha256_file(report_path)==sidecar.read_text(encoding="ascii").strip()
+    write_json(root/"artifact_hashes_verified.json",{"verified":verified,"artifact_count":len(manifest["artifacts"])})
+    if not verified:raise RuntimeError(f"preflight artifact hash verification failed: {root}")
+    return {"root":root,"report_path":report_path,"report_sha256":report_sha,"manifest_path":manifest_path,"manifest_sha256":sha256_file(manifest_path),"artifact_count":len(manifest["artifacts"]),"verified":verified,"manifest":manifest}
+
+
+def run_binding_stage()->dict[str,Any]:
+    if BINDING_PREFLIGHT_RESULTS.exists():raise FileExistsError(f"binding preflight is immutable: {BINDING_PREFLIGHT_RESULTS}")
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
+    seal=kq_contract.validate_v2_0_seal()
+    provenance=verify_provenance(attempt_sha,sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"))
+    vswhere=find_vswhere();cmake,vs_install,cmake_version=find_msvc_cmake(vswhere)
+    source_before=source_hashes();physical_before={str(p.resolve()):sha256_file(p) for p in physical_dependency_paths()};kernel_before={str(p.resolve()):sha256_file(p) for p in candidate02_kernel_paths()}
+    build_logs=build_native(cmake)
+    python_tests=run_python_contract_tests()
+    binding=validate_kq_kernel_binding(c2_build)
+    companion_hash_before=sha256_file(BENCH_EXE)
+    if source_hashes()!=source_before or {str(p.resolve()):sha256_file(p) for p in physical_dependency_paths()}!=physical_before or {str(p.resolve()):sha256_file(p) for p in candidate02_kernel_paths()}!=kernel_before:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: sources changed during companion build")
+    payload,source_info=kq_contract.v2_0_fp32_weight_payload()
+    if source_info["source_weight_value_sha256"]!=read_json(KQ2_NATIVE)["source_weight_sha256"]:
+        raise RuntimeError("V2_1C_PREFLIGHT_HOLD: Q4 binding weights differ from sealed candidate_02 KQ source")
+    PREFLIGHT_ROOT.mkdir(parents=True,exist_ok=True)
+    weights_path=PREFLIGHT_ROOT/"v2_0_fp32_source_weights.tmp";weights_path.write_bytes(payload)
+    output_path=PREFLIGHT_ROOT/"binding_companion.json"
+    binding_report=execute_equivalence("--binding-preflight",weights_path,KQ2_OUTPUTS,output_path)
+    kq_native=read_json(KQ2_NATIVE)
+    ratios=compare_binding_timing(binding_report,kq_native) if binding_report.get("cells") else {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":{},"no_timed_allocations":False,"pass":False}
+    companion_hash_after=sha256_file(BENCH_EXE)
+    binding_pass=binding_report.get("pass") is True and ratios["pass"] is True and companion_hash_before==companion_hash_after
+    record={
+        "schema":"omega-v2-1c-binding-preflight-v1","phase":"1_BINDING_BEFORE_CORE_SELECTION",
+        "source_provenance":provenance,"candidate02_exe_sha256":FROZEN_CANDIDATE02_EXE_SHA256,
+        "candidate02_artifact_manifest_sha256":sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"),
+        "attempt02_artifact_manifest_sha256":attempt_sha,"attempt02_config":attempt_config,
+        "candidate02_build_manifest":c2_build,"candidate02_kernel_binding":binding,
+        "candidate02_kernel_tu_sha256":kernel_before,"physical_dependency_sha256":physical_before,"v2_1c_source_sha256":source_before,
+        "companion_executable_abs":str(BENCH_EXE.resolve()),"companion_exe_sha256_before_binding":companion_hash_before,"companion_exe_sha256_frozen":companion_hash_after,
+        "companion_binding_preflight":binding_report,"companion_binding_timing_sanity":ratios,
+        "attempt02_protocol":{"d":attempt_config["d"],"m":attempt_config["m"],"K":attempt_config["K"],"variants":attempt_config["variants"],"blocks":attempt_config["measurement_blocks"],"samples_per_block":attempt_config["samples_per_block"],"warmups":attempt_config["warmups_per_cell_variant"],"schedule_seed":attempt_config["schedule_seed"],"cpu_set_ids":[row["windows_cpu_set_id"] for row in attempt_config["selected_workers"]],"v_i":[row["h0_v_i"] for row in attempt_config["selected_workers"]]},
+        "compiler":c2_build["compiler"],"visual_studio_installation":vs_install,"cmake_path":str(cmake),"cmake_version":cmake_version,"build_logs":build_logs,"python_contract_tests":python_tests,
+        "preflight_status":"PASS" if binding_pass else "COMPANION_BINDING_INVALID","core_selection_started":False,"correctness_with_new_selection_started":False,"timed_72_cell_sweep_started":False,
+    }
+    tests=[
+        {"name":"test_v2_1c_binding_same_companion_exe_as_sweep","status":"PASS" if companion_hash_before==companion_hash_after and companion_hash_after==binding["companion_executable_sha256"] else "FAIL","detail":{"companion_exe_sha256":companion_hash_after,"frozen_after_binding":True}},
+        {"name":"test_v2_1c_candidate02_compute_identity_before_binding","status":"PASS" if binding["kernel_translation_units_byte_identical"] and binding["compute_defines_match"] and binding["compute_options_match"] and binding["compute_link_options_match"] else "FAIL","detail":binding},
+        {"name":"test_v2_1c_binding_three_sealed_cells_bit_exact","status":"PASS" if binding_report.get("pass") else "FAIL","detail":binding_report.get("sealed_output_comparisons",{})},
+        {"name":"test_v2_1c_binding_timing_0p90_1p10","status":"PASS" if ratios["pass"] else "FAIL","detail":ratios},
+        {"name":"test_v2_1c_binding_10_warmups_31_samples_no_allocations","status":"PASS" if binding_report.get("timing_protocol",{}).get("warmups")==10 and binding_report.get("timing_protocol",{}).get("samples")==31 and binding_report.get("timing_protocol",{}).get("no_timed_allocations") is True else "FAIL","detail":binding_report.get("timing_protocol",{})},
+    ]
+    record["test_report"]={"test_count":len(tests),"pass_count":sum(row["status"]=="PASS" for row in tests),"fail_count":sum(row["status"]=="FAIL" for row in tests),"skip_count":0,"tests":tests}
+    artifacts=[*(UNIT_ROOT/name for name in source_files()),*physical_dependency_paths(),*candidate02_kernel_paths(),
+        Path(c2_build["executable_absolute_path"]),V2_0_ROOT/"V2_0_RESULT_SEAL.json",ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",ATTEMPT02_ROOT/"hardware_preflight.json",ATTEMPT02_ROOT/"q4_physical_ledger.json",ATTEMPT02_ROOT/"raw_measurements.csv",
+        KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_NATIVE,KQ2_ROOT_RESULTS/"build_manifest.json",KQ2_ROOT_RESULTS/"summary_metrics.json",
+        *(KQ2_OUTPUTS/name for name in ("candidate2_full_m4_k1.bin","candidate2_full_m16_k1.bin","candidate2_full_m8_k4.bin")),BENCH_EXE,EQUIVALENCE_EXE,CORRECTNESS_EXE,
+        output_path]
+    report_lines=["# V2-1c COMPANION_BINDING_PREFLIGHT","",f"- status: `{record['preflight_status']}`",f"- same companion exe later used for core selection/correctness/sweep: `{companion_hash_after}`",f"- frozen candidate_02 exe: `{FROZEN_CANDIDATE02_EXE_SHA256}`",f"- candidate_02 source/toolset/flags/defines identity matches: `{binding['kernel_translation_units_byte_identical'] and binding['compute_defines_match'] and binding['compute_options_match'] and binding['compute_link_options_match']}`","- core-selection/H0 preflight has not started; 72-cell sweep has not started.","","## Timing ratios (companion/KQ; required 0.90–1.10)"]
+    report_lines.extend(f"- {name}: `{row['ratio']:.9g}` ({row['within_sanity_band']})" for name,row in ratios["cells"].items())
+    stage=seal_preflight_stage(BINDING_PREFLIGHT_RESULTS,record,artifacts,"V2_1C_BINDING_PREFLIGHT.md",report_lines)
+    return {"stage":stage,"record":record}
+    manifest_path=PREFLIGHT_RESULTS/"artifact_hashes.json"
+    manifest=read_json(manifest_path)
+    mismatches=[]
+    for absolute,record in manifest["artifacts"].items():
+        path=Path(absolute)
+        if not path.is_file() or sha256_file(path)!=record["sha256"]:mismatches.append(absolute)
+    if mismatches:raise RuntimeError(f"V2_1C_PREFLIGHT_SOURCE_HOLD: preflight seal mismatch: {mismatches}")
+    record=read_json(PREFLIGHT_RESULTS/"preflight_record.json")
+    tests=read_json(PREFLIGHT_RESULTS/"preflight_tests.json")
+    if record["timed_72_cell_sweep_started"] is not False or record["preflight_status"]!="PASS" or tests["fail_count"] or tests["skip_count"] or not record["companion_binding_preflight"]["pass"]:
+        raise RuntimeError("V2_1C_PREFLIGHT_HOLD: preflight manifest does not authorize sweep readiness")
+    if source_hashes()!=record["v2_1c_source_sha256"]:raise RuntimeError("V2_1C_SOURCE_HOLD: V2-1c implementation changed after preflight seal")
+    if sha256_file(Path(record["candidate02_build_manifest"]["executable_absolute_path"]))!=FROZEN_CANDIDATE02_EXE_SHA256:raise RuntimeError("V2_1C_STOP: frozen candidate_02 executable changed")
+    for absolute,expected in record["candidate02_kernel_tu_sha256"].items():
+        if sha256_file(Path(absolute))!=expected:raise RuntimeError("V2_1C_STOP: frozen candidate_02 kernel TU changed")
+    if sha256_file(BENCH_EXE)!=record["companion_bench_exe_sha256"] or sha256_file(EQUIVALENCE_EXE)!=record["companion_equivalence_exe_sha256"] or sha256_file(CORRECTNESS_EXE)!=record["companion_correctness_exe_sha256"]:
+        raise RuntimeError("V2_1C_PREFLIGHT_HOLD: companion executable changed after binding preflight")
+    if record["companion_binding_preflight"].get("pass") is not True or record["companion_binding_timing_sanity"].get("pass") is not True:
+        raise RuntimeError("V2_1C_PREFLIGHT_HOLD: companion binding preflight did not fully pass")
+    return record
 
 
 def attempt02_preservation_after(expected_sha: str) -> dict[str, Any]:
@@ -389,15 +730,16 @@ def attempt02_preservation_after(expected_sha: str) -> dict[str, Any]:
 def make_v2_1c_tests(preflight: dict[str,Any], native_status: dict[str,Any], hardware: dict[str,Any], config: dict[str,Any],
                      raw_rows: list[dict[str,Any]], complete: bool, gates: dict[str,Any] | None,
                      attempt_after: dict[str,Any], comparison: dict[str,Any], conformance: dict[str,Any]) -> list[dict[str,Any]]:
-    binding=preflight["kernel_binding"]
+    binding=preflight["candidate02_kernel_binding"]
     eq=preflight["candidate02_equivalence"]
     selected=hardware.get("selected_workers",[])
-    frozen_ids=[int(row["windows_cpu_set_id"]) for row in preflight["attempt02_config"]["selected_workers"]]
-    frozen_vi=[float(row["h0_v_i"]) for row in preflight["attempt02_config"]["selected_workers"]]
+    selection=preflight["core_selection_preflight"]
+    frozen_ids=[int(value) for value in selection["selected_cpu_set_ids"]]
+    frozen_vi=[float(value) for value in selection["selected_v_i"]]
     config_ids=[int(row["windows_cpu_set_id"]) for row in config.get("selected_workers",[])]
     config_vi=[float(row["h0_v_i"]) for row in config.get("selected_workers",[])]
     observed_qpc=hardware.get("hardware",{}).get("qpc",{}).get("frequency")
-    attempt02_qpc=preflight["attempt02_config"].get("qpc_frequency")
+    attempt02_qpc=selection.get("qpc_frequency")
     schedule_ok=(config_ids==frozen_ids and config_vi==frozen_vi and config.get("schedule_seed")==20260929 and config.get("measurement_blocks")==5 and config.get("samples_per_block")==21 and config.get("warmups_per_cell_variant")==10 and config.get("cell_count")==72 and config.get("qpc_frequency")==attempt02_qpc and observed_qpc==attempt02_qpc)
     status=native_status.get("status")
     q4_scalar=hardware.get("q4_scalar_reference_test",{}).get("pass") is True
@@ -486,8 +828,11 @@ def build_conformance(native: dict[str,Any],preflight: dict[str,Any],attempt_bef
             "phase":"PHYSICAL_T0",
             "authority":{"md310":"GO","candidate02_kq_commit":"2e8ac1207e742e659aab34ef0ab4bf51d43dbe55","v2_1c_implementation_commit":git("rev-parse","HEAD")},
             "prior_evidence":{"attempt_02":{"status":"VALID_MEASUREMENT","terminal":"RESIDENCY_GATE_FAIL","immutable":True,"artifact_manifest_sha256":attempt_before["artifact_manifest_sha256"]},"candidate02_kq":{"status":"KERNEL_SCIENTIFICALLY_QUALIFIED+PROJECT_NATIVE_SPEED_GATE_FAIL","immutable":True,"exe_sha256":FROZEN_CANDIDATE02_EXE_SHA256}},
-            "kernel_binding":{"candidate_id":"KQ2_ROW_TILE4_SLOT2_FUSED","frozen_kq_executable_sha256":FROZEN_CANDIDATE02_EXE_SHA256,"companion_physical_harness_executable_sha256":preflight["bench_executable_sha256"],"candidate02_kernel_tus_byte_identical":preflight["kernel_binding"]["kernel_translation_units_byte_identical"],"candidate02_compile_flags_and_toolset_match":True,"no_kernel_source_changes":True},
-            "protocol":{"cells":72,"d":[512,640],"m":[1,4,8,16],"m1_role":"CONTROL_ONLY","K":[1,4,8],"variants":["A","B","C"],"blocks":5,"samples_per_block":21,"warmups":10,"schedule_seed":20260929,"workers_cpu_set_ids":FROZEN_WORKER_IDS,"v_i_source":"attempt_02 benchmark_config.json; frozen, not reselected"},
+            "candidate_02_identity":"SOURCE_AND_BEHAVIOR_BOUND_COMPANION",
+            "original_KQ_executable":{"sha256":FROZEN_CANDIDATE02_EXE_SHA256,"immutable":True,"not_used_for_V2_1c":True},
+            "scientific_kernel":"no_compute_source_changes",
+            "kernel_binding":{"candidate_id":"KQ2_ROW_TILE4_SLOT2_FUSED","frozen_kq_executable_sha256":FROZEN_CANDIDATE02_EXE_SHA256,"companion_physical_harness_executable_sha256":preflight["companion_bench_exe_sha256"],"candidate02_kernel_tus_byte_identical":preflight["candidate02_kernel_binding"]["kernel_translation_units_byte_identical"],"candidate02_compile_flags_and_toolset_match":True,"no_kernel_source_changes":True},
+            "protocol":{"cells":72,"d":[512,640],"m":[1,4,8,16],"m1_role":"CONTROL_ONLY","K":[1,4,8],"variants":["A","B","C"],"blocks":5,"samples_per_block":21,"warmups":10,"schedule_seed":20260929,"workers_cpu_set_ids":preflight["core_selection_preflight"]["selected_cpu_set_ids"],"v_i":preflight["core_selection_preflight"]["selected_v_i"],"v_i_source":"fresh candidate_02 H0 core-selection preflight; sealed, not reselected during sweep","attempt02_performance_comparison_status":preflight["core_selection_preflight"]["attempt02_pairing_status"]},
             "gates":{"primary_cell":{"d":512,"m":4,"K":8},"rho_max":0.50,"delta_CB_max":0.25,"require_c_C_gt_c_A":True,"G_matrix_min":1.50,"pytorch_S_native_gate":"EXCLUDED","m1":"diagnostic only"},
             "gate_results":gates,
             "attempt02_preservation":{"manifest_sha256_before":attempt_before["artifact_manifest_sha256"],"manifest_sha256_after":attempt_after["artifact_manifest_sha256"],"preserved":attempt_before["artifact_manifest_sha256"]==attempt_after["artifact_manifest_sha256"]},
@@ -501,7 +846,8 @@ def build_conformance(native: dict[str,Any],preflight: dict[str,Any],attempt_bef
 
 
 def make_attempt02_comparison(attempt02_summary: dict[str,Any],attempt02_cells: dict[tuple[int,int,int,str],dict[str,Any]],
-                              current_gates: dict[str,Any],current_cells: dict[tuple[int,int,int,str],dict[str,Any]])->dict[str,Any]:
+                              current_gates: dict[str,Any],current_cells: dict[tuple[int,int,int,str],dict[str,Any]],
+                              pairing_status: str)->dict[str,Any]:
     old=attempt02_summary.get("gate_metrics",{})
     def time(cells:dict[tuple[int,int,int,str],dict[str,Any]],m:int,k:int,v:str)->float:
         value=cells[(512,m,k,v)]["median_seconds"]
@@ -511,6 +857,8 @@ def make_attempt02_comparison(attempt02_summary: dict[str,Any],attempt02_cells: 
         "attempt02":{key:old.get(key) for key in ("rho_resident","delta_CB","G_matrix","c_A_K8","c_B_K8","c_C_K8")},
         "v2_1c":{key:current_gates.get(key) for key in ("rho_resident","delta_CB","G_matrix","c_A_K8","c_B_K8","c_C_K8")},
         "non_gate_comparisons":{
+            "performance_comparison_status":pairing_status,
+            "performance_comparison_interpretation":"paired kernel comparison" if pairing_status=="PAIRED_KERNEL_COMPARISON" else "DIAGNOSTIC_ONLY / NOT_PAIRED_KERNEL_COMPARISON",
             "A_d512_m4_K8_latency_ratio_attempt02_over_v2_1c":time(attempt02_cells,4,8,"A")/time(current_cells,4,8,"A"),
             "A_d512_m16_K8_latency_ratio_attempt02_over_v2_1c":time(attempt02_cells,16,8,"A")/time(current_cells,16,8,"A"),
             "A_d512_m4_K1_throughput_attempt02":attempt02_cells[(512,4,1,"A")]["effective_MAC_per_s"],
@@ -531,16 +879,18 @@ def load_attempt02_cells() -> tuple[dict[str,Any],dict[tuple[int,int,int,str],di
 def result_paths_for_hashing(preflight:dict[str,Any])->list[Path]:
     paths=[*(UNIT_ROOT/name for name in source_files()),*physical_dependency_paths(),*candidate02_kernel_paths(),
         Path(preflight["candidate02_build_manifest"]["executable_absolute_path"]),V2_0_ROOT/"V2_0_RESULT_SEAL.json",
-        ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_NATIVE,
+        ATTEMPT02_ROOT/"artifact_hashes.json",ATTEMPT02_ROOT/"benchmark_config.json",ATTEMPT02_ROOT/"hardware_preflight.json",ATTEMPT02_ROOT/"q4_physical_ledger.json",ATTEMPT02_ROOT/"worker_shard_manifest.json",ATTEMPT02_ROOT/"summary_metrics.json",ATTEMPT02_ROOT/"raw_measurements.csv",ATTEMPT02_ROOT/"OMEGA_V2_1_REPORT.md",KQ2_ROOT_RESULTS/"artifact_hashes.json",KQ2_NATIVE,
         KQ2_ROOT_RESULTS/"summary_metrics.json",KQ2_ROOT_RESULTS/"build_manifest.json",KQ2_ROOT_RESULTS/"source_weight_manifest.json",KQ2_ROOT_RESULTS/"test_report.json",
         *(KQ2_OUTPUTS/name for name in ("candidate2_full_m4_k1.bin","candidate2_full_m16_k1.bin","candidate2_full_m8_k4.bin")),
-        BENCH_EXE,EQUIVALENCE_EXE,Path(preflight["candidate02_equivalence_path_abs"]),
+        BENCH_EXE,EQUIVALENCE_EXE,CORRECTNESS_EXE,Path(preflight["candidate02_kq_correctness_report_path_abs"]),Path(preflight["physical_correctness_report_path_abs"]),Path(preflight["companion_binding_report_path_abs"]),Path(preflight["companion_binding_timing_report_path_abs"]),
+        PREFLIGHT_RESULTS/"artifact_hashes.json",PREFLIGHT_RESULTS/"artifact_hashes_verified.json",PREFLIGHT_RESULTS/"preflight_record.json",PREFLIGHT_RESULTS/"preflight_tests.json",PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md",PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md.sha256",
         RESULTS_ROOT/"build_manifest.json",RESULTS_ROOT/"hardware_preflight.json",RESULTS_ROOT/"q4_physical_ledger.json",
         RESULTS_ROOT/"worker_shard_manifest.json",RESULTS_ROOT/"benchmark_config.json",RESULTS_ROOT/"native_test_report.json",
         RESULTS_ROOT/"native_run_status.json",RESULTS_ROOT/"raw_measurements.csv",RESULTS_ROOT/"summary_metrics.json",
         RESULTS_ROOT/"test_report.json",RESULTS_ROOT/"OMEGA_CONFORMANCE_BLOCK.yaml",RESULTS_ROOT/"attempt02_preservation.json",
-        RESULTS_ROOT/"candidate02_kernel_binding.json",RESULTS_ROOT/"candidate02_equivalence.json",RESULTS_ROOT/"attempt02_vs_v2_1c_comparison.json",
+        RESULTS_ROOT/"candidate02_kernel_binding.json",RESULTS_ROOT/"candidate02_equivalence.json",RESULTS_ROOT/"physical_correctness_preflight.json",RESULTS_ROOT/"companion_binding_preflight.json",RESULTS_ROOT/"companion_binding_timing_sanity.json",RESULTS_ROOT/"attempt02_vs_v2_1c_comparison.json",
         RESULTS_ROOT/"preflight_record.json",
+        PREFLIGHT_RESULTS/"artifact_hashes.json",PREFLIGHT_RESULTS/"artifact_hashes_verified.json",PREFLIGHT_RESULTS/"preflight_record.json",PREFLIGHT_RESULTS/"test_report.json",PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md",PREFLIGHT_RESULTS/"V2_1C_PREFLIGHT_REPORT.md.sha256",PREFLIGHT_RESULTS/"candidate02_correctness_preflight.json",PREFLIGHT_RESULTS/"physical_correctness_preflight.json",PREFLIGHT_RESULTS/"companion_binding_preflight.json",PREFLIGHT_RESULTS/"companion_binding_timing_sanity.json",PREFLIGHT_RESULTS/"attempt02_preservation.json",
         RESULTS_ROOT/"native_stdout.log",RESULTS_ROOT/"native_stderr.log"]
     return [path for path in paths if path.is_file()]
 
@@ -558,14 +908,15 @@ def format_report(summary:dict[str,Any],hashes:dict[str,dict[str,Any]])->str:
         "- attempt_02: immutable and hash-verified before/after.",
         "- attempt_03 (V2-1b): `NOT_RUN`; A/B/C were run only as the authorized V2-1c 72-cell physical replication.",
         "- Scope: physical residency on the measured i7-13700F only. No backend-quality, PyTorch-speed, trainability, language, GPU-release, or T3 verdict.", "",
-        "## Frozen-kernel equivalence and timing sanity",
-        f"- exact KQ saved output comparisons: `{summary['equivalence']['kq_sealed_output_comparisons']}`",
-        f"- six d512 cells scalar-oracle max errors/tolerances and deterministic repeats: see `candidate02_equivalence.json`; overall `{summary['equivalence']['six_cell_scalar_and_determinism_pass']}`.",
-        f"- pre-sweep H0/FULL timing sanity against KQ run_01 (0.70–1.30 ratio band): `{summary['preflight']['timing_sanity']}`.",
-        "- Limitation: candidate_02 KQ sealed files contained exact outputs only for d512,m4,K1; d512,m16,K1; and d512,m8,K4. No sealed outputs existed for m1,K1 or K4 at m={1,4,16}; those six requested cells were checked against scalar oracle and repeated-run determinism instead.", "",
+        "## Correctness and companion binding preflights",
+        f"- candidate_02 KQ-source correctness/oracle and all available sealed output checks: `{summary['preflight']['candidate02_kq_correctness_preflight']['pass']}`.",
+        f"- d512/d640 full-size K1 scalar oracle, toy recurrence K={1,4,8}, and all 72 A/B/C cell equality/determinism checks: `{summary['preflight']['physical_abc_correctness_preflight']['pass']}`.",
+        f"- binding-preflight (only d512,m4,K1; d512,m16,K1; d512,m8,K4; 10 warmups/31 samples; allowed companion/KQ ratio 0.90–1.10): `{summary['preflight']['companion_binding_timing_sanity']}`.",
+        "- Limitation: candidate_02 KQ sealed files contain exact outputs only for d512,m4,K1; d512,m16,K1; and d512,m8,K4. No sealed output exists for m1,K1 or K4 at m={1,4,16}; those cells were checked against the scalar oracle and repeated-run determinism. The original KQ executable was not rerun or modified.", "",
         "## Protocol",
         "- Cells: d={512,640}, m={1,4,8,16}, K={1,4,8}, A/B/C = 72; 10 warmups, 5 blocks × 21 samples; seed 20260929.",
-        f"- v_i and fixed CPU-set workers reused from attempt_02: `{summary['attempt02_preservation']['frozen_worker_cpu_set_ids']}` with v_i `{summary['attempt02_preservation']['frozen_v_i']}`.",
+        f"- v_i and fixed CPU-set workers from the fresh candidate_02 core-selection preflight: `{summary['preflight']['core_selection_preflight']['selected_cpu_set_ids']}` with v_i `{summary['preflight']['core_selection_preflight']['selected_v_i']}`.",
+        f"- attempt_02 performance comparison status: `{summary['preflight']['core_selection_preflight']['attempt02_pairing_status']}`.",
         f"- native status: `{summary['native_status']}`; valid raw rows: `{summary['raw_row_count']}`; complete 72-cell sweep: `{summary['sweep_complete']}`.", "",
         "## Primary gates (point estimates; unchanged MD/304–305 thresholds)",
     ]
@@ -627,13 +978,14 @@ def finalize_results(preflight:dict[str,Any],attempt_before:dict[str,Any])->dict
         "cells":cells_list,"discarded_samples_with_predeclared_reasons":discarded,
         "sweep_complete":complete,"analysis_error":analysis_error,"gate_metrics":gates,
         "source_provenance":preflight["source_provenance"],"build_manifest":read_json(RESULTS_ROOT/"build_manifest.json"),
-        "preflight":preflight["preflight_record"],"equivalence":preflight["preflight_record"]["candidate02_equivalence"],
+        "preflight":preflight["preflight_record"],"equivalence":preflight["preflight_record"]["candidate02_kq_correctness_preflight"],
         "attempt02_preservation":{**attempt_before,"artifact_hashes_verified_before_v2_1c":True},
         "attempt02_vs_v2_1c_comparison":None,
         "global_status":"CONFORMANCE_HOLD","gpu":"HOLD","T3":"HOLD",
     }
     attempt02_summary,attempt02_cells=load_attempt02_cells()
-    comparison=make_attempt02_comparison(attempt02_summary,attempt02_cells,gates or {},cells) if gates else {"attempt02_gate_metrics":attempt02_summary.get("gate_metrics",{}),"v2_1c_gate_metrics":None,"attempt02_vs_v2_1c_non_gate":{}}
+    pairing_status=preflight["preflight_record"]["core_selection_preflight"]["attempt02_pairing_status"]
+    comparison=make_attempt02_comparison(attempt02_summary,attempt02_cells,gates or {},cells,pairing_status) if gates else {"attempt02_gate_metrics":attempt02_summary.get("gate_metrics",{}),"v2_1c_gate_metrics":None,"attempt02_vs_v2_1c_non_gate":{"performance_comparison_status":pairing_status,"performance_comparison_interpretation":"paired kernel comparison" if pairing_status=="PAIRED_KERNEL_COMPARISON" else "DIAGNOSTIC_ONLY / NOT_PAIRED_KERNEL_COMPARISON"}}
     summary["attempt02_vs_v2_1c_comparison"]=comparison
     provisional_conformance=build_conformance(native_status,preflight["preflight_record"],attempt_before,attempt_before,gates,None,[])
     tests=make_v2_1c_tests(preflight["preflight_record"],native_status,hardware,config,raw_rows,complete,gates,attempt_before,comparison,provisional_conformance)
@@ -686,9 +1038,11 @@ def run_native_sweep(preflight:dict[str,Any],attempt_before:dict[str,Any])->dict
         "schema":"omega-v2-1c-native-build-manifest-v1",
         "implementation_commit":preflight["source_provenance"]["implementation_commit"],
         "source_provenance":preflight["source_provenance"],
-        "candidate02_frozen_binding":preflight["preflight_record"]["kernel_binding"],
-        "candidate02_equivalence":preflight["preflight_record"]["candidate02_equivalence"],
-        "candidate02_timing_sanity":preflight["preflight_record"]["timing_sanity"],
+        "candidate02_frozen_binding":preflight["preflight_record"]["candidate02_kernel_binding"],
+        "candidate02_correctness_preflight":preflight["preflight_record"]["candidate02_kq_correctness_preflight"],
+        "physical_correctness_preflight":preflight["preflight_record"]["physical_abc_correctness_preflight"],
+        "companion_binding_preflight":preflight["preflight_record"]["companion_binding_preflight"],
+        "candidate02_binding_timing":preflight["preflight_record"]["companion_binding_timing_sanity"],
         "source_sha256":preflight["source_sha256"],"physical_dependency_sha256":preflight["physical_dependency_sha256"],
         "candidate02_kernel_tu_sha256":preflight["candidate02_kernel_tu_sha256"],
         "generator":"Visual Studio 17 2022 x64","configuration":"Release","compiler":"MSVC 19.44.35229.0",
@@ -700,19 +1054,24 @@ def run_native_sweep(preflight:dict[str,Any],attempt_before:dict[str,Any])->dict
         "candidate02_kq_manifest_sha256":preflight["candidate02_manifest_sha256"],
         "frozen_candidate02_exe_sha256":FROZEN_CANDIDATE02_EXE_SHA256,
         "build_logs":preflight["build_logs"],
-        "equivalence_report":preflight["preflight_record"]["candidate02_equivalence"],
+        "candidate02_kq_correctness_report":preflight["preflight_record"]["candidate02_kq_correctness_preflight"],
     }
     write_json(RESULTS_ROOT/"build_manifest.json",build_manifest)
     write_json(RESULTS_ROOT/"preflight_record.json",preflight["preflight_record"])
-    equivalence_path=Path(preflight["preflight_record"]["candidate02_equivalence_path_abs"])
+    equivalence_path=Path(preflight["preflight_record"]["candidate02_kq_correctness_report_path_abs"])
     (RESULTS_ROOT/"candidate02_equivalence.json").write_bytes(equivalence_path.read_bytes())
-    write_json(RESULTS_ROOT/"candidate02_kernel_binding.json",preflight["preflight_record"]["kernel_binding"])
+    physical_path=Path(preflight["preflight_record"]["physical_correctness_report_path_abs"])
+    (RESULTS_ROOT/"physical_correctness_preflight.json").write_bytes(physical_path.read_bytes())
+    (RESULTS_ROOT/"companion_binding_preflight.json").write_bytes(Path(preflight["preflight_record"]["companion_binding_report_path_abs"]).read_bytes())
+    (RESULTS_ROOT/"companion_binding_timing_sanity.json").write_bytes(Path(preflight["preflight_record"]["companion_binding_timing_report_path_abs"]).read_bytes())
+    write_json(RESULTS_ROOT/"candidate02_kernel_binding.json",preflight["preflight_record"]["candidate02_kernel_binding"])
     attempt02_after=attempt02_preservation_after(attempt_before)
     write_json(RESULTS_ROOT/"attempt02_preservation.json",attempt02_after)
     native_env=os.environ.copy()
     native_env["OMEGA_V2_1_RESULTS_ROOT"]=str(RESULTS_ROOT.resolve())
-    native_env["OMEGA_V2_1C_ATTEMPT02_CPU_SET_IDS"]=",".join(str(value) for value in FROZEN_WORKER_IDS)
-    native_env["OMEGA_V2_1C_ATTEMPT02_V_I"]=",".join(str(value) for value in attempt_before["frozen_h0_shard_weights"])
+    selected=preflight["preflight_record"]["core_selection_preflight"]["selected_workers"]
+    native_env["OMEGA_V2_1C_SELECTED_CPU_SET_IDS"]=",".join(str(row["cpu_set_id"]) for row in selected)
+    native_env["OMEGA_V2_1C_SELECTED_V_I"]=",".join(str(row["v_i"]) for row in selected)
     try:
         native_process=subprocess.run([str(BENCH_EXE),"--run"],cwd=REPO_ROOT,capture_output=True,text=True,timeout=8*60*60,env=native_env)
         stdout,stderr,returncode=native_process.stdout,native_process.stderr,native_process.returncode
@@ -726,44 +1085,46 @@ def run_native_sweep(preflight:dict[str,Any],attempt_before:dict[str,Any])->dict
     return {"native_returncode":returncode,"stdout":stdout,"stderr":stderr}
 
 
-def main()->int:
+def main_legacy_do_not_call()->int:
+    raise RuntimeError("Disabled legacy combined-preflight/sweep entrypoint; use the staged V2-1c CLI below.")
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--preflight-only",action="store_true",help="build and verify frozen candidate_02 equivalence/timing sanity without opening the V2-1c sweep result slot")
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--preflight-only",action="store_true",help="run no-timing correctness checks followed by the authorized 3-cell binding preflight; do not run 72 cells")
+    mode.add_argument("--run-sweep",action="store_true",help="run the 72-cell sweep only after a verified sealed preflight and explicit GO medicion")
+    parser.add_argument("--go-medicion",action="store_true",help="required acknowledgement of the judge's explicit post-preflight GO medicion")
     args=parser.parse_args()
     if os.name!="nt" or sys.platform!="win32":
         raise RuntimeError("V2_1C_MEASUREMENT_INVALID: unit requires native Windows")
-    if not args.preflight_only and RESULTS_ROOT.exists():
-        raise FileExistsError(f"V2-1c attempt_01 is immutable and already exists: {RESULTS_ROOT}")
-
-    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
-    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
-    provenance=verify_provenance(attempt_sha,sha256_file(KQ2_ROOT_RESULTS/"artifact_hashes.json"))
-    vswhere=find_vswhere()
-    cmake,vs_install,cmake_version=find_msvc_cmake(vswhere)
-    force_build=args.preflight_only or not (BENCH_EXE.is_file() and EQUIVALENCE_EXE.is_file())
-    preflight=run_preflight(cmake,vs_install,cmake_version,force_build=force_build)
-    preflight["source_provenance"]=provenance
-    preflight_record={
-        "candidate02_exe_sha256":preflight["candidate02_exe_sha256"],
-        "candidate02_artifact_manifest_sha256":preflight["candidate02_artifact_manifest_sha256"],
-        "attempt02_artifact_manifest_sha256":preflight["attempt02_artifact_manifest_sha256"],
-        "candidate02_build_manifest":preflight["candidate02_build_manifest"],
-        "candidate02_kernel_tu_sha256":preflight["candidate02_kernel_tu_sha256"],
-        "kernel_binding":preflight["kernel_binding"],
-        "candidate02_equivalence":preflight["candidate02_equivalence"],
-        "candidate02_equivalence_path_abs":preflight["candidate02_equivalence_path_abs"],
-        "timing_sanity":preflight["timing_sanity"],
-        "v2_1c_source_sha256":preflight["source_sha256"],
-        "physical_dependency_sha256":preflight["physical_dependency_sha256"],
-        "attempt02_config":preflight["attempt02_config"],
-        "candidate02_kq_summary":preflight["candidate02_summary"],
-        "preflight_tests":preflight["python_contract_tests"],
-    }
-    preflight["preflight_record"]=preflight_record
     if args.preflight_only:
-        print(json.dumps({"preflight_only":True,"measurement_started":False,"v2_1c_source_commit":provenance["implementation_commit"],"frozen_candidate02_exe_sha256":c2_exe_sha,"candidate02_kernel_tus_byte_identical":preflight["kernel_binding"]["kernel_translation_units_byte_identical"],"equivalence_pass":preflight["candidate02_equivalence"]["pass"],"six_cell_scalar_and_determinism_pass":preflight["candidate02_equivalence"]["six_cell_scalar_and_determinism_pass"],"all_available_sealed_outputs_bit_exact":preflight["candidate02_equivalence"]["kq_sealed_output_comparisons"]["all_available_sealed_outputs_bit_exact"],"timing_sanity_pass":preflight["timing_sanity"]["pass"],"attempt02_hash_verified":True,"attempt03_run":False,"results_slot_free":not RESULTS_ROOT.exists()},indent=2,sort_keys=True))
-        return 0
+        cmake,vs_install,cmake_version=find_msvc_cmake(find_vswhere())
+        result=create_preflight_seal(cmake,vs_install,cmake_version)
+        print(json.dumps({"preflight_only":True,"preflight_status":result["preflight_record"]["preflight_status"],"measurement_started":False,"v2_1c_implementation_commit":result["preflight_record"]["source_provenance"]["implementation_commit"],"frozen_candidate02_exe_sha256":result["preflight_record"]["candidate02_exe_sha256"],"candidate02_kernel_tus_byte_identical":result["preflight_record"]["candidate02_kernel_binding"]["kernel_translation_units_byte_identical"],"candidate02_correctness_pass":result["preflight_record"]["candidate02_kq_correctness_preflight"].get("pass"),"physical_abc_correctness_pass":result["preflight_record"]["physical_abc_correctness_preflight"].get("pass"),"binding_preflight_pass":result["preflight_record"]["companion_binding_preflight"].get("pass"),"binding_timing_ratios":result["preflight_record"]["companion_binding_timing_sanity"],"preflight_report_abs":str(result["report_path"].resolve()),"preflight_report_sha256":result["report_sha256"],"artifact_manifest_abs":str(result["artifact_manifest_path"].resolve()),"artifact_manifest_sha256":result["artifact_manifest_sha256"],"preflight_hashes_verified":result["verified"],"timed_72_cell_sweep_started":False,"attempt02_hash_verified":True},indent=2,sort_keys=True))
+        return 0 if result["preflight_record"]["preflight_status"]=="PASS" and result["verified"] else 1
 
+    if not args.go_medicion:
+        raise RuntimeError("V2_1C_STOP: --run-sweep requires the judge's explicit GO medicion")
+    if RESULTS_ROOT.exists():
+        raise FileExistsError(f"V2-1c attempt_01 result slot is immutable and already exists: {RESULTS_ROOT}")
+    preflight_record=load_sealed_preflight()
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    if attempt_sha!=preflight_record["attempt02_artifact_manifest_sha256"]:
+        raise RuntimeError("V2_1C_STOP: attempt_02 manifest differs from sealed preflight")
+    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
+    if c2_exe_sha!=preflight_record["candidate02_exe_sha256"] or c2_exe_sha!=FROZEN_CANDIDATE02_EXE_SHA256:
+        raise RuntimeError("V2_1C_STOP: frozen candidate_02 KQ executable does not match preflight")
+    preflight={
+        "preflight_record":preflight_record,
+        "source_provenance":preflight_record["source_provenance"],
+        "source_sha256":preflight_record["v2_1c_source_sha256"],
+        "physical_dependency_sha256":preflight_record["physical_dependency_sha256"],
+        "candidate02_kernel_tu_sha256":preflight_record["candidate02_kernel_tu_sha256"],
+        "candidate02_manifest_sha256":preflight_record["candidate02_artifact_manifest_sha256"],
+        "candidate02_build_manifest":preflight_record["candidate02_build_manifest"],
+        "bench_executable_sha256":preflight_record["companion_bench_exe_sha256"],
+        "equivalence_executable_sha256":preflight_record["companion_equivalence_exe_sha256"],
+        "correctness_executable_sha256":preflight_record["companion_correctness_exe_sha256"],
+        "build_logs":preflight_record["build_logs"],
+    }
     attempt_before={"artifact_manifest_path_abs":str((ATTEMPT02_ROOT/"artifact_hashes.json").resolve()),"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"artifact_hashes_verified_before_v2_1c":True,"frozen_worker_cpu_set_ids":[row["windows_cpu_set_id"] for row in attempt_config["selected_workers"]],"frozen_h0_shard_weights":[row["h0_v_i"] for row in attempt_config["selected_workers"]],"frozen_worker_logical_ids":[row["logical_processor_id"] for row in attempt_config["selected_workers"]]}
     run_native_sweep(preflight,attempt_before)
     attempt_after=attempt02_preservation_after(attempt_before)
@@ -777,6 +1138,132 @@ def main()->int:
     seal=seal_results(summary)
     print(json.dumps({"unit":"OMEGA-V2-1c-RESIDENCY-ONLY","terminal_status":summary["terminal_status"],"gate_metrics":summary.get("gate_metrics"),"test_count":summary["test_report"]["test_count"],"test_pass_count":summary["test_report"]["pass_count"],"test_fail_count":summary["test_report"]["fail_count"],"test_skip_count":summary["test_report"]["skip_count"],"results_root_abs":str(RESULTS_ROOT.resolve()),"report_sha256":seal["report_sha256"],"artifact_manifest_sha256":seal["artifact_manifest_sha256"],"artifact_count":seal["artifact_count"],"artifact_hashes_verified":seal["verified"],"attempt03_run":False,"pytorch_s_native_gate":"EXCLUDED"},indent=2,sort_keys=True))
     return 0 if summary["terminal_status"]=="OMEGA_V2_1C_RESIDENCY_ONLY_PASS" and seal["verified"] else 1
+
+
+def _legacy_main_do_not_call()->int:
+    raise RuntimeError("Disabled legacy combined-preflight entrypoint; use the staged V2-1c CLI below.")
+    parser=argparse.ArgumentParser(description=__doc__)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--correctness-preflight-only",action="store_true",help="no-timing candidate02 scalar/oracle and all-cell A/B/C correctness preflight")
+    mode.add_argument("--binding-preflight-only",action="store_true",help="authorized three-cell KQ binding timing preflight after correctness passes")
+    mode.add_argument("--run-sweep",action="store_true",help="72-cell V2-1c sweep only after sealed preflights and explicit judge GO medicion")
+    parser.add_argument("--go-medicion",action="store_true",help="acknowledge the judge's explicit GO medicion; required with --run-sweep")
+    args=parser.parse_args()
+    if os.name!="nt" or sys.platform!="win32":
+        raise RuntimeError("V2_1C_MEASUREMENT_INVALID: unit requires native Windows")
+
+    if args.correctness_preflight_only:
+        cmake,vs_install,cmake_version=find_msvc_cmake(find_vswhere())
+        result=create_preflight(cmake,vs_install,cmake_version)
+        print(json.dumps({"phase":"correctness-only","preflight_status":result["preflight_status"],"timing_started":False,"sweep_started":False,"report_abs":result["correctness_report_abs"],"report_sha256":result["correctness_report_sha256"],"artifact_manifest_abs":result["artifact_manifest_abs"],"artifact_manifest_sha256":result["artifact_manifest_sha256"],"artifact_count":result["artifact_count"],"hashes_verified":result["hashes_verified"],"candidate02_kq_scalar_pass":result["correctness_record"]["candidate02_kq_correctness_preflight"].get("pass"),"physical_correctness_pass":result["correctness_record"]["physical_abc_correctness_preflight"].get("pass")},indent=2,sort_keys=True))
+        return 0 if result["preflight_status"]=="PASS" and result["hashes_verified"] else 1
+
+    if args.binding_preflight_only:
+        result=create_binding_preflight()
+        print(json.dumps({"phase":"binding-only","preflight_status":result["preflight_status"],"timed_72_cell_sweep_started":False,"report_abs":str(result["report_path"].resolve()),"report_sha256":result["report_sha256"],"artifact_manifest_abs":str(result["artifact_manifest_path"].resolve()),"artifact_manifest_sha256":result["artifact_manifest_sha256"],"artifact_count":result["artifact_count"],"artifact_hashes_verified":result["verified"],"binding_timing_ratios":result["record"]["companion_binding_timing_sanity"]},indent=2,sort_keys=True))
+        return 0 if result["preflight_status"]=="PASS" and result["verified"] else 1
+
+    if not args.go_medicion:
+        raise RuntimeError("V2_1C_STOP: --run-sweep requires explicit judge GO medicion")
+    if RESULTS_ROOT.exists():
+        raise FileExistsError(f"V2-1c attempt_01 is immutable and already exists: {RESULTS_ROOT}")
+    preflight_record=load_sealed_preflight()
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    if attempt_sha!=preflight_record["attempt02_artifact_manifest_sha256"]:
+        raise RuntimeError("V2_1C_STOP: attempt_02 manifest differs from sealed preflight")
+    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
+    if c2_exe_sha!=FROZEN_CANDIDATE02_EXE_SHA256 or c2_exe_sha!=preflight_record["candidate02_exe_sha256"]:
+        raise RuntimeError("V2_1C_STOP: frozen candidate_02 executable differs from preflight")
+    preflight={
+        "preflight_record":preflight_record,
+        "source_provenance":preflight_record["source_provenance"],
+        "source_sha256":preflight_record["source_sha256"],
+        "physical_dependency_sha256":preflight_record["physical_dependency_sha256"],
+        "candidate02_kernel_tu_sha256":preflight_record["candidate02_kernel_tu_sha256"],
+        "candidate02_manifest_sha256":preflight_record["candidate02_artifact_manifest_sha256"],
+        "candidate02_build_manifest":preflight_record["candidate02_build_manifest"],
+        "build_logs":preflight_record["build_logs"],
+    }
+    attempt_before={"artifact_manifest_path_abs":str((ATTEMPT02_ROOT/"artifact_hashes.json").resolve()),"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"artifact_hashes_verified_before_v2_1c":True,"frozen_worker_cpu_set_ids":[row["windows_cpu_set_id"] for row in attempt_config["selected_workers"]],"frozen_h0_shard_weights":[row["h0_v_i"] for row in attempt_config["selected_workers"]],"frozen_worker_logical_ids":[row["logical_processor_id"] for row in attempt_config["selected_workers"]]}
+    run_native_sweep(preflight,attempt_before)
+    attempt02_preservation_after(attempt_before)
+    if source_hashes()!=preflight["source_sha256"]:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: source changed during timed physical sweep")
+    if sha256_file(Path(c2_build["executable_absolute_path"]))!=FROZEN_CANDIDATE02_EXE_SHA256:
+        raise RuntimeError("V2_1C_STOP: frozen candidate_02 KQ executable hash changed during sweep")
+    if {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=preflight["candidate02_kernel_tu_sha256"]:
+        raise RuntimeError("V2_1C_STOP: candidate_02 kernel TUs changed during sweep")
+    summary=finalize_results(preflight,attempt_before)
+    summary["sweep_go_acknowledged"]=True
+    write_json(RESULTS_ROOT/"summary_metrics.json",summary)
+    seal=seal_results(summary)
+    print(json.dumps({"unit":"OMEGA-V2-1c-RESIDENCY-ONLY","terminal_status":summary["terminal_status"],"gate_metrics":summary.get("gate_metrics"),"test_count":summary["test_report"]["test_count"],"test_pass_count":summary["test_report"]["pass_count"],"test_fail_count":summary["test_report"]["fail_count"],"test_skip_count":summary["test_report"]["skip_count"],"results_root_abs":str(RESULTS_ROOT.resolve()),"report_sha256":seal["report_sha256"],"artifact_manifest_sha256":seal["artifact_manifest_sha256"],"artifact_count":seal["artifact_count"],"artifact_hashes_verified":seal["verified"],"attempt03_run":False,"pytorch_s_native_gate":"EXCLUDED"},indent=2,sort_keys=True))
+    return 0 if summary["terminal_status"]=="OMEGA_V2_1C_RESIDENCY_ONLY_PASS" and seal["verified"] else 1
+
+
+def main()->int:
+    parser=argparse.ArgumentParser(description=__doc__)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--correctness-preflight-only",action="store_true",help="run no-timing correctness checks only")
+    mode.add_argument("--binding-preflight-only",action="store_true",help="run the authorized three-cell binding timing preflight after correctness passes")
+    mode.add_argument("--run-sweep",action="store_true",help="run the 72-cell sweep only after a sealed preflight and explicit judge GO medicion")
+    parser.add_argument("--go-medicion",action="store_true",help="acknowledge explicit judge GO medicion; required for --run-sweep")
+    args=parser.parse_args()
+    if os.name!="nt" or sys.platform!="win32":
+        raise RuntimeError("V2_1C_MEASUREMENT_INVALID: native Windows is required")
+    if args.correctness_preflight_only:
+        cmake,vs_install,cmake_version=find_msvc_cmake(find_vswhere())
+        result=create_preflight(cmake,vs_install,cmake_version)
+        print(json.dumps({"phase":"correctness-only","preflight_status":result["preflight_status"],"timing_started":False,"sweep_started":False,"correctness_report_abs":result["correctness_report_abs"],"correctness_report_sha256":result["correctness_report_sha256"],"artifact_manifest_abs":result["artifact_manifest_abs"],"artifact_manifest_sha256":result["artifact_manifest_sha256"],"artifact_count":result["artifact_count"],"hashes_verified":result["hashes_verified"],"candidate02_kq_scalar_pass":result["correctness_record"]["candidate02_kq_correctness_preflight"].get("pass"),"physical_abc_correctness_pass":result["correctness_record"]["physical_abc_correctness_preflight"].get("pass")},indent=2,sort_keys=True))
+        return 0 if result["preflight_status"]=="PASS" and result["hashes_verified"] else 1
+    if args.binding_preflight_only:
+        result=create_binding_preflight()
+        print(json.dumps({"phase":"binding-only","preflight_status":result["preflight_status"],"timed_72_cell_sweep_started":False,"report_abs":str(result["report_path"].resolve()),"report_sha256":result["report_sha256"],"artifact_manifest_abs":str(result["artifact_manifest_path"].resolve()),"artifact_manifest_sha256":result["artifact_manifest_sha256"],"artifact_count":result["artifact_count"],"artifact_hashes_verified":result["verified"],"binding_timing_ratios":result["record"]["companion_binding_timing_sanity"]},indent=2,sort_keys=True))
+        return 0 if result["preflight_status"]=="PASS" and result["verified"] else 1
+    if not args.go_medicion:
+        raise RuntimeError("V2_1C_STOP: --run-sweep requires explicit GO medicion")
+    if RESULTS_ROOT.exists():
+        raise FileExistsError(f"V2-1c attempt_01 result slot already exists: {RESULTS_ROOT}")
+    preflight_record=load_sealed_preflight()
+    attempt_manifest,attempt_config,attempt_sha=validate_attempt02()
+    if attempt_sha!=preflight_record["attempt02_artifact_manifest_sha256"]:
+        raise RuntimeError("V2_1C_STOP: attempt_02 hash differs from sealed preflight")
+    c2_manifest,c2_summary,c2_build,c2_exe_sha=validate_candidate02()
+    if c2_exe_sha!=FROZEN_CANDIDATE02_EXE_SHA256 or c2_exe_sha!=preflight_record["candidate02_exe_sha256"]:
+        raise RuntimeError("V2_1C_STOP: frozen candidate_02 executable changed")
+    preflight={
+        "preflight_record":preflight_record,
+        "source_provenance":preflight_record["source_provenance"],
+        "source_sha256":preflight_record["source_sha256"],
+        "physical_dependency_sha256":preflight_record["physical_dependency_sha256"],
+        "candidate02_kernel_tu_sha256":preflight_record["candidate02_kernel_tu_sha256"],
+        "candidate02_manifest_sha256":preflight_record["candidate02_artifact_manifest_sha256"],
+        "candidate02_build_manifest":preflight_record["candidate02_build_manifest"],
+        "bench_executable_sha256":preflight_record["companion_bench_exe_sha256"],
+        "equivalence_executable_sha256":preflight_record["companion_equivalence_exe_sha256"],
+        "correctness_executable_sha256":preflight_record["companion_correctness_exe_sha256"],
+        "build_logs":preflight_record["build_logs"],
+    }
+    attempt_before={"artifact_manifest_path_abs":str((ATTEMPT02_ROOT/"artifact_hashes.json").resolve()),"artifact_manifest_sha256":attempt_sha,"artifact_count":len(attempt_manifest["artifacts"]),"artifact_hashes_verified_before_v2_1c":True,"frozen_worker_cpu_set_ids":[row["windows_cpu_set_id"] for row in attempt_config["selected_workers"]],"frozen_h0_shard_weights":[row["h0_v_i"] for row in attempt_config["selected_workers"]],"frozen_worker_logical_ids":[row["logical_processor_id"] for row in attempt_config["selected_workers"]]}
+    run_native_sweep(preflight,attempt_before)
+    attempt02_preservation_after(attempt_before)
+    if source_hashes()!=preflight["source_sha256"]:
+        raise RuntimeError("V2_1C_SOURCE_HOLD: V2-1c source changed during timed sweep")
+    if sha256_file(Path(c2_build["executable_absolute_path"]))!=FROZEN_CANDIDATE02_EXE_SHA256:
+        raise RuntimeError("V2_1C_STOP: candidate_02 KQ executable hash changed")
+    if {str(path.resolve()):sha256_file(path) for path in candidate02_kernel_paths()}!=preflight["candidate02_kernel_tu_sha256"]:
+        raise RuntimeError("V2_1C_STOP: candidate_02 compute TUs changed during sweep")
+    summary=finalize_results(preflight,attempt_before)
+    summary["sweep_go_acknowledged"]=True
+    write_json(RESULTS_ROOT/"summary_metrics.json",summary)
+    seal=seal_results(summary)
+    print(json.dumps({"unit":"OMEGA-V2-1c-RESIDENCY-ONLY","terminal_status":summary["terminal_status"],"gate_metrics":summary.get("gate_metrics"),"test_count":summary["test_report"]["test_count"],"test_pass_count":summary["test_report"]["pass_count"],"test_fail_count":summary["test_report"]["fail_count"],"test_skip_count":summary["test_report"]["skip_count"],"results_root_abs":str(RESULTS_ROOT.resolve()),"report_sha256":seal["report_sha256"],"artifact_manifest_sha256":seal["artifact_manifest_sha256"],"artifact_count":seal["artifact_count"],"artifact_hashes_verified":seal["verified"],"attempt03_run":False,"pytorch_s_native_gate":"EXCLUDED"},indent=2,sort_keys=True))
+    return 0 if summary["terminal_status"]=="OMEGA_V2_1C_RESIDENCY_ONLY_PASS" and seal["verified"] else 1
+
+
+def main()->int:
+    from v2_1c_phases import main as phases_main
+    return phases_main()
 
 
 if __name__=="__main__":
