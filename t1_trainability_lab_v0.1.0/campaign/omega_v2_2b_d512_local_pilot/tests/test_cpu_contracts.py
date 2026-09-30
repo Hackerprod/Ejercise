@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import torch
 
-from omega_v2_2a_d3q.metrics import evaluate_primary_gates
+from omega_v2_2a_d3q.metrics import evaluate_primary_gates, sum_u4_diagnostics
 from omega_v2_2b_d512_local_pilot.config import (
     CALIBRATION_SEED,
     D7_BETAS,
@@ -22,20 +22,27 @@ from omega_v2_2b_d512_local_pilot.config import (
 )
 from omega_v2_2b_d512_local_pilot.core import d7_optimizer_loop
 from omega_v2_2b_d512_local_pilot.ledger import recompute_d512_ledger
-from omega_v2_2b_d512_local_pilot.metrics import d1_correctness_metrics, d6_invariance_record, d6_invariance_snapshot
+from omega_v2_2b_d512_local_pilot.metrics import d1_correctness_metrics, d3_d512_gates, d6_invariance_record, d6_invariance_snapshot
 from omega_v2_2b_d512_local_pilot import runner
 from omega_v2_2b_d512_local_pilot.runner import (
     PilotContext,
     TERMINAL_CAPACITY_HOLD,
+    TERMINAL_CALIBRATION_QA_CAPACITY_HOLD,
+    TERMINAL_CALIBRATION_QA_HARNESS_HOLD,
+    TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD,
+    TERMINAL_CALIBRATION_SMOKE_COMPLETE,
     TERMINAL_FAIL,
     TERMINAL_PASS,
     _terminal_decision,
     _finalize_wall_in_process,
+    _calibration_smoke_terminal,
     finalize_external_launch_logs,
     full_mocked_control_flow_dry_run,
     pre_cuda_official_dry_run,
     _render_smoke_report,
+    from_import_resolution_audit,
     unresolved_name_audit,
+    package_import_sweep,
 )
 
 
@@ -95,6 +102,31 @@ class MetricTests(unittest.TestCase):
         self.assertFalse(perturbed["scientific_gates_pass"])
         self.assertTrue(all(perturbed["gates"][name]["pass"] is False for name in ("A", "B", "C")))
 
+    def test_d3_d512_gates_wires_real_D3Q_functions(self) -> None:
+        g_r = torch.full((2, 3), 4.0, dtype=torch.float32)
+        g_u = [torch.ones((2, 3), dtype=torch.float32) for _ in range(4)]
+        sums = sum_u4_diagnostics(g_u)
+        s64 = (((g_u[0].double() + g_u[1].double()) + g_u[2].double()) + g_u[3].double())
+        primary = evaluate_primary_gates(g_r.double(), s64)
+        result = d3_d512_gates(g_r, g_u)
+
+        self.assertTrue(primary["scientific_gates_pass"])
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["primary_S64"]["gates"], primary["gates"])
+        self.assertEqual(set(result["sums_fp32"]), {"S_forward", "S_reverse", "S_pairwise", "S_stack"})
+        self.assertEqual(result["diagnostics_NON_GATE"]["old_max_rel"]["S_reverse_equal_gR_NON_GATE"], True)
+
+    def test_real_d3q_import_resolution_audit_includes_deferred_imports(self) -> None:
+        audit = from_import_resolution_audit()
+        self.assertTrue(audit["pass"], audit["missing"])
+        deferred = [row for row in audit["imports"] if row["deferred_or_local"]]
+        self.assertTrue(any(row["symbol"] == "sum_u4_diagnostics" for row in deferred))
+
+    def test_all_package_modules_import_without_running_main(self) -> None:
+        result = package_import_sweep()
+        self.assertTrue(result["pass"], result["errors"])
+        self.assertIn("omega_v2_2b_d512_local_pilot.__main__", result["modules"])
+
 
 class D6D7Tests(unittest.TestCase):
     def test_d6_schema_value_and_unique_parameter_count_before_after(self) -> None:
@@ -147,6 +179,40 @@ class D6D7Tests(unittest.TestCase):
 
 
 class RunnerContracts(unittest.TestCase):
+    def test_smoke_terminal_classification_covers_complete_capacity_science_and_harness(self) -> None:
+        def seed_result(failures=None):
+            return {
+                "gate_results": {name: {"pass": True} for name in ("D1", "D2", "D3", "D4", "D5", "D6", "D7")},
+                "scientific_failures": failures or [],
+                "seed_pass": True,
+            }
+
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_smoke_terminal_test_") as temporary:
+            context = PilotContext(result_root=Path(temporary) / "complete", official=False, wall_start=0.0)
+            context.cell_records = [{"status": "PASS"} for _ in range(15)]
+            self.assertEqual(
+                _calibration_smoke_terminal(seed_result(), context, None, required_d8_cells=15),
+                TERMINAL_CALIBRATION_SMOKE_COMPLETE,
+            )
+            self.assertEqual(
+                _calibration_smoke_terminal(seed_result(), context, None, required_d8_cells=15, wall_gate_seconds=1800.01),
+                TERMINAL_CALIBRATION_QA_CAPACITY_HOLD,
+            )
+            context.capacity_issues.append({"reason": "OOM"})
+            self.assertEqual(
+                _calibration_smoke_terminal(seed_result(), context, None, required_d8_cells=15),
+                TERMINAL_CALIBRATION_QA_CAPACITY_HOLD,
+            )
+            context.capacity_issues.clear()
+            self.assertEqual(
+                _calibration_smoke_terminal(seed_result([{"gate": "D3"}]), context, None, required_d8_cells=15),
+                TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD,
+            )
+            self.assertEqual(
+                _calibration_smoke_terminal(seed_result(), context, {"kind": "PilotHardStop", "error": "runtime crash"}, required_d8_cells=15),
+                TERMINAL_CALIBRATION_QA_HARNESS_HOLD,
+            )
+
     def test_terminal_priority_is_scientific_fail_then_capacity_then_pass(self) -> None:
         terminal, capacity, reason = _terminal_decision(
             [{"gate": "D3"}], [{"reason": "OOM"}], {"kind": "runtime"}
@@ -184,7 +250,7 @@ class RunnerContracts(unittest.TestCase):
             persisted = json.loads((root / "OFFICIAL_RESULT.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["terminal_status"], TERMINAL_CAPACITY_HOLD)
             self.assertEqual(persisted["capacity_reason"], "WALL_TIME")
-            self.assertGreater(persisted["official_wall_seconds"], -1)
+            self.assertGreater(persisted["official_wall_gate_seconds"], -1)
 
     def test_external_log_finalizer_does_not_recompute_wall_or_terminal(self) -> None:
         with tempfile.TemporaryDirectory(prefix="omega_v2b_log_finalize_test_") as temporary:
@@ -196,21 +262,49 @@ class RunnerContracts(unittest.TestCase):
                 (logs / name).write_text(name, encoding="utf-8")
             (Path(temporary) / "seal.json").write_text("{}\n", encoding="utf-8")
             (root / "OFFICIAL_RESULT.json").write_text(
-                '{"official_id":"OMEGA-V2-2B-LOCAL-PILOT-01","terminal_status":"OMEGA_V2_2B_LOCAL_PILOT_PASS","scientific_failures":[],"official_wall_start_perf_counter":1.0,"official_wall_end_perf_counter":13.5,"official_wall_seconds":12.5,"seed_results":[],"capacity_issue":false,"capacity_reason":null}',
+                '{"official_id":"OMEGA-V2-2B-LOCAL-PILOT-01","terminal_status":"OMEGA_V2_2B_LOCAL_PILOT_PASS","scientific_failures":[],"official_wall_start":1.0,"official_wall_gate_end":13.5,"official_wall_gate_seconds":12.5,"seed_results":[],"capacity_issue":false,"capacity_reason":null}',
                 encoding="utf-8",
             )
+            initial_result_sha = runner.sha256_file(root / "OFFICIAL_RESULT.json")
             with (
                 patch("omega_v2_2b_d512_local_pilot.runner.OFFICIAL_RESULTS_ROOT", root),
                 patch("omega_v2_2b_d512_local_pilot.runner.OFFICIAL_LAUNCH_LOG_ROOT", logs),
-                patch("omega_v2_2b_d512_local_pilot.runner.SOURCE_SEAL_PATH", Path(temporary) / "seal.json"),
-                patch("omega_v2_2b_d512_local_pilot.runner.QA_REPORT_PATH", Path(temporary) / "missing_qa.json"),
             ):
                 finalized = finalize_external_launch_logs(smoke=False)
             persisted = json.loads((root / "OFFICIAL_RESULT.json").read_text(encoding="utf-8"))
-        self.assertEqual(finalized["wall_seconds_unchanged"], True)
-        self.assertEqual(persisted["official_wall_seconds"], 12.5)
+            final_result_sha = runner.sha256_file(root / "OFFICIAL_RESULT.json")
+            external_manifest = json.loads((root / "external_launch_logs_artifact_hashes.json").read_text(encoding="utf-8"))
+        self.assertEqual(finalized["gate_wall_seconds_unchanged"], True)
+        self.assertEqual(persisted["official_wall_gate_seconds"], 12.5)
         self.assertEqual(persisted["terminal_status"], TERMINAL_PASS)
-        self.assertTrue(persisted["launch_logs"]["finalized"])
+        self.assertEqual(initial_result_sha, final_result_sha)
+        self.assertTrue(external_manifest["verified"])
+
+    def test_smoke_log_finalizer_preserves_gate_result_and_wall(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_smoke_log_finalize_test_") as temporary:
+            root = Path(temporary) / "smoke"
+            logs = Path(temporary) / "logs"
+            root.mkdir()
+            logs.mkdir()
+            for name in ("command.txt", "stdout.log", "stderr.log"):
+                (logs / name).write_text(name, encoding="utf-8")
+            result_path = root / "CALIBRATION_SMOKE_RESULT.json"
+            result_path.write_text(
+                '{"terminal_status":"V2_2B_CALIBRATION_QA_HARNESS_HOLD","classification":"CALIBRATION_QA_ONLY","V2_2B_verdict":null,"wall_gate_start":1.0,"wall_gate_end":2.2,"wall_gate_seconds":1.2}',
+                encoding="utf-8",
+            )
+            initial_hash = runner.sha256_file(result_path)
+            with (
+                patch("omega_v2_2b_d512_local_pilot.runner.CALIBRATION_SMOKE_ROOT", root),
+                patch("omega_v2_2b_d512_local_pilot.runner.CALIBRATION_SMOKE_LOG_ROOT", logs),
+            ):
+                finalized = finalize_external_launch_logs(smoke=True)
+            external_manifest = json.loads((root / "external_launch_logs_artifact_hashes.json").read_text(encoding="utf-8"))
+            final_hash = runner.sha256_file(result_path)
+        self.assertTrue(finalized["gate_wall_seconds_unchanged"])
+        self.assertEqual(initial_hash, final_hash)
+        self.assertEqual(external_manifest["gate_wall_seconds_frozen"], 1.2)
+        self.assertTrue(external_manifest["verified"])
 
     def test_smoke_report_uses_the_persisted_D3_A_B_C_field(self) -> None:
         smoke = {
@@ -243,10 +337,34 @@ class RunnerContracts(unittest.TestCase):
                 "D3_A_B_C_pass": False,
             }
             with patch("omega_v2_2b_d512_local_pilot.runner.CALIBRATION_SMOKE_ROOT", root):
-                result = runner._persist_smoke_artifacts(smoke, include_launch_logs=False)
+                result = runner._persist_smoke_artifacts(smoke)
             manifest = json.loads((root / "artifact_hashes.json").read_text(encoding="utf-8"))
         self.assertTrue(result["verified"])
         self.assertIn(str(boundary.resolve()), manifest["artifacts"])
+
+    def test_from_import_resolution_and_module_sweep_pass(self) -> None:
+        resolution = from_import_resolution_audit()
+        sweep = package_import_sweep()
+        self.assertTrue(resolution["pass"], resolution["missing"])
+        self.assertTrue(any(
+            row["file"] == "metrics.py" and row["symbol"] == "sum_u4_diagnostics" and row["deferred_or_local"] and row["exists"]
+            for row in resolution["imports"]
+        ))
+        self.assertTrue(sweep["pass"], sweep["errors"])
+
+    def test_calibration_source_snapshot_is_bound_to_current_spec_and_sources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_snapshot_test_") as temporary:
+            snapshot_path = Path(temporary) / "CALIBRATION_SOURCE_SNAPSHOT.json"
+            qa_path = Path(temporary) / "QA_REPORT.json"
+            runner.write_json(qa_path, {"status": "PASS", "source_sha256": runner.source_hashes()})
+            with (
+                patch("omega_v2_2b_d512_local_pilot.runner.CALIBRATION_SOURCE_SNAPSHOT_PATH", snapshot_path),
+                patch("omega_v2_2b_d512_local_pilot.runner.QA_REPORT_PATH", qa_path),
+            ):
+                created = runner.write_calibration_source_snapshot()
+                verified = runner.verify_calibration_source_snapshot()
+        self.assertTrue(verified["verified"])
+        self.assertEqual(created["snapshot_sha256"], verified["snapshot_sha256"])
 
     def test_source_audit_detects_injected_undefined_name(self) -> None:
         with tempfile.TemporaryDirectory(prefix="omega_v2b_audit_test_") as temporary:

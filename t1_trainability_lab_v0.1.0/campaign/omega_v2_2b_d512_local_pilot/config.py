@@ -78,6 +78,10 @@ TERMINAL_PASS = "OMEGA_V2_2B_LOCAL_PILOT_PASS"
 TERMINAL_FAIL = "OMEGA_V2_2B_LOCAL_PILOT_FAIL"
 TERMINAL_CAPACITY_HOLD = "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD"
 TERMINAL_CALIBRATION_QA_HOLD = "V2_2B_CALIBRATION_QA_HOLD"
+TERMINAL_CALIBRATION_SMOKE_COMPLETE = "V2_2B_CALIBRATION_SMOKE_COMPLETE"
+TERMINAL_CALIBRATION_QA_CAPACITY_HOLD = "V2_2B_CALIBRATION_QA_CAPACITY_HOLD"
+TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD = "V2_2B_CALIBRATION_QA_SCIENTIFIC_HOLD"
+TERMINAL_CALIBRATION_QA_HARNESS_HOLD = "V2_2B_CALIBRATION_QA_HARNESS_HOLD"
 TERMINAL_PRE_SCIENTIFIC_ABORT = "PRE_SCIENTIFIC_OPERATIONAL_ABORT"
 CAPACITY_REASONS = ("VRAM_BUDGET", "OOM", "WALL_TIME")
 
@@ -96,12 +100,22 @@ EXPECTED_FAMILY_COUNT = 7
 ARTIFACT_CONTRACT = {
     "D1": ("CPU_K1_output", "CUDA_K1_output", "CPU_K4_traces_1_4_final", "CUDA_K4_traces_1_4_final", "metrics"),
     "D2": ("initial_clone_hashes", "trace_equalities", "trace_raw_hashes", "final_raw_hashes"),
-    "D3": ("raw_gR_gU0_gU3_FP32_pt", "raw_tensor_hashes", "A_B_C", "M32", "ULP", "old_max_rel", "decisions"),
+    "D3": (
+        "gR_gU0_gU1_gU2_gU3_FP32_raw_pt",
+        "raw_tensor_sha256",
+        "A_B_C_metrics",
+        "M32",
+        "ULP_M32",
+        "A_B_C_decisions",
+        "old_max_rel_NON_GATE",
+        "S_reverse_NON_GATE",
+        "S64_recomputable_from_left_associated_FP64_sum_of_gU0_to_gU3",
+    ),
     "D6": ("SCHEMA_SHA256_before_after", "VALUE_SHA256_before_after", "parameter_count_before_after"),
     "D7": ("L0", "per_step_finiteness", "L20", "final_parameter_hash", "final_optimizer_state_hash"),
     "D8": ("peak_allocated", "peak_reserved", "wall_seconds", "status"),
     "global": (
-        "OMEGA_V2_2B_SPEC.md", "SOURCE_SEAL.json", "QA_REPORT.json", "OFFICIAL_RESULT.json",
+        "OMEGA_V2_2B_SPEC.md", "CALIBRATION_SOURCE_SNAPSHOT.json", "SOURCE_SEAL.json", "QA_REPORT.json", "OFFICIAL_RESULT.json",
         "OMEGA_V2_2B_REPORT.md", "OMEGA_V2_2B_REPORT.md.sha256",
         "OMEGA_V2_2B_CONFORMANCE_BLOCK.md", "artifact_hashes.json", "artifact_hashes_verified.json",
     ),

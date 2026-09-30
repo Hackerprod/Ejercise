@@ -1219,7 +1219,7 @@ Resolve the D3 artifact contract ambiguity
 | Q5 | `D8_*`: celdas aisladas, clear/reset/sync, 3 GiB allocated, wall 1800 s. | ACEPTO + aislamiento de objetos vivos. |
 | Q6 | `TERMINAL_*`: FAIL tiene prioridad sobre capacity; registrar `capacity_issue` y `capacity_reason`. | ACEPTO. |
 | Q7 | `EXPECTED_D512_FLOPS` y `ledger.py`; discrepancia produce `FLOP_LEDGER_PRESEAL_HOLD`, sin sellar ni elegir. | ACEPTO; cross-check exacto. |
-| Q8 | `ARTIFACT_CONTRACT`; D1–D8, globales, manifest/hashes, slot perezoso y logs externos. | ACEPTO + contrato explícito. |
+| Q8 | `ARTIFACT_CONTRACT`; D1–D8, globales, manifest/hashes, slot perezoso y logs externos. D3 persiste gR y gU0..gU3 FP32 crudos, hashes, métricas/decisiones A/B/C, M32, ULP(M32), old max_rel y diagnósticos NON-GATE; S64 es recomputable, pero sus métricas y fórmula exacta se persisten. | ACEPTO + contrato explícito. |
 | Q9 | `OFFICIAL_ID=OMEGA-V2-2B-LOCAL-PILOT-01`; una ejecución oficial. | ACEPTO. |
 
 ### D1 fórmula de trabajo aislada (Q1)
@@ -1257,7 +1257,7 @@ Parameter counts esperados: R4=4,194,304, U4=16,777,216; siete familias. Una dis
 - `make_seed_plan` admite en QA/smoke únicamente 20260930; `official_seed_plans()` sólo se materializa después de GO, source seal y validación de entorno.
 - El calibration smoke usa sólo 20260930, produce `CALIBRATION_QA_ONLY` y `V2_2B_verdict=null`; también ejecuta D1/D2/D3/D5/D6/D7/D8 como harness-check sin veredicto.
 - `SOURCE_SEAL.json` se rechaza si falta el smoke verificado o si sus snapshots de spec/source están stale.
-- D3 `.pt` persiste gR/gU0..gU3 FP32 crudos por seed con raw-tensor hashes como en D3Q.
+- D3 `.pt` persiste gR/gU0..gU3 FP32 crudos por seed con raw-tensor SHA-256. Persistir métricas y decisiones A/B/C, M32, ULP(M32), old max_rel y diagnósticos NON-GATE. La suma primaria exacta es `S64 = (((gU0.double()+gU1.double())+gU2.double())+gU3.double())`; S64 no es un tensor obligatorio porque es recomputable desde los cuatro gradientes.
 - Git LFS afecta transporte; los hashes científicos se calculan sobre bytes locales reales.
 - El official process usa el ID fijo `OMEGA-V2-2B-LOCAL-PILOT-01`; no se cambia seeds, batches, LR, thresholds, dtype, K o m durante la unidad.
 
@@ -1282,7 +1282,7 @@ normwise: ||yCUDA-yCPU||_2 / max(||yCPU||_2,1e-6) <= 1e-5
 
 `D6_MASTER_SEED`, B8/m8, R4 only, forward K={1,2,4,8,16}, backward K={1,4,8,16}, loss `sum(y*w)`, `LOSS_W_SEED=S+2008`, sin optimizer. Persistir hashes antes/después de schema/value y parameter counts únicos por celda.
 
-### D8 celdas y wall aislados (Q5)
+### D8 celdas y wall aislados (Q5/MD-326)
 
 | Gate/cell | Celdas independientes |
 |---|---|
@@ -1292,18 +1292,48 @@ normwise: ||yCUDA-yCPU||_2 / max(||yCPU||_2,1e-6) <= 1e-5
 | D6 | (forward/backward,K) |
 | D7 | (seed,variant) |
 
-Antes de cada celda se destruyen objetos CUDA previos no necesarios, GC si aplica, empty_cache, reset peak stats y synchronize. Se mantienen vivos sólo los objetos de la celda indicada. Después se sincroniza y se registra allocated/reserved/wall/status. `official_wall_start` es tras CLI/GO parse y antes de seal/env checks; `official_wall_end` es tras resultado/report/manifests/hash verification.
+Antes de cada celda se destruyen objetos CUDA previos no necesarios, GC si aplica, empty_cache, reset peak stats y synchronize. Se mantienen vivos sólo los objetos de la celda indicada. Después se sincroniza y se registra allocated/reserved/wall/status.
+
+```text
+official_wall_start:
+  entrada al runner después de parsear CLI/GO,
+  antes de verificar source seal/environment
+
+official_wall_gate_end:
+  después de la última celda científica y CPU reference,
+  después de persistir todos los raw bundles y métricas primarias,
+  después de verificar SHA-256 de esos artefactos primarios,
+  antes del sellado administrativo final
+
+official_wall_gate_seconds = official_wall_gate_end - official_wall_start
+gate <= 1800 s
+```
+
+Con el gate seconds congelado, el proceso escribe una sola vez `OFFICIAL_RESULT.json`, `REPORT.md`, `CONFORMANCE_BLOCK.md`, `artifact_hashes.json` y `artifact_hashes_verified.json`. Los logs externos se hashean después y no alteran el gate seconds. `process_total_wall_seconds` puede registrarse como diagnóstico no-gate.
+
+El calibration smoke usa el mismo checkpoint en su propio runner: `wall_gate_start` al entrar después de CLI/GO, y `wall_gate_end` después de celdas, CPU reference, raw bundle(s), métricas primarias y verificación SHA-256 de esos artefactos, antes de escribir una sola vez `CALIBRATION_SMOKE_RESULT.json`, report y manifest administrativo. El gate es `wall_gate_seconds <= 1800`; el hash de logs externos posterior no lo modifica.
 
 ### Status summary (authoritative)
 
-| Elemento | Estado |
+| Scope | Estado autoritativo / valores permitidos |
 |---|---|
+| D1 | PASS / FAIL / NOT_RUN_HARD_STOP |
+| D2 | PASS / FAIL / NOT_RUN_HARD_STOP |
+| D3 | PASS / FAIL / NOT_RUN_HARD_STOP |
+| D4 | PASS / FAIL / NOT_RUN_HARD_STOP |
+| D5 | PASS / FLOP_LEDGER_PRESEAL_HOLD |
+| D6 | PASS / FAIL / NOT_RUN_HARD_STOP / NOT_APPLICABLE |
+| D7 | PASS / FAIL / NOT_RUN_HARD_STOP |
+| D8 | PASS / CAPACITY_ISSUE; `capacity_issue=true/false`; `capacity_reason ∈ {VRAM_BUDGET, OOM, WALL_TIME}` |
+| D9 | CONTINUED / HARD_STOP |
+| Calibration smoke_01 | V2_2B_CALIBRATION_QA_HOLD_HARNESS_DEFECT; preserved; not official; official_attempt_consumed=false |
+| Calibration smoke_02 | V2_2B_CALIBRATION_SMOKE_COMPLETE / V2_2B_CALIBRATION_QA_CAPACITY_HOLD / V2_2B_CALIBRATION_QA_SCIENTIFIC_HOLD / V2_2B_CALIBRATION_QA_HARNESS_HOLD |
+| Official status | HOLD pending QA/source-seal review; official attempt NOT CONSUMED |
+| Official terminal classification | OMEGA_V2_2B_LOCAL_PILOT_PASS / OMEGA_V2_2B_LOCAL_PILOT_FAIL / OMEGA_V2_2B_LOCAL_CAPACITY_HOLD |
+| `hard_stop` | null or the persisted technical-stop kind/cell/error; calibration harness defect is not a scientific verdict |
 | V2-2B SPEC FREEZE | AUTHORIZED after incorporating MD/325 |
 | V2-2B QA/CALIBRATION | AUTHORIZED |
-| V2-2B HELD-OUT OFFICIAL EXECUTION | HOLD pending spec/source/QA review by Sol |
-| RunPod | HOLD |
-| T3 | HOLD |
-| CONFORMANCE_HOLD | unchanged |
+| RunPod / T3 / CONFORMANCE_HOLD | HOLD / HOLD / unchanged |
 
 ### Track CPU diagnostic
 

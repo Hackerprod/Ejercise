@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import builtins
+import compileall
 import gc
 import hashlib
+import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -34,6 +38,7 @@ from .config import (
     D1_ELEMENTWISE_ABS_TOL,
     D1_ELEMENTWISE_FLOOR,
     D1_ELEMENTWISE_REL_TOL,
+    D1_K_VALUES,
     D1_NORMWISE_E_L2_LIMIT,
     D1_NORMWISE_FLOOR,
     D3_E_INF_LIMIT,
@@ -55,7 +60,10 @@ from .config import (
     OFFICIAL_LAUNCH_LOG_DIR_NAME,
     OFFICIAL_MASTER_SEEDS,
     OFFICIAL_RESULT_SLOT_NAME,
-    TERMINAL_CALIBRATION_QA_HOLD,
+    TERMINAL_CALIBRATION_QA_CAPACITY_HOLD,
+    TERMINAL_CALIBRATION_QA_HARNESS_HOLD,
+    TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD,
+    TERMINAL_CALIBRATION_SMOKE_COMPLETE,
     TERMINAL_CAPACITY_HOLD,
     TERMINAL_FAIL,
     TERMINAL_PASS,
@@ -84,11 +92,15 @@ SPEC_PATH = PACKAGE_ROOT / "OMEGA_V2_2B_SPEC.md"
 SOURCE_SEAL_PATH = PACKAGE_ROOT / "SOURCE_SEAL.json"
 QA_ROOT = PACKAGE_ROOT / "results" / "qa"
 QA_REPORT_PATH = QA_ROOT / "QA_REPORT.json"
-CALIBRATION_SMOKE_ROOT = QA_ROOT / "calibration_seed_20260930_smoke_01"
-CALIBRATION_SMOKE_LOG_ROOT = PACKAGE_ROOT / "results" / "qa" / "calibration_seed_20260930_smoke_launch_logs_01"
+CALIBRATION_SMOKE_ROOT = QA_ROOT / "calibration_seed_20260930_smoke_02"
+CALIBRATION_SMOKE_LOG_ROOT = QA_ROOT / "calibration_seed_20260930_smoke_02_launch_logs"
+CALIBRATION_SOURCE_SNAPSHOT_PATH = PACKAGE_ROOT / "CALIBRATION_SOURCE_SNAPSHOT.json"
+CALIBRATION_SMOKE_01_ROOT = QA_ROOT / "calibration_seed_20260930_smoke_01"
+CALIBRATION_SMOKE_INCIDENT_ROOT = PACKAGE_ROOT / "results" / "incidents" / "calibration_seed_20260930_smoke_02"
 OFFICIAL_RESULTS_ROOT = PACKAGE_ROOT / "results" / OFFICIAL_RESULT_SLOT_NAME
 OFFICIAL_LAUNCH_LOG_ROOT = PACKAGE_ROOT / "results" / OFFICIAL_LAUNCH_LOG_DIR_NAME
 INCIDENT_ROOT = PACKAGE_ROOT / "results" / "incidents" / OFFICIAL_ID
+CALIBRATION_SMOKE_01_INCIDENT = INCIDENT_ROOT / "calibration_smoke" / "PRE_SCIENTIFIC_OPERATIONAL_ABORT.json"
 MD324_PATH = PACKAGE_ROOT.parents[2] / "MD" / "324.md"
 MD325_PATH = PACKAGE_ROOT.parents[2] / "MD" / "325.md"
 D3Q_SOURCE_SEAL = D3Q_ROOT / "SOURCE_SEAL.json"
@@ -148,6 +160,118 @@ def source_hashes() -> dict[str, str]:
     return {path.relative_to(PACKAGE_ROOT).as_posix(): sha256_file(path) for path in paths if path.is_file()}
 
 
+def write_calibration_source_snapshot() -> dict[str, Any]:
+    if CALIBRATION_SOURCE_SNAPSHOT_PATH.exists():
+        raise FileExistsError(f"calibration source snapshot is immutable: {CALIBRATION_SOURCE_SNAPSHOT_PATH}")
+    qa = json.loads(QA_REPORT_PATH.read_text(encoding="utf-8"))
+    current_sources = source_hashes()
+    if qa.get("status") != "PASS" or qa.get("source_sha256") != current_sources:
+        raise RuntimeError("V2_2B_CALIBRATION_SOURCE_SNAPSHOT_STOP: QA must PASS for current sources")
+    snapshot = {
+        "schema": "omega-v2-2b-calibration-source-snapshot-v1",
+        "official_id": OFFICIAL_ID,
+        "spec_sha256": sha256_file(SPEC_PATH),
+        "source_sha256": current_sources,
+        "executed_dependency_sha256": executed_dependency_hashes(),
+    }
+    write_json(CALIBRATION_SOURCE_SNAPSHOT_PATH, snapshot)
+    return {**snapshot, "snapshot_sha256": sha256_file(CALIBRATION_SOURCE_SNAPSHOT_PATH)}
+
+
+def verify_calibration_source_snapshot() -> dict[str, Any]:
+    if not CALIBRATION_SOURCE_SNAPSHOT_PATH.is_file():
+        raise RuntimeError("V2_2B_CALIBRATION_SOURCE_SNAPSHOT_MISSING")
+    snapshot = json.loads(CALIBRATION_SOURCE_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    current_sources = source_hashes()
+    current_dependencies = executed_dependency_hashes()
+    current_spec = sha256_file(SPEC_PATH)
+    if (
+        snapshot.get("source_sha256") != current_sources
+        or snapshot.get("executed_dependency_sha256") != current_dependencies
+        or snapshot.get("spec_sha256") != current_spec
+    ):
+        raise RuntimeError("V2_2B_CALIBRATION_SOURCE_SNAPSHOT_STALE")
+    return {
+        "path": str(CALIBRATION_SOURCE_SNAPSHOT_PATH.resolve()),
+        "snapshot_sha256": sha256_file(CALIBRATION_SOURCE_SNAPSHOT_PATH),
+        "spec_sha256": current_spec,
+        "source_sha256": current_sources,
+        "executed_dependency_sha256": current_dependencies,
+        "verified": True,
+    }
+
+
+def _module_name_for_path(path: Path, root: Path = PACKAGE_ROOT) -> tuple[str, str]:
+    relative = path.relative_to(root).with_suffix("")
+    parts = list(relative.parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    module_name = "omega_v2_2b_d512_local_pilot" + ("." + ".".join(parts) if parts else "")
+    package_name = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
+    return module_name, package_name
+
+
+def from_import_resolution_audit() -> dict[str, Any]:
+    """Resolve every `from X import Y`, including deferred/local imports, via Python import semantics."""
+    rows: list[dict[str, Any]] = []
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        _, package_name = _module_name_for_path(path)
+        parsed = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        parents: dict[int, Any] = {}
+        for parent in ast.walk(parsed):
+            for child in ast.iter_child_nodes(parent):
+                parents[id(child)] = parent
+        for node in ast.walk(parsed):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            imported_module = node.module or ""
+            if node.level:
+                imported_module = importlib.util.resolve_name("." * node.level + imported_module, package_name)
+            deferred_or_local = False
+            current = node
+            while id(current) in parents:
+                current = parents[id(current)]
+                if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    deferred_or_local = True
+            for alias in node.names:
+                if alias.name == "*":
+                    rows.append({"file": path.relative_to(PACKAGE_ROOT).as_posix(), "line": node.lineno, "module": imported_module, "symbol": "*", "exists": True, "resolution": "wildcard-unexpanded", "deferred_or_local": deferred_or_local})
+                    continue
+                exists = False
+                error = None
+                try:
+                    target_module = importlib.import_module(imported_module)
+                    try:
+                        getattr(target_module, alias.name)
+                        exists = True
+                    except AttributeError:
+                        importlib.import_module(imported_module + "." + alias.name)
+                        exists = True
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                rows.append({
+                    "file": path.relative_to(PACKAGE_ROOT).as_posix(),
+                    "line": node.lineno,
+                    "module": imported_module,
+                    "symbol": alias.name,
+                    "exists": exists,
+                    "error": error,
+                    "deferred_or_local": deferred_or_local,
+                })
+    return {"pass": all(row["exists"] for row in rows), "checked_count": len(rows), "imports": rows, "missing": [row for row in rows if not row["exists"]]}
+def package_import_sweep() -> dict[str, Any]:
+    modules = []
+    errors = []
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        module_name, _ = _module_name_for_path(path)
+        try:
+            importlib.import_module(module_name)
+            modules.append(module_name)
+        except Exception as exc:
+            errors.append({"module": module_name, "error": f"{type(exc).__name__}: {exc}"})
+    return {"pass": not errors, "module_count": len(modules), "modules": modules, "errors": errors}
+
+
 def reference_hashes() -> dict[str, str]:
     paths = [
         V20_ROOT / "omega_v2" / "core.py",
@@ -163,6 +287,20 @@ def reference_hashes() -> dict[str, str]:
         MD325_PATH,
     ]
     return {str(path.resolve()): sha256_file(path) for path in paths}
+
+
+def executed_dependency_hashes() -> dict[str, str]:
+    """Hash Python dependencies actually imported by smoke cells and the V2-0 counter."""
+    paths = [
+        *sorted((V20_ROOT / "omega_v2").rglob("*.py")),
+        V22A_ROOT / "__init__.py",
+        V22A_ROOT / "core.py",
+        V22A_ROOT / "variants.py",
+        V22A_ROOT / "checks.py",
+        D3Q_ROOT / "__init__.py",
+        D3Q_ROOT / "metrics.py",
+    ]
+    return {str(path.resolve()): sha256_file(path) for path in paths if path.is_file()}
 
 
 def environment_build_record() -> dict[str, Any]:
@@ -627,7 +765,7 @@ def _render_pilot_report(result: dict[str, Any]) -> str:
         f"- terminal_status: `{result['terminal_status']}`",
         f"- capacity_issue: `{result.get('capacity_issue', False)}`",
         f"- capacity_reason: `{result.get('capacity_reason')}`",
-        f"- official_wall_seconds: `{result.get('official_wall_seconds')}`", "",
+        f"- official_wall_gate_seconds: `{result.get('official_wall_gate_seconds')}`", "",
         "## Seed results", "", "```json", json.dumps(result, sort_keys=True, indent=2), "```", "",
     ]
     return "\n".join(rows)
@@ -644,9 +782,9 @@ def _conformance_block(result: dict[str, Any]) -> str:
         "D6_reporting_limitation: hashes_computed=true / per_cell_persistence=false / gate=PASS / rerun=false",
         f"V2_2B: {result['terminal_status']}",
         "RunPod: HOLD", "T3: HOLD", "CONFORMANCE_HOLD: unchanged",
-        f"official_wall_seconds: {result.get('official_wall_seconds')}",
+        f"official_wall_gate_seconds: {result.get('official_wall_gate_seconds')}",
         f"launch_log_directory: {logs.get('directory')}",
-        f"launch_logs_finalized: {logs.get('finalized', False)}",
+        f"external_launch_log_hash_manifest: {logs.get('hash_manifest')}",
     ]
     for name, metadata in sorted(logs.get("files", {}).items()):
         lines.append(f"launch_log_{name}_sha256: {metadata.get('sha256')}")
@@ -659,7 +797,6 @@ def _persist_result_files(
     result: dict[str, Any],
     *,
     official: bool,
-    include_launch_logs: bool = False,
     launch_root: Path | None = None,
     include_package_sources: bool = True,
 ) -> dict[str, Any]:
@@ -672,7 +809,7 @@ def _persist_result_files(
     (root / report_hash_name).write_text(sha256_file(report_path) + "\n", encoding="ascii", newline="\n")
     block_path = root / "OMEGA_V2_2B_CONFORMANCE_BLOCK.md"
     block_path.write_text(_conformance_block(result), encoding="utf-8", newline="\n")
-    evidence = [*root.glob("*.pt"), root / result_name, report_path, root / report_hash_name, block_path]
+    evidence = [*root.glob("*.pt"), *root.glob("*_PRIMARY_*.json"), root / result_name, report_path, root / report_hash_name, block_path]
     boundary = root / "EXECUTION_BOUNDARY.json"
     if boundary.is_file():
         evidence.append(boundary)
@@ -686,8 +823,6 @@ def _persist_result_files(
                 shutil.copy2(QA_REPORT_PATH, qa_copy)
                 evidence.append(qa_copy)
             evidence.append(QA_REPORT_PATH)
-    if include_launch_logs and launch_root is not None:
-        evidence.extend(launch_root / name for name in ("command.txt", "stdout.log", "stderr.log"))
     evidence = [path for path in evidence if path.is_file()]
     manifest = {
         "schema": "omega-v2-2b-artifact-hashes-v1",
@@ -695,12 +830,40 @@ def _persist_result_files(
         "terminal_status": result.get("terminal_status"),
         "artifacts": {str(path.resolve()): {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in evidence},
     }
+    if launch_root is not None:
+        manifest["external_launch_logs"] = {
+            "directory": str(launch_root.resolve()),
+            "hash_manifest": "external_launch_logs_artifact_hashes.json",
+            "hashed_after_runner_exit": True,
+        }
     manifest_path = root / "artifact_hashes.json"
     write_json(manifest_path, manifest)
     verified = all(Path(name).is_file() and Path(name).stat().st_size == row["size_bytes"] and sha256_file(name) == row["sha256"] for name, row in manifest["artifacts"].items())
     verified = verified and sha256_file(report_path) == (root / report_hash_name).read_text(encoding="ascii").strip()
     write_json(root / "artifact_hashes_verified.json", {"verified": bool(verified), "artifact_count": len(evidence)})
     return {"verified": bool(verified), "artifact_count": len(evidence), "manifest_sha256": sha256_file(manifest_path)}
+
+
+def _persist_primary_evidence(root: Path, prefix: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    metrics_path = root / f"{prefix}_PRIMARY_METRICS.json"
+    write_json(metrics_path, metrics)
+    evidence = [metrics_path, *sorted(root.glob("seed_*.pt")), *sorted(root.glob("calibration_seed_*.pt"))]
+    manifest_path = root / f"{prefix}_PRIMARY_ARTIFACT_HASHES.json"
+    manifest = {
+        "schema": "omega-v2-2b-primary-artifact-hashes-v1",
+        "artifacts": {str(path.resolve()): {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in evidence},
+    }
+    write_json(manifest_path, manifest)
+    verified = all(Path(name).is_file() and Path(name).stat().st_size == item["size_bytes"] and sha256_file(name) == item["sha256"] for name, item in manifest["artifacts"].items())
+    verification_path = root / f"{prefix}_PRIMARY_ARTIFACTS_VERIFIED.json"
+    write_json(verification_path, {"verified": bool(verified), "artifact_count": len(evidence)})
+    return {
+        "verified": bool(verified),
+        "artifact_count": len(evidence),
+        "metrics_path": metrics_path.name,
+        "manifest_path": manifest_path.name,
+        "verification_path": verification_path.name,
+    }
 
 
 def _execute_seed_plans(
@@ -799,26 +962,58 @@ def _make_result(seed_results: list[dict[str, Any]], context: PilotContext, ledg
 
 
 def _finalize_wall_in_process(result: dict[str, Any], context: PilotContext, root: Path, *, launch_root: Path | None = None) -> dict[str, Any]:
-    """Capture/decide the official wall limit before returning from the official process."""
-    _persist_result_files(root, result, official=context.official, launch_root=launch_root)
-    wall_end = time.perf_counter()
-    wall_seconds = wall_end - context.wall_start
-    result["official_wall_end_perf_counter"] = wall_end
-    result["official_wall_seconds"] = wall_seconds
-    result["official_wall_limit_seconds"] = D8_WALL_LIMIT_SECONDS
-    if wall_seconds > D8_WALL_LIMIT_SECONDS:
-        _append_capacity(context, "WALL_TIME", cell_id="official_persistence", master_seed="all")
-        result["capacity_issue"] = True
-        result["capacity_reason"] = result.get("capacity_reason") or "WALL_TIME"
-        if not result.get("scientific_failures"):
-            result["terminal_status"] = TERMINAL_CAPACITY_HOLD
-        result["capacity_events"] = context.capacity_issues
-    _persist_result_files(root, result, official=context.official, include_launch_logs=False, launch_root=launch_root)
+    """Verify primary scientific evidence, freeze Q8 gate time, then seal admin artifacts once."""
+    primary = _persist_primary_evidence(root, "OFFICIAL", result)
+    if not primary["verified"]:
+        raise RuntimeError("OFFICIAL_PRIMARY_ARTIFACT_HASH_VERIFICATION_FAILED")
+
+    gate_end = time.perf_counter()
+    gate_seconds = gate_end - context.wall_start
+    if gate_seconds > D8_WALL_LIMIT_SECONDS and not any(item.get("reason") == "WALL_TIME" for item in context.capacity_issues):
+        _append_capacity(context, "WALL_TIME", cell_id="official_primary_verification", master_seed="all")
+        all_seed_pass = len(result.get("seed_results", [])) == len(result.get("planned_seeds", [])) and all(
+            seed.get("seed_pass") is True for seed in result.get("seed_results", [])
+        )
+        terminal, capacity_issue, capacity_reason = _terminal_decision(
+            result.get("scientific_failures", []),
+            context.capacity_issues,
+            result.get("hard_stop"),
+            all_seed_results_pass=all_seed_pass,
+        )
+        result.update({
+            "terminal_status": terminal,
+            "capacity_issue": capacity_issue,
+            "capacity_reason": capacity_reason,
+            "capacity_events": context.capacity_issues,
+        })
+        primary = _persist_primary_evidence(root, "OFFICIAL", result)
+        if not primary["verified"]:
+            raise RuntimeError("OFFICIAL_PRIMARY_ARTIFACT_HASH_VERIFICATION_FAILED_AFTER_WALL_HOLD")
+        gate_end = time.perf_counter()
+        gate_seconds = gate_end - context.wall_start
+
+    result.update({
+        "official_wall_start": context.wall_start,
+        "official_wall_gate_end": gate_end,
+        "official_wall_start_perf_counter": context.wall_start,
+        "official_wall_gate_end_perf_counter": gate_end,
+        "official_wall_gate_seconds": gate_seconds,
+        "official_wall_gate_limit_seconds": D8_WALL_LIMIT_SECONDS,
+        "primary_evidence": primary,
+        "launch_logs": {
+            "directory": str(launch_root.resolve()) if launch_root is not None else None,
+            "hash_manifest": "external_launch_logs_artifact_hashes.json" if launch_root is not None else None,
+            "finalized": False,
+        },
+    })
+    final_hashes = _persist_result_files(root, result, official=context.official, launch_root=launch_root)
+    if not final_hashes["verified"]:
+        raise RuntimeError("OFFICIAL_FINAL_ARTIFACT_HASH_VERIFICATION_FAILED")
     return result
 
 
 def _pre_scientific_abort(error: BaseException, *, wall_start: float, ledger: dict[str, Any] | None = None, smoke: bool = False) -> dict[str, Any]:
-    root = INCIDENT_ROOT if not smoke else INCIDENT_ROOT / "calibration_smoke"
+    root = INCIDENT_ROOT if not smoke else CALIBRATION_SMOKE_INCIDENT_ROOT
     record = {
         "schema": "omega-v2-2b-pre-scientific-abort-v1",
         "official_id": OFFICIAL_ID,
@@ -969,30 +1164,75 @@ def create_source_seal() -> dict[str, Any]:
     smoke_path = CALIBRATION_SMOKE_ROOT / "CALIBRATION_SMOKE_RESULT.json"
     smoke_verification = CALIBRATION_SMOKE_ROOT / "artifact_hashes_verified.json"
     if not smoke_path.is_file() or not smoke_verification.is_file():
-        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: verified calibration smoke required")
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: verified smoke_02 required")
     smoke = json.loads(smoke_path.read_text(encoding="utf-8"))
     verified = json.loads(smoke_verification.read_text(encoding="utf-8"))
     qa = json.loads(QA_REPORT_PATH.read_text(encoding="utf-8"))
-    if verified.get("verified") is not True or smoke.get("terminal_status") != "CALIBRATION_QA_ONLY" or smoke.get("V2_2B_verdict") is not None:
-        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: calibration smoke must be verified QA_ONLY with null verdict")
-    if smoke.get("launch_logs", {}).get("finalized") is not True:
-        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: calibration smoke launch logs are not finalized")
+    snapshot = verify_calibration_source_snapshot()
+    external_logs_path = CALIBRATION_SMOKE_ROOT / "external_launch_logs_artifact_hashes.json"
+    if not external_logs_path.is_file():
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: smoke_02 external log hash manifest missing")
+    external_logs = json.loads(external_logs_path.read_text(encoding="utf-8"))
+    if verified.get("verified") is not True or smoke.get("terminal_status") != TERMINAL_CALIBRATION_SMOKE_COMPLETE or smoke.get("V2_2B_verdict") is not None:
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: smoke_02 must be COMPLETE, verified, and verdict-null")
+    if external_logs.get("verified") is not True:
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: smoke_02 external launch logs not verified")
     current = source_hashes()
-    if smoke.get("source_sha256") != current or smoke.get("spec_sha256") != sha256_file(SPEC_PATH) or qa.get("source_sha256") != current or qa.get("status") != "PASS":
-        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: QA/smoke source snapshot is stale or failed")
+    if (
+        smoke.get("source_sha256") != current
+        or smoke.get("spec_sha256") != sha256_file(SPEC_PATH)
+        or smoke.get("calibration_source_snapshot_sha256") != snapshot["snapshot_sha256"]
+        or smoke.get("executed_dependency_sha256") != executed_dependency_hashes()
+        or qa.get("source_sha256") != current
+        or qa.get("executed_dependency_sha256") != executed_dependency_hashes()
+        or qa.get("status") != "PASS"
+    ):
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: QA/source snapshot/smoke hashes stale or failed")
     ledger = recompute_d512_ledger()
     if not ledger["exact_match"]:
         raise LedgerPreSealHold("FLOP_LEDGER_PRESEAL_HOLD")
     reference = json.loads((V22A_ROOT / "SOURCE_SEAL_R1.json").read_text(encoding="utf-8"))["environment"]
     if not _environment_matches(smoke.get("environment", {}), reference):
-        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: calibration environment mismatch")
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: smoke_02 environment mismatch")
+
+    smoke01_result = CALIBRATION_SMOKE_01_ROOT / "CALIBRATION_SMOKE_RESULT.json"
+    smoke01_report = CALIBRATION_SMOKE_01_ROOT / "CALIBRATION_SMOKE_REPORT.md"
+    smoke01_manifest = CALIBRATION_SMOKE_01_ROOT / "artifact_hashes.json"
+    smoke01_verified = CALIBRATION_SMOKE_01_ROOT / "artifact_hashes_verified.json"
+    if not all(path.is_file() for path in (smoke01_result, smoke01_report, smoke01_manifest, smoke01_verified)):
+        raise RuntimeError("V2_2B_SOURCE_SEAL_STOP: immutable smoke_01 evidence incomplete")
+    smoke01_record = json.loads(smoke01_result.read_text(encoding="utf-8"))
+    smoke01_refs = {
+        "incident_path": str(CALIBRATION_SMOKE_01_INCIDENT.resolve()),
+        "incident_sha256": sha256_file(CALIBRATION_SMOKE_01_INCIDENT) if CALIBRATION_SMOKE_01_INCIDENT.is_file() else None,
+        "result_sha256": sha256_file(smoke01_result),
+        "report_sha256": sha256_file(smoke01_report),
+        "artifact_manifest_sha256": sha256_file(smoke01_manifest),
+        "artifact_verification_sha256": sha256_file(smoke01_verified),
+        "terminal_status": smoke01_record.get("terminal_status"),
+        "official_attempt_consumed": False,
+    }
+    smoke02_report = CALIBRATION_SMOKE_ROOT / "CALIBRATION_SMOKE_REPORT.md"
+    smoke02_manifest = CALIBRATION_SMOKE_ROOT / "artifact_hashes.json"
     seal = {
         "schema": "omega-v2-2b-source-seal-v1",
         "official_id": OFFICIAL_ID,
         "spec_sha256": sha256_file(SPEC_PATH),
         "source_sha256": current,
+        "executed_dependency_sha256": executed_dependency_hashes(),
+        "calibration_source_snapshot_sha256": snapshot["snapshot_sha256"],
+        "smoke_01_references": smoke01_refs,
+        "smoke_02_references": {
+            "result_sha256": sha256_file(smoke_path),
+            "report_sha256": sha256_file(smoke02_report),
+            "artifact_manifest_sha256": sha256_file(smoke02_manifest),
+            "artifact_verification_sha256": sha256_file(smoke_verification),
+            "external_launch_logs_manifest_sha256": sha256_file(external_logs_path),
+            "terminal_status": smoke["terminal_status"],
+        },
         "v2_0_reference_sha256": {str(path.resolve()): sha256_file(path) for path in (V20_ROOT / "omega_v2" / "core.py", V20_ROOT / "omega_v2" / "variants.py", V20_ROOT / "omega_v2" / "ledger.py")},
         "d3q_and_spec_reference_sha256": reference_hashes(),
+        "environment_identity": {key: smoke["environment"].get(key) for key in ("python_version", "torch_version", "torch_cuda_runtime", "driver", "device_name", "compute_capability", "cublas_workspace_config")},
         "environment": smoke["environment"],
         "all_seeds": {"calibration_only": CALIBRATION_SEED, "official": list(OFFICIAL_MASTER_SEEDS), "D6_seed": D6_MASTER_SEED},
         "thresholds": {
@@ -1025,6 +1265,11 @@ def verify_source_seal() -> dict[str, Any]:
     seal = json.loads(SOURCE_SEAL_PATH.read_text(encoding="utf-8"))
     if seal.get("spec_sha256") != sha256_file(SPEC_PATH) or seal.get("source_sha256") != source_hashes():
         raise RuntimeError("V2_2B_SOURCE_SEAL_MISMATCH")
+    snapshot = verify_calibration_source_snapshot()
+    if seal.get("calibration_source_snapshot_sha256") != snapshot["snapshot_sha256"]:
+        raise RuntimeError("V2_2B_CALIBRATION_SOURCE_SNAPSHOT_SEAL_MISMATCH")
+    if seal.get("executed_dependency_sha256") != executed_dependency_hashes():
+        raise RuntimeError("V2_2B_EXECUTED_DEPENDENCY_SEAL_MISMATCH")
     if seal.get("d3q_and_spec_reference_sha256") != reference_hashes():
         raise RuntimeError("V2_2B_REFERENCE_SEAL_MISMATCH")
     if not recompute_d512_ledger()["exact_match"]:
@@ -1036,6 +1281,9 @@ def run_qa_calibration() -> dict[str, Any]:
     ledger = recompute_d512_ledger()
     cpu_qa = run_calibration_qa_cpu(CALIBRATION_SEED)
     static = unresolved_name_audit()
+    compile_pass = compileall.compile_dir(str(PACKAGE_ROOT), quiet=1, force=True)
+    import_audit = from_import_resolution_audit()
+    import_sweep = package_import_sweep()
     pre_cuda = pre_cuda_official_dry_run()
     mocked = full_mocked_control_flow_dry_run()
     build = environment_build_record()
@@ -1053,6 +1301,7 @@ def run_qa_calibration() -> dict[str, Any]:
     cpu_checks_pass = bool(
         ledger["exact_match"] and cpu_qa["pass"] and not static
         and pre_cuda["slot_created"] is False
+        and compile_pass and import_audit["pass"] and import_sweep["pass"]
         and mocked["all_scenarios_pass"] and mocked["artifact_hashes_verified"]
         and tests.returncode == 0
     )
@@ -1070,12 +1319,16 @@ def run_qa_calibration() -> dict[str, Any]:
         "unit_tests": {"returncode": tests.returncode, "passed": tests.returncode == 0, "stdout": tests.stdout, "stderr": tests.stderr},
         "static_unresolved_names": len(static),
         "static_issues": static,
+        "from_import_resolution_audit": import_audit,
+        "package_compile_sweep": {"pass": bool(compile_pass)},
+        "package_import_sweep": import_sweep,
         "cpu_calibration_qa": cpu_qa,
         "pre_cuda_official_dry_run": pre_cuda,
         "full_mocked_control_flow_dry_run": mocked,
         "environment_build_validation": {"record": build, "matches_V2_2A_reference": build_match},
         "flop_ledger_crosscheck": ledger,
         "source_sha256": source_hashes(),
+        "executed_dependency_sha256": executed_dependency_hashes(),
         "spec_sha256": sha256_file(SPEC_PATH),
         "official_seed_plans_materialized": False,
     }
@@ -1092,13 +1345,15 @@ def _render_smoke_report(smoke: dict[str, Any]) -> str:
         f"- master_seed: `{smoke['seed_result']['seed_plan']['master_seed']}`",
         f"- structural gates: `{smoke['structural_gates_pass']}`",
         f"- D3 A/B/C gates: `{smoke['D3_A_B_C_pass']}`",
+        f"- external launch log hash manifest: `{smoke.get('launch_logs', {}).get('hash_manifest')}`",
+        f"- wall_gate_seconds: `{smoke.get('wall_gate_seconds')}`",
         "- official held-out seeds used: `False`",
         "- scientific verdict: `NONE`", "", "```json",
         json.dumps(smoke["seed_result"]["gate_results"], sort_keys=True, indent=2), "```", "",
     ])
 
 
-def _persist_smoke_artifacts(smoke: dict[str, Any], *, include_launch_logs: bool) -> dict[str, Any]:
+def _persist_smoke_artifacts(smoke: dict[str, Any]) -> dict[str, Any]:
     root = CALIBRATION_SMOKE_ROOT
     result_path = root / "CALIBRATION_SMOKE_RESULT.json"
     report_path = root / "CALIBRATION_SMOKE_REPORT.md"
@@ -1106,14 +1361,29 @@ def _persist_smoke_artifacts(smoke: dict[str, Any], *, include_launch_logs: bool
     write_json(result_path, smoke)
     report_path.write_text(_render_smoke_report(smoke), encoding="utf-8", newline="\n")
     sidecar_path.write_text(sha256_file(report_path) + "\n", encoding="ascii", newline="\n")
-    evidence = [result_path, report_path, sidecar_path, *root.glob("*.pt"), SPEC_PATH, PACKAGE_ROOT / ".gitattributes", PACKAGE_ROOT / "results" / ".gitattributes", *sorted(PACKAGE_ROOT.rglob("*.py"))]
-    boundary = root / "QA_SMOKE_BOUNDARY.json"
-    if boundary.is_file():
-        evidence.append(boundary)
-    if include_launch_logs:
-        evidence.extend(CALIBRATION_SMOKE_LOG_ROOT / name for name in ("command.txt", "stdout.log", "stderr.log"))
+    evidence = [
+        result_path,
+        report_path,
+        sidecar_path,
+        *root.glob("*.pt"),
+        *root.glob("*_PRIMARY_*.json"),
+        root / "QA_SMOKE_BOUNDARY.json",
+        SPEC_PATH,
+        CALIBRATION_SOURCE_SNAPSHOT_PATH,
+        PACKAGE_ROOT / ".gitattributes",
+        PACKAGE_ROOT / "results" / ".gitattributes",
+        *sorted(PACKAGE_ROOT.rglob("*.py")),
+    ]
     evidence = [path for path in evidence if path.is_file()]
-    manifest = {"schema": "omega-v2-2b-calibration-smoke-artifact-hashes-v1", "artifacts": {str(path.resolve()): {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in evidence}}
+    manifest = {
+        "schema": "omega-v2-2b-calibration-smoke-artifact-hashes-v1",
+        "artifacts": {str(path.resolve()): {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in evidence},
+        "external_launch_logs": {
+            "directory": str(CALIBRATION_SMOKE_LOG_ROOT.resolve()),
+            "hash_manifest": "external_launch_logs_artifact_hashes.json",
+            "hashed_after_process_exit": True,
+        },
+    }
     manifest_path = root / "artifact_hashes.json"
     write_json(manifest_path, manifest)
     verified = all(Path(name).is_file() and Path(name).stat().st_size == row["size_bytes"] and sha256_file(name) == row["sha256"] for name, row in manifest["artifacts"].items())
@@ -1121,56 +1391,144 @@ def _persist_smoke_artifacts(smoke: dict[str, Any], *, include_launch_logs: bool
     return {"verified": bool(verified), "artifact_count": len(evidence), "manifest_sha256": sha256_file(manifest_path)}
 
 
+def _calibration_smoke_terminal(
+    seed: dict[str, Any],
+    context: PilotContext,
+    hard_stop: dict[str, Any] | None,
+    *,
+    required_d8_cells: int,
+    wall_gate_seconds: float | None = None,
+) -> str:
+    gates = seed.get("gate_results", {})
+    failures = seed.get("scientific_failures", [])
+    executed_structural_failure = any(
+        gates.get(name, {}).get("pass") is False
+        and gates.get(name, {}).get("status") not in ("NOT_RUN_WALL_TIME", "NOT_RUN_CAPACITY", "OOM_CAPACITY")
+        for name in ("D2", "D4")
+    )
+    if failures or executed_structural_failure:
+        return TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD
+    resource_hard_stop = bool(
+        hard_stop
+        and (
+            hard_stop.get("kind") == "UNRECOVERABLE_OOM"
+            or "OOM" in str(hard_stop.get("error", "")).upper()
+        )
+    )
+    if hard_stop is not None and not resource_hard_stop:
+        return TERMINAL_CALIBRATION_QA_HARNESS_HOLD
+    if context.capacity_issues or (wall_gate_seconds is not None and wall_gate_seconds > D8_WALL_LIMIT_SECONDS):
+        return TERMINAL_CALIBRATION_QA_CAPACITY_HOLD
+    gates_pass = all(gates.get(name, {}).get("pass") is True for name in ("D1", "D2", "D3", "D4", "D5", "D6", "D7"))
+    d8_complete = len(context.cell_records) == required_d8_cells and all(row.get("status") == "PASS" for row in context.cell_records)
+    if not gates_pass or not d8_complete or seed.get("seed_pass") is not True:
+        return TERMINAL_CALIBRATION_QA_HARNESS_HOLD
+    return TERMINAL_CALIBRATION_SMOKE_COMPLETE
+
+
 def run_calibration_smoke(*, go_calibration_seed_smoke: bool) -> dict[str, Any]:
+    wall_start = time.perf_counter()
     if not go_calibration_seed_smoke:
         raise RuntimeError("V2_2B_SMOKE_STOP: explicit --go-calibration-seed-smoke required")
     if CALIBRATION_SMOKE_ROOT.exists():
         raise FileExistsError(f"calibration smoke slot is immutable: {CALIBRATION_SMOKE_ROOT}")
     logs = [CALIBRATION_SMOKE_LOG_ROOT / name for name in ("command.txt", "stdout.log", "stderr.log")]
     if not all(path.is_file() for path in logs):
-        raise PreScientificAbort("calibration smoke command/stdout/stderr logs must be recorded outside result slot")
-    ledger = recompute_d512_ledger()
-    if not ledger["exact_match"]:
-        raise LedgerPreSealHold("FLOP_LEDGER_PRESEAL_HOLD")
-    environment = full_environment_record_after_go()
+        return _pre_scientific_abort(PreScientificAbort("smoke command/stdout/stderr logs missing"), wall_start=wall_start, smoke=True)
+    try:
+        qa = json.loads(QA_REPORT_PATH.read_text(encoding="utf-8"))
+        if qa.get("status") != "PASS" or qa.get("source_sha256") != source_hashes():
+            raise PreScientificAbort("calibration QA report is not PASS for current sources")
+        if qa.get("executed_dependency_sha256") != executed_dependency_hashes():
+            raise PreScientificAbort("calibration QA dependency snapshot is stale")
+        source_snapshot = verify_calibration_source_snapshot()
+        ledger = recompute_d512_ledger()
+        if not ledger["exact_match"]:
+            raise LedgerPreSealHold("FLOP_LEDGER_PRESEAL_HOLD")
+        environment = full_environment_record_after_go()
+    except Exception as error:
+        return _pre_scientific_abort(error, wall_start=wall_start, smoke=True)
+
     plan = make_seed_plan(CALIBRATION_SEED, mode="smoke")
-    start = time.perf_counter()
-    seeds, context, hard_stop = _execute_seed_plans([plan], result_root=CALIBRATION_SMOKE_ROOT, official=False, wall_start=start, smoke=True)
+    seeds, context, hard_stop = _execute_seed_plans(
+        [plan],
+        result_root=CALIBRATION_SMOKE_ROOT,
+        official=False,
+        wall_start=wall_start,
+        smoke=True,
+    )
     if not context.boundary_crossed:
-        return _pre_scientific_abort(PreScientificAbort("smoke exited before first numerical cell"), wall_start=start, ledger=ledger, smoke=True)
+        return _pre_scientific_abort(PreScientificAbort("smoke exited before first numerical cell"), wall_start=wall_start, ledger=ledger, smoke=True)
+
     seed = seeds[0]
     gates = seed.get("gate_results", {})
     structural = bool(gates.get("D2", {}).get("pass") and gates.get("D4", {}).get("pass"))
     d3_pass = bool(gates.get("D3", {}).get("pass"))
-    harness_pass = all(gates.get(name, {}).get("pass") is True for name in ("D1", "D2", "D3", "D4", "D5", "D6", "D7"))
-    complete_d8 = bool(context.cell_records) and not context.capacity_issues and all(row.get("status") == "PASS" for row in context.cell_records)
-    passed = structural and d3_pass and harness_pass and complete_d8 and hard_stop is None and seed.get("seed_pass") is True
-    smoke = {
-        "schema": "omega-v2-2b-calibration-smoke-v1",
+    required_d8_cells = len(D1_K_VALUES) + 1 + 1 + len(D6_FORWARD_K_VALUES) + len(D6_BACKWARD_K_VALUES) + 2
+    preliminary_status = _calibration_smoke_terminal(seed, context, hard_stop, required_d8_cells=required_d8_cells)
+    smoke: dict[str, Any] = {
+        "schema": "omega-v2-2b-calibration-smoke-v2",
         "official_id": OFFICIAL_ID,
+        "calibration_attempt": "smoke_02",
         "classification": "CALIBRATION_QA_ONLY",
-        "terminal_status": "CALIBRATION_QA_ONLY" if passed else TERMINAL_CALIBRATION_QA_HOLD,
+        "terminal_status": preliminary_status,
         "V2_2B_verdict": None,
         "seed_result": {key: value for key, value in seed.items() if key != "tensor_bundle"},
         "structural_gates_pass": structural,
         "D3_A_B_C_pass": d3_pass,
-        "harness_gates_pass": harness_pass,
+        "harness_gates_pass": all(gates.get(name, {}).get("pass") is True for name in ("D1", "D2", "D3", "D4", "D5", "D6", "D7")),
         "D8_cell_records": context.cell_records,
         "capacity_issue": bool(context.capacity_issues),
+        "capacity_reason": next((item.get("reason") for item in context.capacity_issues if item.get("reason") in CAPACITY_REASONS), None),
         "capacity_events": context.capacity_issues,
         "hard_stop": hard_stop,
         "D5_ledger": ledger,
         "environment": environment,
         "source_sha256": source_hashes(),
+        "executed_dependency_sha256": executed_dependency_hashes(),
         "spec_sha256": sha256_file(SPEC_PATH),
+        "calibration_source_snapshot_sha256": source_snapshot["snapshot_sha256"],
         "heldout_seed_values_materialized": False,
         "official_seed_plans_materialized": False,
-        "launch_logs": {"directory": str(CALIBRATION_SMOKE_LOG_ROOT.resolve()), "finalized": False},
+        "required_D8_cell_count": required_d8_cells,
+        "launch_logs": {
+            "directory": str(CALIBRATION_SMOKE_LOG_ROOT.resolve()),
+            "hash_manifest": "external_launch_logs_artifact_hashes.json",
+            "finalized": False,
+        },
     }
     bundle_path = CALIBRATION_SMOKE_ROOT / "calibration_seed_20260930_smoke_bundle.pt"
-    torch.save({"schema": "omega-v2-2b-calibration-smoke-bundle-v1", "gates": _serialize_tree_cpu(seed.get("tensor_bundle", {}))}, bundle_path)
+    torch.save({"schema": "omega-v2-2b-calibration-smoke-bundle-v2", "gates": _serialize_tree_cpu(seed.get("tensor_bundle", {}))}, bundle_path)
     smoke["bundle"] = {"path": bundle_path.name, "size_bytes": bundle_path.stat().st_size, "sha256": sha256_file(bundle_path)}
-    _persist_smoke_artifacts(smoke, include_launch_logs=False)
+
+    primary = _persist_primary_evidence(CALIBRATION_SMOKE_ROOT, "CALIBRATION_SMOKE", smoke)
+    if not primary["verified"]:
+        hard_stop = {"kind": "PRIMARY_ARTIFACT_HASH_FAILURE", "error": "calibration primary bundle/metrics hashes failed verification"}
+        smoke["hard_stop"] = hard_stop
+        smoke["terminal_status"] = TERMINAL_CALIBRATION_QA_HARNESS_HOLD
+        primary = _persist_primary_evidence(CALIBRATION_SMOKE_ROOT, "CALIBRATION_SMOKE", smoke)
+
+    wall_gate_end = time.perf_counter()
+    wall_gate_seconds = wall_gate_end - wall_start
+    if wall_gate_seconds > D8_WALL_LIMIT_SECONDS and not any(item.get("reason") == "WALL_TIME" for item in context.capacity_issues):
+        _append_capacity(context, "WALL_TIME", cell_id="calibration_primary_verification", master_seed=CALIBRATION_SEED)
+        smoke["capacity_issue"] = True
+        smoke["capacity_reason"] = "WALL_TIME"
+        smoke["capacity_events"] = context.capacity_issues
+        smoke["terminal_status"] = _calibration_smoke_terminal(seed, context, hard_stop, required_d8_cells=required_d8_cells, wall_gate_seconds=wall_gate_seconds)
+        primary = _persist_primary_evidence(CALIBRATION_SMOKE_ROOT, "CALIBRATION_SMOKE", smoke)
+        wall_gate_end = time.perf_counter()
+        wall_gate_seconds = wall_gate_end - wall_start
+    smoke.update({
+        "wall_gate_start": wall_start,
+        "wall_gate_end": wall_gate_end,
+        "wall_gate_start_perf_counter": wall_start,
+        "wall_gate_end_perf_counter": wall_gate_end,
+        "wall_gate_seconds": wall_gate_seconds,
+        "wall_gate_limit_seconds": D8_WALL_LIMIT_SECONDS,
+        "primary_evidence": primary,
+    })
+    _persist_smoke_artifacts(smoke)
     return smoke
 
 
@@ -1208,39 +1566,64 @@ def run_official_pilot(*, go_v2_2b_official: bool, official_wall_start: float) -
 
 
 def finalize_external_launch_logs(*, smoke: bool = False) -> dict[str, Any]:
-    """Hash process logs only; the in-process wall decision is immutable."""
+    """Write a post-process log-hash sidecar; never rewrite frozen result/report/manifests."""
     if smoke:
         root = CALIBRATION_SMOKE_ROOT
         result_path = root / "CALIBRATION_SMOKE_RESULT.json"
         launch_root = CALIBRATION_SMOKE_LOG_ROOT
+        incident_path = CALIBRATION_SMOKE_INCIDENT_ROOT / "PRE_SCIENTIFIC_OPERATIONAL_ABORT.json"
     else:
         root = OFFICIAL_RESULTS_ROOT
         result_path = root / "OFFICIAL_RESULT.json"
         launch_root = OFFICIAL_LAUNCH_LOG_ROOT
+        incident_path = INCIDENT_ROOT / "PRE_SCIENTIFIC_OPERATIONAL_ABORT.json"
     paths = {name: launch_root / name for name in ("command.txt", "stdout.log", "stderr.log")}
     if not all(path.is_file() for path in paths.values()):
         raise FileNotFoundError("external command/stdout/stderr logs incomplete")
-    if result_path.is_file():
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        result["launch_logs"] = {
-            "directory": str(launch_root.resolve()),
-            "finalized": True,
-            "files": {name: {"path": str(path.resolve()), "size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for name, path in paths.items()},
-        }
-        if smoke:
-            hashes = _persist_smoke_artifacts(result, include_launch_logs=True)
-            return {"terminal_status": result["terminal_status"], "launch_logs_finalized": True, "artifact_hashes_verified": hashes["verified"]}
-        _persist_result_files(root, result, official=True, include_launch_logs=True, launch_root=launch_root)
-        if result.get("official_wall_end_perf_counter") is None or result.get("official_wall_seconds") is None:
-            raise RuntimeError("official result lacks immutable in-process wall-end record")
-        return {"terminal_status": result["terminal_status"], "launch_logs_finalized": True, "wall_seconds_unchanged": True, "source_seal_sha256": sha256_file(SOURCE_SEAL_PATH)}
-    incident = INCIDENT_ROOT / "PRE_SCIENTIFIC_OPERATIONAL_ABORT.json"
-    if incident.is_file():
-        record = json.loads(incident.read_text(encoding="utf-8"))
-        record["launch_log_hashes"] = {name: {"path": str(path.resolve()), "size_bytes": path.stat().st_size, "sha256": sha256_file(path)} for name, path in paths.items()}
-        write_json(incident, record)
-        return record
-    raise FileNotFoundError("no completed result or pre-scientific incident to finalize")
+    result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else None
+    incident = json.loads(incident_path.read_text(encoding="utf-8")) if incident_path.is_file() else None
+    if result is None and incident is None:
+        raise FileNotFoundError("no completed result or pre-scientific incident to finalize")
+    gate_start = None
+    gate_seconds = None
+    terminal = None
+    if result is not None:
+        gate_start = result.get("wall_gate_start", result.get("official_wall_start"))
+        gate_seconds = result.get("wall_gate_seconds", result.get("official_wall_gate_seconds"))
+        terminal = result.get("terminal_status")
+    elif incident is not None:
+        terminal = incident.get("terminal_status")
+    files = {
+        name: {"path": str(path.resolve()), "size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
+        for name, path in paths.items()
+    }
+    process_total = time.perf_counter() - float(gate_start) if gate_start is not None else None
+    payload = {
+        "schema": "omega-v2-2b-external-launch-log-hashes-v1",
+        "official_id": OFFICIAL_ID,
+        "attempt": "smoke_02" if smoke else "official",
+        "terminal_status": terminal,
+        "directory": str(launch_root.resolve()),
+        "files": files,
+        "gate_wall_seconds_frozen": gate_seconds,
+        "process_total_wall_seconds": process_total,
+        "process_total_wall_is_diagnostic_only": True,
+        "verified": all(path.is_file() and path.stat().st_size == files[name]["size_bytes"] and sha256_file(path) == files[name]["sha256"] for name, path in paths.items()),
+    }
+    manifest_path = root / "external_launch_logs_artifact_hashes.json" if result is not None else incident_path.parent / "external_launch_logs_artifact_hashes.json"
+    write_json(manifest_path, payload)
+    core_verified = True
+    if result is not None:
+        core_verified_path = root / "artifact_hashes_verified.json"
+        core_verified = core_verified_path.is_file() and json.loads(core_verified_path.read_text(encoding="utf-8")).get("verified") is True
+    return {
+        "terminal_status": terminal,
+        "launch_logs_finalized": True,
+        "artifact_hashes_verified": bool(payload["verified"] and core_verified),
+        "gate_wall_seconds_unchanged": True,
+        "process_total_wall_seconds": process_total,
+        "external_log_manifest": str(manifest_path.resolve()),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1250,6 +1633,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--pre-cuda-official-dry-run", action="store_true")
     modes.add_argument("--full-control-flow-mocked-dry-run", action="store_true")
     modes.add_argument("--calibration-seed-smoke", action="store_true")
+    modes.add_argument("--write-calibration-source-snapshot", action="store_true")
     modes.add_argument("--seal-source", action="store_true")
     modes.add_argument("--run-official", action="store_true")
     modes.add_argument("--finalize-launch-logs", action="store_true")
@@ -1271,6 +1655,8 @@ def main(argv: list[str] | None = None) -> int:
             result = full_mocked_control_flow_dry_run(Path(temporary) / "dry_run")
     elif args.calibration_seed_smoke:
         result = run_calibration_smoke(go_calibration_seed_smoke=args.go_calibration_seed_smoke)
+    elif args.write_calibration_source_snapshot:
+        result = write_calibration_source_snapshot()
     elif args.finalize_launch_logs:
         result = finalize_external_launch_logs(smoke=False)
     elif args.finalize_smoke_launch_logs:
@@ -1283,7 +1669,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.full_control_flow_mocked_dry_run:
         return 0 if result.get("all_scenarios_pass") and result.get("artifact_hashes_verified") else 1
     if args.calibration_seed_smoke:
-        return 0 if result.get("terminal_status") == "CALIBRATION_QA_ONLY" else 1
+        return 0 if result.get("terminal_status") == TERMINAL_CALIBRATION_SMOKE_COMPLETE else 1
     if args.run_official:
         return 0 if result.get("terminal_status") in (TERMINAL_PASS, TERMINAL_FAIL, TERMINAL_CAPACITY_HOLD) else 1
     return 0

@@ -237,9 +237,9 @@ def d3_d512_gates(g_r32: Tensor, g_u32: list[Tensor]) -> dict[str, Any]:
     d3q_sums = (((g_u32[0].double() + g_u32[1].double()) + g_u32[2].double()) + g_u32[3].double())
     g_r64 = g_r32.double()
     primary = evaluate_primary_gates(g_r64, d3q_sums)
-    from omega_v2_2a_d3q.metrics import sum_u4_variants
+    from omega_v2_2a_d3q.metrics import sum_u4_diagnostics
 
-    diagnostics = sum_u4_variants(g_u32)
+    diagnostics = sum_u4_diagnostics(g_u32)
     old_max_rel = old_max_rel_diagnostic(g_r32, diagnostics["S_stack"])
     old_max_rel["S_reverse_equal_gR_NON_GATE"] = bool(torch.equal(diagnostics["S_reverse"], g_r32))
     return {
