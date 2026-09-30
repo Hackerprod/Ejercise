@@ -321,13 +321,14 @@ def execute_physical_correctness(worker_cpu_set_ids: list[int], shard_weights: l
 
 def compare_binding_timing(binding: dict[str, Any], kq_native: dict[str, Any]) -> dict[str, Any]:
     rows={row["cell"]:row["median_seconds"] for row in binding["cells"]}
+    no_timed_allocations = binding.get("no_timed_allocations", binding.get("timing_protocol", {}).get("no_timed_allocations"))
     series={
         "d512_m4_K1":(rows["d512_m4_K1"],kq_native["full_resident"]["m4_k1"]["median_seconds"]),
         "d512_m16_K1":(rows["d512_m16_K1"],kq_native["full_resident"]["m16_k1"]["median_seconds"]),
         "d512_m8_K4":(rows["d512_m8_K4"],kq_native["full_resident"]["m8_k4_for_s_native"]["median_seconds"]),
     }
     ratios={name:{"companion_seconds":new,"candidate02_kq_seconds":old,"ratio":new/old,"within_sanity_band":SANITY_RATIO_MIN<=new/old<=SANITY_RATIO_MAX} for name,(new,old) in series.items()}
-    return {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":ratios,"no_timed_allocations":binding["no_timed_allocations"],"pass":all(row["within_sanity_band"] for row in ratios.values()) and binding["no_timed_allocations"] is True}
+    return {"authorized_pre_sweep_binding_only":True,"allowed_ratio_band":[SANITY_RATIO_MIN,SANITY_RATIO_MAX],"cells":ratios,"no_timed_allocations":no_timed_allocations,"pass":all(row["within_sanity_band"] for row in ratios.values()) and no_timed_allocations is True}
 
 
 def create_preflight(cmake:Path,vs_install:str,cmake_version:str)->dict[str,Any]:

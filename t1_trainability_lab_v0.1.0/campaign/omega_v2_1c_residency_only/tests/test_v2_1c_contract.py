@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import inspect
+import sys
 from pathlib import Path
 import unittest
 
 UNIT_ROOT = Path(__file__).resolve().parents[1]
 CAMPAIGN_ROOT = UNIT_ROOT.parent
 KQ2_ROOT = CAMPAIGN_ROOT / "omega_v2_1b_candidate_02"
+sys.path.insert(0, str(UNIT_ROOT / "scripts"))
+import run_v2_1c as v2_1c_runner
+import v2_1c_phases as v2_1c_phases
 
 TEST_NAMES = [
     "test_v2_1c_candidate02_kernel_frozen_hash",
@@ -66,6 +71,50 @@ class V21cContractTests(unittest.TestCase):
         self.assertIn("--go-medicion", phases)
         self.assertIn("requires the judge's explicit GO medicion", phases)
         self.assertIn("DIAGNOSTIC_ONLY / NOT_PAIRED_KERNEL_COMPARISON", phases)
+
+    def test_binding_parser_reads_nested_no_timed_allocations(self) -> None:
+        binding = {
+            "cells": [
+                {"cell": "d512_m4_K1", "median_seconds": 0.0003137},
+                {"cell": "d512_m16_K1", "median_seconds": 0.0007222},
+                {"cell": "d512_m8_K4", "median_seconds": 0.0017146},
+            ],
+            "timing_protocol": {"no_timed_allocations": True, "warmups": 10, "samples": 31},
+        }
+        kq_native = {
+            "full_resident": {
+                "m4_k1": {"median_seconds": 0.0002872},
+                "m16_k1": {"median_seconds": 0.0007351},
+                "m8_k4_for_s_native": {"median_seconds": 0.0017543},
+            }
+        }
+        result = v2_1c_runner.compare_binding_timing(binding, kq_native)
+        self.assertTrue(result["pass"])
+        self.assertTrue(result["no_timed_allocations"])
+        self.assertAlmostEqual(result["cells"]["d512_m4_K1"]["ratio"], 1.0922701949860725)
+
+    def test_attempt02_shard_parser_accepts_both_cpu_set_key_spellings(self) -> None:
+        manifest = {
+            "matrices": [
+                {"d": 512, "matrix": "W_Q", "shards": [{"cpu_set_id": 266, "first_output_row": 0, "last_output_row_exclusive": 129}]},
+                {"d": 512, "matrix": "W_K", "shards": [{"windows_cpu_set_id": 264, "first_output_row": 0, "last_output_row_exclusive": 129}]},
+            ]
+        }
+        self.assertEqual(
+            v2_1c_phases._attempt02_shard_map(manifest),
+            {(512, "W_Q"): [(266, 0, 129)], (512, "W_K"): [(264, 0, 129)]},
+        )
+
+    def test_offline_seal_verifier_has_no_process_or_executable_invocation(self) -> None:
+        source = inspect.getsource(v2_1c_phases.verify_offline_seals)
+        self.assertNotIn("subprocess.run", source)
+        self.assertNotIn("subprocess.Popen", source)
+        self.assertNotIn("execute_equivalence", source)
+
+    def test_offline_seal_verification_cli_is_separate_from_measurement_modes(self) -> None:
+        phases = (UNIT_ROOT / "scripts" / "v2_1c_phases.py").read_text(encoding="utf-8")
+        self.assertIn('mode.add_argument("--verify-offline-seals"', phases)
+        self.assertIn("OFFLINE_SEAL_RECOVERY_VERIFICATION", phases)
 
     def test_no_native_speed_gate_is_declared_for_v2_1c(self) -> None:
         spec = (UNIT_ROOT / "OMEGA_V2_1C_RESIDENCY_ONLY_SPEC.md").read_text(encoding="utf-8")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -14,6 +15,7 @@ import run_v2_1c as u
 
 KQ_BINDING_CPU_SET_IDS = [266, 264, 258, 270]
 KQ_BINDING_V_I = [511664633.51857996, 510535857.6587815, 500940450.12757146, 500577604.74870884]
+SEALED_EVIDENCE_ROOT = u.UNIT_ROOT / "results" / "v2_1c_sealed"
 
 
 def prepare_companion() -> dict[str, Any]:
@@ -224,7 +226,7 @@ def _core_selection_tests(report: dict[str, Any], attempt_config: dict[str, Any]
     attempt_ids = [int(row["windows_cpu_set_id"]) for row in attempt_config["selected_workers"]]
     attempt_weights = [float(row["h0_v_i"]) for row in attempt_config["selected_workers"]]
     old_shards = u.read_json(u.ATTEMPT02_ROOT / "worker_shard_manifest.json")
-    old_map = {(int(matrix["d"]), matrix["matrix"]): [(int(shard["windows_cpu_set_id"]), int(shard["first_output_row"]), int(shard["last_output_row_exclusive"])) for shard in matrix["shards"]] for matrix in old_shards["matrices"]}
+    old_map = _attempt02_shard_map(old_shards)
     new_map = {(int(matrix["d"]), matrix["matrix"]): [(int(shard["cpu_set_id"]), int(shard["first_output_row"]), int(shard["last_output_row_exclusive"])) for shard in matrix["shards"]] for matrix in report["worker_row_shards"]}
     shards_equal = old_map == new_map
     differs = worker_ids != attempt_ids or not shards_equal
@@ -260,6 +262,25 @@ def _validate_row_shards(matrices: list[dict[str, Any]]) -> bool:
         if cursor != rows:
             return False
     return True
+
+
+def _attempt02_shard_cpu_set_id(shard: dict[str, Any]) -> int:
+    """Accept both the sealed attempt_02 key and its legacy report spelling."""
+    if "cpu_set_id" in shard:
+        return int(shard["cpu_set_id"])
+    if "windows_cpu_set_id" in shard:
+        return int(shard["windows_cpu_set_id"])
+    raise KeyError("attempt_02 shard lacks cpu_set_id/windows_cpu_set_id")
+
+
+def _attempt02_shard_map(manifest: dict[str, Any]) -> dict[tuple[int, str], list[tuple[int, int, int]]]:
+    return {
+        (int(matrix["d"]), matrix["matrix"]): [
+            (_attempt02_shard_cpu_set_id(shard), int(shard["first_output_row"]), int(shard["last_output_row_exclusive"]))
+            for shard in matrix["shards"]
+        ]
+        for matrix in manifest["matrices"]
+    }
 
 
 def core_selection_stage() -> dict[str, Any]:
@@ -470,6 +491,161 @@ def load_sealed_preflight() -> dict[str, Any]:
     return record
 
 
+def _semantic_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _json_normalize(value: Any) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+
+
+def verify_offline_seals() -> dict[str, Any]:
+    """Replay binding/H0 parsing and semantic checks using sealed JSON only; never launches a process."""
+    output_root = SEALED_EVIDENCE_ROOT / "OFFLINE_SEAL_RECOVERY_VERIFICATION"
+    if output_root.exists():
+        if output_root.is_dir() and not any(output_root.iterdir()):
+            output_root.rmdir()
+        else:
+            raise FileExistsError(f"offline seal verification is immutable: {output_root}")
+
+    copied_preflight = SEALED_EVIDENCE_ROOT / "build_preflight"
+    binding_input = copied_preflight / "binding_companion.json"
+    core_input = copied_preflight / "core_selection_preflight.json"
+    native_binding = u.read_json(binding_input)
+    native_core_selection = u.read_json(core_input)
+    kq_native = u.read_json(u.KQ2_NATIVE)
+    attempt_config = u.read_json(u.ATTEMPT02_ROOT / "benchmark_config.json")
+    attempt_sha = u.sha256_file(u.ATTEMPT02_ROOT / "artifact_hashes.json")
+
+    binding_stage_root = SEALED_EVIDENCE_ROOT / "binding_preflight"
+    binding_record = u.read_json(binding_stage_root / "stage_record.json")
+    binding_tests = u.read_json(binding_stage_root / "test_report.json")
+    binding_report_path = binding_stage_root / "V2_1C_BINDING_PREFLIGHT.md"
+    binding_manifest_path = binding_stage_root / "artifact_hashes.json"
+    binding_report_sha = u.sha256_file(binding_report_path)
+    binding_manifest_sha = u.sha256_file(binding_manifest_path)
+    binding_ratios = u.compare_binding_timing(native_binding, kq_native)
+    binding_value_sha = _semantic_sha256(binding_ratios)
+    sealed_binding_value_sha = _semantic_sha256(binding_record["binding_timing_ratios"])
+    binding_inputs_match = (
+        u.sha256_file(binding_input) == "e7637df1a32ef5a33af3309abdaa816ef3222e9b1da91d0b0871877c651e522a"
+        and u.sha256_file(u.KQ2_NATIVE) == "230dce1ccae58696f38610077459e2c6781b749330298b4617df9b3561da7b6c"
+    )
+    binding_hashes_match = (
+        binding_report_sha == "478f985238f42babb9bfd33d64f6578a4441e9989b01957ceb7c173ad9759191"
+        and binding_manifest_sha == "1ffc581ba5e7c3c49d3e3fe4aad22bbdb2257beb2b5afcbe92d8b92e5221a74d"
+    )
+    binding_semantics_match = (
+        binding_value_sha == sealed_binding_value_sha
+        and binding_ratios == binding_record["binding_timing_ratios"]
+        and native_binding["pass"] is True
+        and binding_ratios["pass"] is True
+        and binding_tests["fail_count"] == 0
+        and binding_tests["skip_count"] == 0
+    )
+
+    core_stage_root = SEALED_EVIDENCE_ROOT / "core_selection_preflight"
+    core_record = u.read_json(core_stage_root / "stage_record.json")
+    core_tests = u.read_json(core_stage_root / "test_report.json")
+    core_report_path = core_stage_root / "V2_1C_CORE_SELECTION_PREFLIGHT.md"
+    core_manifest_path = core_stage_root / "artifact_hashes.json"
+    core_report_sha = u.sha256_file(core_report_path)
+    core_manifest_sha = u.sha256_file(core_manifest_path)
+    attempt_manifest = u.verify_artifact_manifest(u.ATTEMPT02_ROOT / "artifact_hashes.json")
+    recomputed_core_tests, recomputed_selection = _core_selection_tests(native_core_selection, attempt_config, attempt_sha)
+    frozen_companion_sha = u.sha256_file(u.BENCH_EXE)
+    same_companion = frozen_companion_sha == core_record["companion_exe_sha256_frozen"]
+    recomputed_core_tests["tests"].append({"name": "test_v2_1c_core_selection_same_frozen_companion_exe", "status": "PASS" if same_companion else "FAIL", "detail": {"frozen_sha256": core_record["companion_exe_sha256_frozen"], "observed_sha256": frozen_companion_sha}})
+    recomputed_core_tests["test_count"] += 1
+    recomputed_core_tests["pass_count"] += int(same_companion)
+    recomputed_core_tests["fail_count"] += int(not same_companion)
+    recomputed_selection = _json_normalize(recomputed_selection)
+    recomputed_core_tests = _json_normalize(recomputed_core_tests)
+    core_value_sha = _semantic_sha256({"selection": recomputed_selection, "tests": recomputed_core_tests})
+    sealed_core_value_sha = _semantic_sha256({"selection": core_record["core_selection_preflight"], "tests": core_tests})
+    core_inputs_match = (
+        u.sha256_file(core_input) == "e0ca7b7bffae9242ade1b5b5981e82d5b26c68c0be5f18e9b341bae04e5a08a4"
+        and attempt_sha == "d17d5b79d43fe72eba644069e72b8539ce6990032579313d953190a7313f5287"
+    )
+    core_hashes_match = (
+        core_report_sha == "09faba6e82a632bd6e2ac4a6e78c2d75de5cbc520709868828f464df1673ca02"
+        and core_manifest_sha == "2dbf73d67eeb0e897fb301a21251275da28495a8533321279d50353bc653a7b7"
+    )
+    core_semantics_match = (
+        core_value_sha == sealed_core_value_sha
+        and recomputed_selection == core_record["core_selection_preflight"]
+        and recomputed_core_tests == core_tests
+        and native_core_selection["pass"] is True
+        and core_tests["fail_count"] == 0
+        and core_tests["skip_count"] == 0
+    )
+
+    verification = {
+        "schema": "omega-v2-1c-offline-seal-recovery-verification-v1",
+        "status": "PASS" if all((binding_inputs_match, binding_hashes_match, binding_semantics_match, core_inputs_match, core_hashes_match, core_semantics_match)) else "FAIL",
+        "binding": {
+            "input_json_sha256": u.sha256_file(binding_input),
+            "kq_baseline_json_sha256": u.sha256_file(u.KQ2_NATIVE),
+            "recomputed_timing_ratios": binding_ratios,
+            "recomputed_semantic_values_sha256": binding_value_sha,
+            "sealed_semantic_values_sha256": sealed_binding_value_sha,
+            "semantic_values_match": binding_semantics_match,
+            "sealed_report_sha256_expected": "478f985238f42babb9bfd33d64f6578a4441e9989b01957ceb7c173ad9759191",
+            "sealed_report_sha256_observed": binding_report_sha,
+            "sealed_manifest_sha256_expected": "1ffc581ba5e7c3c49d3e3fe4aad22bbdb2257beb2b5afcbe92d8b92e5221a74d",
+            "sealed_manifest_sha256_observed": binding_manifest_sha,
+            "input_hashes_match": binding_inputs_match,
+            "seal_hashes_match": binding_hashes_match,
+        },
+        "core_selection": {
+            "input_json_sha256": u.sha256_file(core_input),
+            "attempt02_worker_shard_manifest_sha256": u.sha256_file(u.ATTEMPT02_ROOT / "worker_shard_manifest.json"),
+            "recomputed_selected_cpu_set_ids": recomputed_selection["selected_cpu_set_ids"],
+            "recomputed_selected_v_i": recomputed_selection["selected_v_i"],
+            "recomputed_semantic_values_sha256": core_value_sha,
+            "sealed_semantic_values_sha256": sealed_core_value_sha,
+            "semantic_values_match": core_semantics_match,
+            "sealed_report_sha256_expected": "09faba6e82a632bd6e2ac4a6e78c2d75de5cbc520709868828f464df1673ca02",
+            "sealed_report_sha256_observed": core_report_sha,
+            "sealed_manifest_sha256_expected": "2dbf73d67eeb0e897fb301a21251275da28495a8533321279d50353bc653a7b7",
+            "sealed_manifest_sha256_observed": core_manifest_sha,
+            "input_hashes_match": core_inputs_match,
+            "seal_hashes_match": core_hashes_match,
+        },
+        "exe_invocations": 0,
+        "measurements_repeated": False,
+        "original_seals_modified": False,
+        "attempt02_artifact_manifest_sha256": u.sha256_file(u.ATTEMPT02_ROOT / "artifact_hashes.json"),
+        "frozen_companion_exe_sha256_observed_by_hash_only": frozen_companion_sha,
+        "attempt02_artifact_count": len(attempt_manifest["artifacts"]),
+        "correctness_failure_terminal_classification": "V2_1C_INVALID_PREFLIGHT",
+    }
+    output_root.mkdir(parents=True)
+    verification_path = output_root / "verification.json"
+    u.write_json(verification_path, verification)
+    lines = ["# OFFLINE_SEAL_RECOVERY_VERIFICATION", "", f"- status: `{verification['status']}`", "- executable invocations: `0`", "- measurements repeated: `false`", "- original seals modified: `false`", "", "## Binding replay", f"- semantic values match: `{binding_semantics_match}`", f"- original report SHA-256 match: `{binding_report_sha == verification['binding']['sealed_report_sha256_expected']}`", f"- original manifest SHA-256 match: `{binding_manifest_sha == verification['binding']['sealed_manifest_sha256_expected']}`", "", "## Core-selection replay", f"- semantic values match: `{core_semantics_match}`", f"- original report SHA-256 match: `{core_report_sha == verification['core_selection']['sealed_report_sha256_expected']}`", f"- original manifest SHA-256 match: `{core_manifest_sha == verification['core_selection']['sealed_manifest_sha256_expected']}`", f"- selected CPU-set IDs: `{recomputed_selection['selected_cpu_set_ids']}`", ""]
+    report_path = output_root / "OFFLINE_SEAL_RECOVERY_VERIFICATION.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    report_sha = u.sha256_file(report_path)
+    sidecar = output_root / "OFFLINE_SEAL_RECOVERY_VERIFICATION.md.sha256"
+    sidecar.write_text(report_sha + "\n", encoding="ascii", newline="\n")
+    inputs = [binding_input, core_input, u.KQ2_NATIVE, u.ATTEMPT02_ROOT / "benchmark_config.json", u.ATTEMPT02_ROOT / "worker_shard_manifest.json",
+        binding_stage_root / "stage_record.json", binding_stage_root / "test_report.json", binding_report_path, binding_manifest_path,
+        core_stage_root / "stage_record.json", core_stage_root / "test_report.json", core_report_path, core_manifest_path,
+        u.BENCH_EXE, u.CORRECTNESS_EXE, *(u.UNIT_ROOT / path for path in binding_record["v2_1c_source_sha256"]),
+        *(Path(path) for path in binding_record["physical_dependency_sha256"]), *(Path(path) for path in binding_record["candidate02_kernel_tu_sha256"])]
+    unique = {str(path.resolve()): path for path in [*inputs, verification_path, report_path, sidecar] if path.is_file()}
+    artifact_manifest = {"schema": "omega-v2-1c-offline-seal-recovery-artifact-hashes-v1", "verification_status": verification["status"], "report_self_sha256": report_sha, "artifacts": {name: {"sha256": u.sha256_file(path), "size_bytes": path.stat().st_size} for name, path in unique.items()}}
+    artifact_manifest_path = output_root / "artifact_hashes.json"
+    u.write_json(artifact_manifest_path, artifact_manifest)
+    hashes_verified = all(Path(name).is_file() and u.sha256_file(Path(name)) == row["sha256"] for name, row in artifact_manifest["artifacts"].items()) and u.sha256_file(report_path) == sidecar.read_text(encoding="ascii").strip()
+    u.write_json(output_root / "artifact_hashes_verified.json", {"verified": hashes_verified, "artifact_count": len(artifact_manifest["artifacts"])})
+    if not hashes_verified or verification["status"] != "PASS":
+        raise RuntimeError("V2_1C_OFFLINE_SEAL_RECOVERY_VERIFICATION_FAILED")
+    return {"verification": verification, "report_path": report_path, "report_sha256": report_sha, "artifact_manifest_path": artifact_manifest_path, "artifact_manifest_sha256": u.sha256_file(artifact_manifest_path), "artifact_count": len(artifact_manifest["artifacts"]), "hashes_verified": hashes_verified}
+
+
 def print_stage(stage: dict[str, Any], label: str) -> None:
     record = stage["record"]
     print(json.dumps({"phase": label, "stage_status": record.get("stage_status", record.get("preflight_status")), "report_abs": str(stage["report_path"].resolve()), "report_sha256": stage["report_sha256"], "artifact_manifest_abs": str(stage["manifest_path"].resolve()), "artifact_manifest_sha256": stage["manifest_sha256"], "artifact_count": len(stage["manifest"]["artifacts"]), "hashes_verified": stage["verified"], "timed_72_cell_sweep_started": False}, indent=2, sort_keys=True))
@@ -483,11 +659,16 @@ def main() -> int:
     mode.add_argument("--core-selection-preflight-only", action="store_true", help="run the authorized one-time candidate_02 H0 v_i selection after binding is frozen")
     mode.add_argument("--correctness-preflight-only", action="store_true", help="run no-timing correctness only after new candidate_02 core selection is sealed")
     mode.add_argument("--seal-preflight-only", action="store_true", help="verify and seal steps 1-5; no timed 72-cell sweep")
+    mode.add_argument("--verify-offline-seals", action="store_true", help="replay binding/H0 parsers over sealed JSON copies without invoking executables")
     mode.add_argument("--run-sweep", action="store_true", help="run 72 cells only with explicit judge GO medicion")
     parser.add_argument("--go-medicion", action="store_true", help="explicit acknowledgement of judge GO medicion; required with --run-sweep")
     args = parser.parse_args()
     if u.os.name != "nt" or u.sys.platform != "win32":
         raise RuntimeError("V2_1C_MEASUREMENT_INVALID: native Windows is required")
+    if args.verify_offline_seals:
+        result = verify_offline_seals()
+        print(json.dumps({"phase": "OFFLINE_SEAL_RECOVERY_VERIFICATION", "status": result["verification"]["status"], "report_abs": str(result["report_path"].resolve()), "report_sha256": result["report_sha256"], "artifact_manifest_abs": str(result["artifact_manifest_path"].resolve()), "artifact_manifest_sha256": result["artifact_manifest_sha256"], "artifact_count": result["artifact_count"], "hashes_verified": result["hashes_verified"], "exe_invocations": 0, "measurements_repeated": False}, indent=2, sort_keys=True))
+        return 0
     if args.prepare_only:
         record = prepare_companion()
         print(json.dumps({"phase": "NO_TIMING_PREPARATION_ONLY", "companion_bench_exe_abs": record["companion_bench_exe_abs"], "companion_bench_exe_sha256": record["companion_bench_exe_sha256"], "companion_correctness_exe_sha256": record["companion_correctness_exe_sha256"], "static_contract_tests": "PASS", "timed_binding_started": False, "core_selection_started": False, "sweep_started": False, "branch": record["branch"], "git_status_unit": record["git_status_unit"]}, indent=2, sort_keys=True))
