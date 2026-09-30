@@ -1,6 +1,6 @@
-# OMEGA_HARDWARE_BASELINE_V3 (draft v0.1, 2026-09-30)
+# OMEGA_HARDWARE_BASELINE_V3 (v1.0, RATIFIED_V1 by Sol MD/317, 2026-09-30)
 
-Authority: Sol MD/315 (re-baseline), MD/314, MD/316. Status: DRAFT pending Sol ratification. Does not alter any preregistered experiment retroactively.
+Authority: Sol MD/315 (re-baseline), MD/314, MD/316. Status: RATIFIED_V1 (MD/317, with the two corrections below applied). Does not alter any preregistered experiment retroactively.
 
 ## 1. Hierarchy
 
@@ -29,6 +29,11 @@ Authority: Sol MD/315 (re-baseline), MD/314, MD/316. Status: DRAFT pending Sol r
 | OS | Windows 11 Enterprise LTSC 2024 (10.0.26100) | CIM |
 | Timed V2-1c CPU-set IDs (P-cores) | 256..270 range; V2-1c selected [266,260,256,264] | V2-1c H0 |
 
+No rho/cache-knee threshold from Conversacion.md is universal.
+Host-specific physical gates must be re-derived before use.
+
+Any text elsewhere presenting the Ryzen AI 5 330 as the general 'physical target' is superseded: PRIMARY_RESEARCH_PLATFORM = i7-13700F + GTX 1650 SUPER; LEGACY_DEPLOYMENT_PROFILE = Ryzen AI 5 330.
+
 ## 3. What is host-specific (not universal)
 
 Ryzen-only, historical: "4 physical threads", d512 = L2 candidate, d640 = L2 frontier, 8 MB L3 assumptions, rho <= 0.50 as universal gate, fixed cache knees.
@@ -37,11 +42,12 @@ Thesis wording (MD/315): recurrence/sharing = general architectural thesis; cach
 
 ## 4. Outstanding derivations (in order, per MD/315)
 
-1. Seal V2-1c (terminal V2_1C_INVALID_PREFLIGHT, MD/316).
-2. Complete OMEGA_EVIDENCE_TRANSFER_REGISTRY.md.
-3. CPU non-gate diagnostic: 1P/2P/4P/8P, 8P/16T, E-cores, full 24T.
+1. Seal V2-1c (terminal V2_1C_INVALID_PREFLIGHT, MD/316): DONE (commit 1072b09).
+2. Complete OMEGA_EVIDENCE_TRANSFER_REGISTRY.md (parallel with V2-2A; required before using historical evidence in new decisions).
+2b. V2-1d-Q4-NUMERICAL-EQUIVALENCE (new preregistered unit; prerequisite of any new CPU full-block candidate_02 timing). MD/317 order.
+3. CPU non-gate diagnostics: 1P/2P/4P/8P, 8P/16T, E-cores, full 24T. Before V2-1d only candidate_02-independent probes (FMA roofline, DRAM bandwidth, cache-size probes, topology, validated H0 microkernels, reference-kernel thread scaling).
 4. Re-derive T0 with this host's own cache knees (P-core L2 2 MiB, LLC ~30 MiB); explore d1024–d2048 for crossing.
-5. Open V2-2 GPU (PyTorch/CUDA R4 vs U4, d256 then d512) only on Sol's explicit decision (GPU_HOLD until then).
+5. V2-2A local GPU preflight (d256, m8, FP32, GTX 1650S): AUTHORIZED by MD/317, in parallel; V2-2B d512 only after V2-2A PASS; RunPod HOLD; T3 HOLD.
 
 ## 5. Open issues
 
