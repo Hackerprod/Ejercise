@@ -247,8 +247,42 @@
     "schema": "omega-v2-2b-d512-ledger-crosscheck-v1",
     "terminal_on_mismatch": "FLOP_LEDGER_PRESEAL_HOLD"
   },
+  "free_variable_capture_audit": {
+    "classification": "BEST_EFFORT_HARNESS_QA",
+    "pass": true,
+    "resolved_findings": [
+      {
+        "classification": "JUSTIFIED_SYNCHRONOUS_CAPTURE",
+        "file": "runner.py",
+        "inner_scope": "d3",
+        "justification": "Scenario-local stubs are consumed synchronously by the real suite before the outer scenario loop advances.",
+        "line": 1293,
+        "name": "scenario",
+        "outer_scope": "full_mocked_control_flow_dry_run"
+      },
+      {
+        "classification": "JUSTIFIED_SYNCHRONOUS_CAPTURE",
+        "file": "runner.py",
+        "inner_scope": "mock_measure",
+        "justification": "Scenario-local stubs are consumed synchronously by the real suite before the outer scenario loop advances.",
+        "line": 1311,
+        "name": "scenario",
+        "outer_scope": "full_mocked_control_flow_dry_run"
+      },
+      {
+        "classification": "JUSTIFIED_SYNCHRONOUS_CAPTURE",
+        "file": "runner.py",
+        "inner_scope": "hard_stop_d2",
+        "justification": "Scenario-local stubs are consumed synchronously by the real suite before the outer scenario loop advances.",
+        "line": 1339,
+        "name": "scenario",
+        "outer_scope": "full_mocked_control_flow_dry_run"
+      }
+    ],
+    "unresolved_findings": []
+  },
   "from_import_resolution_audit": {
-    "checked_count": 179,
+    "checked_count": 200,
     "imports": [
       {
         "deferred_or_local": false,
@@ -939,7 +973,7 @@
         "error": null,
         "exists": true,
         "file": "metrics.py",
-        "line": 240,
+        "line": 246,
         "module": "omega_v2_2a_d3q.metrics",
         "symbol": "sum_u4_diagnostics"
       },
@@ -957,7 +991,25 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 15,
+        "line": 9,
+        "module": "datetime",
+        "symbol": "datetime"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 9,
+        "module": "datetime",
+        "symbol": "timezone"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 16,
         "module": "pathlib",
         "symbol": "Path"
       },
@@ -966,7 +1018,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 23,
+        "line": 24,
         "module": "dataclasses",
         "symbol": "dataclass"
       },
@@ -975,7 +1027,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 24,
+        "line": 25,
         "module": "typing",
         "symbol": "Any"
       },
@@ -984,7 +1036,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 24,
+        "line": 25,
         "module": "typing",
         "symbol": "Callable"
       },
@@ -993,7 +1045,16 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 29,
+        "line": 26,
+        "module": "unittest.mock",
+        "symbol": "patch"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 31,
         "module": "torch",
         "symbol": "Tensor"
       },
@@ -1002,7 +1063,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 31,
+        "line": 33,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "CAMPAIGN_ROOT"
       },
@@ -1011,7 +1072,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 31,
+        "line": 33,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "D3Q_ROOT"
       },
@@ -1020,7 +1081,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 31,
+        "line": 33,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "PACKAGE_ROOT"
       },
@@ -1029,7 +1090,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 31,
+        "line": 33,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "V20_ROOT"
       },
@@ -1038,7 +1099,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 31,
+        "line": 33,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "V22A_ROOT"
       },
@@ -1047,7 +1108,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "ARTIFACT_CONTRACT"
       },
@@ -1056,7 +1117,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "CALIBRATION_SEED"
       },
@@ -1065,7 +1126,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "CAPACITY_REASONS"
       },
@@ -1074,7 +1135,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "CONFORMANCE_BATCH"
       },
@@ -1083,7 +1144,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D"
       },
@@ -1092,7 +1153,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_ELEMENTWISE_ABS_TOL"
       },
@@ -1101,7 +1162,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_ELEMENTWISE_FLOOR"
       },
@@ -1110,7 +1171,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_ELEMENTWISE_REL_TOL"
       },
@@ -1119,7 +1180,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_K_VALUES"
       },
@@ -1128,7 +1189,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_NORMWISE_E_L2_LIMIT"
       },
@@ -1137,7 +1198,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D1_NORMWISE_FLOOR"
       },
@@ -1146,7 +1207,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D3_E_INF_LIMIT"
       },
@@ -1155,7 +1216,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D3_E_L2_LIMIT"
       },
@@ -1164,7 +1225,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D3_MAX_ABS_ULP_LIMIT"
       },
@@ -1173,7 +1234,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D6_BACKWARD_K_VALUES"
       },
@@ -1182,7 +1243,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D6_FORWARD_K_VALUES"
       },
@@ -1191,7 +1252,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D6_MASTER_SEED"
       },
@@ -1200,7 +1261,25 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
+        "module": "omega_v2_2b_d512_local_pilot.config",
+        "symbol": "D7_BETAS"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 34,
+        "module": "omega_v2_2b_d512_local_pilot.config",
+        "symbol": "D7_EPS"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_FINAL_LOSS_RATIO"
       },
@@ -1209,7 +1288,25 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
+        "module": "omega_v2_2b_d512_local_pilot.config",
+        "symbol": "D7_LR"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 34,
+        "module": "omega_v2_2b_d512_local_pilot.config",
+        "symbol": "D7_WEIGHT_DECAY"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_GC_BEFORE_CELL"
       },
@@ -1218,7 +1315,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_PRE_AND_POST_CELL_SYNCHRONIZE"
       },
@@ -1227,7 +1324,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_PRE_CELL_EMPTY_CACHE"
       },
@@ -1236,7 +1333,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_PRE_CELL_RESET_PEAK_STATS"
       },
@@ -1245,7 +1342,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_VRAM_BUDGET_BYTES"
       },
@@ -1254,7 +1351,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D8_WALL_LIMIT_SECONDS"
       },
@@ -1263,7 +1360,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "K4"
       },
@@ -1272,7 +1369,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "M"
       },
@@ -1281,7 +1378,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "OFFICIAL_ID"
       },
@@ -1290,7 +1387,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "OFFICIAL_LAUNCH_LOG_DIR_NAME"
       },
@@ -1299,7 +1396,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "OFFICIAL_MASTER_SEEDS"
       },
@@ -1308,7 +1405,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "OFFICIAL_RESULT_SLOT_NAME"
       },
@@ -1317,7 +1414,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_CALIBRATION_QA_CAPACITY_HOLD"
       },
@@ -1326,7 +1423,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_CALIBRATION_QA_HARNESS_HOLD"
       },
@@ -1335,7 +1432,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD"
       },
@@ -1344,7 +1441,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_CALIBRATION_SMOKE_COMPLETE"
       },
@@ -1353,7 +1450,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_CAPACITY_HOLD"
       },
@@ -1362,7 +1459,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_FAIL"
       },
@@ -1371,7 +1468,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TERMINAL_PASS"
       },
@@ -1380,7 +1477,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "TRAINABILITY_BATCH"
       },
@@ -1389,7 +1486,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "SeedPlan"
       },
@@ -1398,7 +1495,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "make_seed_plan"
       },
@@ -1407,7 +1504,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 32,
+        "line": 34,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "official_seed_plans"
       },
@@ -1416,7 +1513,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "NonFinitePilotState"
       },
@@ -1425,7 +1522,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "StructuralCorruption"
       },
@@ -1434,7 +1531,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "configure_cuda_reference"
       },
@@ -1443,7 +1540,16 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
+        "module": "omega_v2_2b_d512_local_pilot.core",
+        "symbol": "d7_optimizer_loop"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_calibration_qa_cpu"
       },
@@ -1452,7 +1558,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d1_cell"
       },
@@ -1461,7 +1567,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d2_cell"
       },
@@ -1470,7 +1576,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d3_cell"
       },
@@ -1479,7 +1585,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d4_cpu"
       },
@@ -1488,7 +1594,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d6_cell"
       },
@@ -1497,7 +1603,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 75,
+        "line": 81,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "run_d7_cell"
       },
@@ -1506,7 +1612,7 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 87,
+        "line": 94,
         "module": "omega_v2_2b_d512_local_pilot.ledger",
         "symbol": "recompute_d512_ledger"
       },
@@ -1515,7 +1621,70 @@
         "error": null,
         "exists": true,
         "file": "runner.py",
-        "line": 88,
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "canonical_parameter_state_sha256"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "d1_correctness_metrics"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "d2_structural_parity"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "d3_d512_gates"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "d6_invariance_record"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "d6_invariance_snapshot"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "optimizer_state_canonical_sha256"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "runner.py",
+        "line": 95,
         "module": "omega_v2_2b_d512_local_pilot.metrics",
         "symbol": "tensor_raw_sha256"
       },
@@ -1533,7 +1702,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 7,
+        "line": 8,
         "module": "pathlib",
         "symbol": "Path"
       },
@@ -1542,7 +1711,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 8,
+        "line": 9,
         "module": "unittest.mock",
         "symbol": "patch"
       },
@@ -1551,7 +1720,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 12,
+        "line": 13,
         "module": "omega_v2_2a_d3q.metrics",
         "symbol": "evaluate_primary_gates"
       },
@@ -1560,7 +1729,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 12,
+        "line": 13,
         "module": "omega_v2_2a_d3q.metrics",
         "symbol": "sum_u4_diagnostics"
       },
@@ -1569,7 +1738,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "CALIBRATION_SEED"
       },
@@ -1578,7 +1747,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_BETAS"
       },
@@ -1587,7 +1756,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_EPS"
       },
@@ -1596,7 +1765,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_LR"
       },
@@ -1605,7 +1774,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_UPDATES"
       },
@@ -1614,7 +1783,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "D7_WEIGHT_DECAY"
       },
@@ -1623,7 +1792,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "OFFICIAL_MASTER_SEEDS"
       },
@@ -1632,7 +1801,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 13,
+        "line": 14,
         "module": "omega_v2_2b_d512_local_pilot.config",
         "symbol": "make_seed_plan"
       },
@@ -1641,7 +1810,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 23,
+        "line": 24,
         "module": "omega_v2_2b_d512_local_pilot.core",
         "symbol": "d7_optimizer_loop"
       },
@@ -1650,7 +1819,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 24,
+        "line": 25,
         "module": "omega_v2_2b_d512_local_pilot.ledger",
         "symbol": "recompute_d512_ledger"
       },
@@ -1659,7 +1828,16 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 25,
+        "line": 26,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "canonical_parameter_state_sha256"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 26,
         "module": "omega_v2_2b_d512_local_pilot.metrics",
         "symbol": "d1_correctness_metrics"
       },
@@ -1668,7 +1846,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 25,
+        "line": 26,
         "module": "omega_v2_2b_d512_local_pilot.metrics",
         "symbol": "d3_d512_gates"
       },
@@ -1677,7 +1855,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 25,
+        "line": 26,
         "module": "omega_v2_2b_d512_local_pilot.metrics",
         "symbol": "d6_invariance_record"
       },
@@ -1686,7 +1864,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 25,
+        "line": 26,
         "module": "omega_v2_2b_d512_local_pilot.metrics",
         "symbol": "d6_invariance_snapshot"
       },
@@ -1696,6 +1874,24 @@
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
         "line": 26,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "optimizer_state_canonical_payload"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 26,
+        "module": "omega_v2_2b_d512_local_pilot.metrics",
+        "symbol": "optimizer_state_canonical_sha256"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 35,
         "module": "omega_v2_2b_d512_local_pilot",
         "symbol": "runner"
       },
@@ -1704,7 +1900,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "PilotContext"
       },
@@ -1713,7 +1909,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_CAPACITY_HOLD"
       },
@@ -1722,7 +1918,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_CALIBRATION_QA_CAPACITY_HOLD"
       },
@@ -1731,7 +1927,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_CALIBRATION_QA_HARNESS_HOLD"
       },
@@ -1740,7 +1936,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_CALIBRATION_QA_SCIENTIFIC_HOLD"
       },
@@ -1749,7 +1945,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_CALIBRATION_SMOKE_COMPLETE"
       },
@@ -1758,7 +1954,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_FAIL"
       },
@@ -1767,7 +1963,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "TERMINAL_PASS"
       },
@@ -1776,7 +1972,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "_terminal_decision"
       },
@@ -1785,7 +1981,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "_finalize_wall_in_process"
       },
@@ -1794,7 +1990,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "_calibration_smoke_terminal"
       },
@@ -1803,7 +1999,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "finalize_external_launch_logs"
       },
@@ -1812,7 +2008,16 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
+        "module": "omega_v2_2b_d512_local_pilot.runner",
+        "symbol": "free_variable_capture_audit"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "full_mocked_control_flow_dry_run"
       },
@@ -1821,7 +2026,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "pre_cuda_official_dry_run"
       },
@@ -1830,7 +2035,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "_render_smoke_report"
       },
@@ -1839,7 +2044,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "from_import_resolution_audit"
       },
@@ -1848,7 +2053,7 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "unresolved_name_audit"
       },
@@ -1857,9 +2062,27 @@
         "error": null,
         "exists": true,
         "file": "tests/test_cpu_contracts.py",
-        "line": 27,
+        "line": 36,
         "module": "omega_v2_2b_d512_local_pilot.runner",
         "symbol": "package_import_sweep"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 36,
+        "module": "omega_v2_2b_d512_local_pilot.runner",
+        "symbol": "write_calibration_source_snapshot_03"
+      },
+      {
+        "deferred_or_local": false,
+        "error": null,
+        "exists": true,
+        "file": "tests/test_cpu_contracts.py",
+        "line": 36,
+        "module": "omega_v2_2b_d512_local_pilot.runner",
+        "symbol": "verify_calibration_source_snapshot_03"
       }
     ],
     "missing": [],
@@ -2113,28 +2336,84 @@
     "result_slot": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_2b_d512_local_pilot\\results\\omega_v2_2b_d512_local_pilot_official_attempt01",
     "slot_created": false
   },
+  "real_function_path_sweep": {
+    "all_checks_pass": true,
+    "artifact_manifest_verification": true,
+    "artifact_write_reload_hashes": {
+      "file_sha256": "9a4e41de0d44b91a80b7d8bcb798a4694d478b19f832c9ef821d71a1d68ad00f",
+      "path": "seed_synthetic_cpu_sweep_D1_D2_D3_D6_D7_bundles.pt",
+      "size_bytes": 3701,
+      "tensor_raw_sha256": {
+        "seed_synthetic_cpu_sweep/D1/output": "3901f29f6a80b980baf3fb7a3af77ffa4896e38294648837ad003c866286b43e",
+        "seed_synthetic_cpu_sweep/D3/W_Q/gR_fp32": "7f3157cb1f4ee387fc6cfe80fbc483d962a99c50321ee53b558f2e44e591869c",
+        "seed_synthetic_cpu_sweep/D3/W_Q/gU0_fp32": "52621a9dad844ecc8a43475709b9a7d306e7e494b16fb47da94fd4b25397deed",
+        "seed_synthetic_cpu_sweep/D3/W_Q/gU1_fp32": "32426f8500f483587c2b63eeece4eed8c9ac806f203aed5c8c9a6139f7591175",
+        "seed_synthetic_cpu_sweep/D3/W_Q/gU2_fp32": "f297381f5505bb9401df25ac7b201862d191fe209a8879b8db8ce7fa6b360c1f",
+        "seed_synthetic_cpu_sweep/D3/W_Q/gU3_fp32": "3914189181bd28d636f26b36d85cb753f073e4248dbf05437423614b37ad1659"
+      }
+    },
+    "bundle_save_reload_hashes_match": true,
+    "classification": "HARNESS_QA_ONLY",
+    "conformance_block_exists": true,
+    "cuda_kernels_launched": 0,
+    "d6_before_after": {
+      "SCHEMA_SHA256_after": "05b3f8fa9c4989180ee817f96808c0b2d4b759cf7b4b7089c20b5869bf1fcfa8",
+      "SCHEMA_SHA256_before": "05b3f8fa9c4989180ee817f96808c0b2d4b759cf7b4b7089c20b5869bf1fcfa8",
+      "VALUE_SHA256_after": "695e307763a633d1bdf566f75a5397eb2368fac7c6183b75814d988262d9e289",
+      "VALUE_SHA256_before": "695e307763a633d1bdf566f75a5397eb2368fac7c6183b75814d988262d9e289",
+      "parameter_count_after": 6,
+      "parameter_count_before": 6,
+      "pass": true
+    },
+    "expected_artifacts": [
+      "seed_synthetic_cpu_sweep_D1_D2_D3_D6_D7_bundles.pt",
+      "mocked_result.json",
+      "mocked_report.md",
+      "mocked_report.md.sha256",
+      "OMEGA_V2_2B_CONFORMANCE_BLOCK.md",
+      "artifact_hashes.json",
+      "artifact_hashes_verified.json"
+    ],
+    "expected_artifacts_exist": true,
+    "heldout_seed_values_materialized": false,
+    "json_files_parse": true,
+    "markdown_report_pass": true,
+    "no_official_result_slot_created": true,
+    "official_id": "OMEGA-V2-2B-LOCAL-PILOT-01",
+    "optimizer_state_hash_recipe": "6dc2e1855207e1c88f3093d178dc257500a34225a6ef384c2404a20e65797686",
+    "path": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_2b_d512_local_pilot\\results\\qa\\REAL_FUNCTION_PATH_SWEEP.json",
+    "records_json_serializable": true,
+    "schema": "omega-v2-2b-real-function-path-sweep-v1",
+    "scientific_verdict": null,
+    "sha256": "df58f1edb031c373f6bfe0af1d233b744aa545a7de8af43447d7ca2ab6ece9c7",
+    "source_seal_verifier_pass": true,
+    "terminal_classifier": {
+      "official": "OMEGA_V2_2B_LOCAL_PILOT_PASS",
+      "smoke": "V2_2B_CALIBRATION_SMOKE_COMPLETE"
+    }
+  },
   "schema": "omega-v2-2b-qa-report-v1",
   "source_sha256": {
     ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "OMEGA_V2_2B_SPEC.md": "eb1ebdf187caf41f99c67d5b0f5703cd732c641d6fabe2a426693da638c8081b",
+    "OMEGA_V2_2B_SPEC.md": "a32aab3f8450971979481d2a5da526013adfebe982612e6f15784f2ebd4996a2",
     "__init__.py": "a902bb0c2466cc751c5cf983f2b3b682ed4d1e112826532ede8a9e095de90501",
     "__main__.py": "6a6ebbd53b33c91c473621b39cf69ce2570bae0bc30627be0ad2d91d8b2b5769",
     "config.py": "57304d0dbd5aed89bb2d2bb8cb2dbbfea409df664a546016ba9faab2ed8d6bfa",
     "core.py": "f93e465aeecb038088d5d3b95386421db12c867b6238f231e64d0b69639cb1f8",
     "ledger.py": "72a0f70997a95f7b8b6f822a4a57c82c0e43733bbe04fb5e00b0378b72c58c1f",
-    "metrics.py": "1bfc397116a449acba1d80b7f8b3d62493a20ca73aa086b07560dcf5f6222ef6",
+    "metrics.py": "2b2e3c0c89532822018a4287afdd42918df87c8c64e749c4df27c360804a6602",
     "results/.gitattributes": "10fc60a1acf07a6c1be3c4db6a125cf4b0ee181921269fc6e9e39d0d6d151619",
-    "runner.py": "03be56f0e69cde2e1d2bcb6bc526acf2ea29e4f0114ab00c552aa5e4340380fd",
-    "tests/test_cpu_contracts.py": "bea8003cf3fc5c0b1058578e7f17ebc7185bec868522878cbf78f4a166f19fdd"
+    "runner.py": "3842ad0b6d0c0b0efd66fe13b43aa0cc22170f79cf988dce4b09c92b37e623db",
+    "tests/test_cpu_contracts.py": "d3b321fdebd252f73094821ffa60ca1d7e5a7554ba0c8f0a5000f79157cb8285"
   },
-  "spec_sha256": "eb1ebdf187caf41f99c67d5b0f5703cd732c641d6fabe2a426693da638c8081b",
+  "spec_sha256": "a32aab3f8450971979481d2a5da526013adfebe982612e6f15784f2ebd4996a2",
   "static_issues": [],
   "static_unresolved_names": 0,
   "status": "PASS",
   "unit_tests": {
     "passed": true,
     "returncode": 0,
-    "stderr": "test_d6_schema_value_and_unique_parameter_count_before_after (test_cpu_contracts.D6D7Tests.test_d6_schema_value_and_unique_parameter_count_before_after) ... ok\ntest_d7_loop_has_21_forwards_and_20_adamw_updates (test_cpu_contracts.D6D7Tests.test_d7_loop_has_21_forwards_and_20_adamw_updates) ... ok\ntest_frozen_d512_flop_integers (test_cpu_contracts.LedgerTests.test_frozen_d512_flop_integers) ... ok\ntest_all_package_modules_import_without_running_main (test_cpu_contracts.MetricTests.test_all_package_modules_import_without_running_main) ... ok\ntest_d1_runs_elementwise_and_normwise_gates_independently (test_cpu_contracts.MetricTests.test_d1_runs_elementwise_and_normwise_gates_independently) ... ok\ntest_d3_d512_gates_wires_real_D3Q_functions (test_cpu_contracts.MetricTests.test_d3_d512_gates_wires_real_D3Q_functions) ... ok\ntest_d3_primary_A_B_C_gates_on_synthetic_gradients (test_cpu_contracts.MetricTests.test_d3_primary_A_B_C_gates_on_synthetic_gradients) ... ok\ntest_real_d3q_import_resolution_audit_includes_deferred_imports (test_cpu_contracts.MetricTests.test_real_d3q_import_resolution_audit_includes_deferred_imports) ... ok\ntest_calibration_source_snapshot_is_bound_to_current_spec_and_sources (test_cpu_contracts.RunnerContracts.test_calibration_source_snapshot_is_bound_to_current_spec_and_sources) ... ok\ntest_external_log_finalizer_does_not_recompute_wall_or_terminal (test_cpu_contracts.RunnerContracts.test_external_log_finalizer_does_not_recompute_wall_or_terminal) ... ok\ntest_from_import_resolution_and_module_sweep_pass (test_cpu_contracts.RunnerContracts.test_from_import_resolution_and_module_sweep_pass) ... ok\ntest_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases (test_cpu_contracts.RunnerContracts.test_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases) ... ok\ntest_pre_cuda_dry_run_does_not_create_official_slot (test_cpu_contracts.RunnerContracts.test_pre_cuda_dry_run_does_not_create_official_slot) ... ok\ntest_result_slot_is_lazy_until_boundary_marker (test_cpu_contracts.RunnerContracts.test_result_slot_is_lazy_until_boundary_marker) ... ok\ntest_smoke_artifact_manifest_includes_boundary_marker (test_cpu_contracts.RunnerContracts.test_smoke_artifact_manifest_includes_boundary_marker) ... ok\ntest_smoke_log_finalizer_preserves_gate_result_and_wall (test_cpu_contracts.RunnerContracts.test_smoke_log_finalizer_preserves_gate_result_and_wall) ... ok\ntest_smoke_report_uses_the_persisted_D3_A_B_C_field (test_cpu_contracts.RunnerContracts.test_smoke_report_uses_the_persisted_D3_A_B_C_field) ... ok\ntest_smoke_terminal_classification_covers_complete_capacity_science_and_harness (test_cpu_contracts.RunnerContracts.test_smoke_terminal_classification_covers_complete_capacity_science_and_harness) ... ok\ntest_source_audit_detects_injected_undefined_name (test_cpu_contracts.RunnerContracts.test_source_audit_detects_injected_undefined_name) ... ok\ntest_terminal_priority_is_scientific_fail_then_capacity_then_pass (test_cpu_contracts.RunnerContracts.test_terminal_priority_is_scientific_fail_then_capacity_then_pass) ... ok\ntest_total_wall_is_decided_in_process_after_artifact_persistence (test_cpu_contracts.RunnerContracts.test_total_wall_is_decided_in_process_after_artifact_persistence) ... ok\ntest_calibration_seed_is_rejected_for_official (test_cpu_contracts.SeedGuardTests.test_calibration_seed_is_rejected_for_official) ... ok\ntest_official_seeds_are_rejected_for_qa_and_smoke (test_cpu_contracts.SeedGuardTests.test_official_seeds_are_rejected_for_qa_and_smoke) ... ok\ntest_only_calibration_seed_is_accepted_for_qa (test_cpu_contracts.SeedGuardTests.test_only_calibration_seed_is_accepted_for_qa) ... ok\n\n----------------------------------------------------------------------\nRan 24 tests in 0.851s\n\nOK\n",
+    "stderr": "test_d6_schema_value_and_unique_parameter_count_before_after (test_cpu_contracts.D6D7Tests.test_d6_schema_value_and_unique_parameter_count_before_after) ... ok\ntest_d7_loop_has_21_forwards_and_20_adamw_updates (test_cpu_contracts.D6D7Tests.test_d7_loop_has_21_forwards_and_20_adamw_updates) ... ok\ntest_frozen_d512_flop_integers (test_cpu_contracts.LedgerTests.test_frozen_d512_flop_integers) ... ok\ntest_all_package_modules_import_without_running_main (test_cpu_contracts.MetricTests.test_all_package_modules_import_without_running_main) ... ok\ntest_d1_runs_elementwise_and_normwise_gates_independently (test_cpu_contracts.MetricTests.test_d1_runs_elementwise_and_normwise_gates_independently) ... ok\ntest_d3_d512_gates_wires_real_D3Q_functions (test_cpu_contracts.MetricTests.test_d3_d512_gates_wires_real_D3Q_functions) ... ok\ntest_d3_primary_A_B_C_gates_on_synthetic_gradients (test_cpu_contracts.MetricTests.test_d3_primary_A_B_C_gates_on_synthetic_gradients) ... ok\ntest_real_d3q_import_resolution_audit_includes_deferred_imports (test_cpu_contracts.MetricTests.test_real_d3q_import_resolution_audit_includes_deferred_imports) ... ok\ntest_real_adamw_hash_is_stable_sensitive_and_json_safe (test_cpu_contracts.OptimizerCanonicalHashTests.test_real_adamw_hash_is_stable_sensitive_and_json_safe) ... ok\ntest_calibration_source_snapshot_is_bound_to_current_spec_and_sources (test_cpu_contracts.RunnerContracts.test_calibration_source_snapshot_is_bound_to_current_spec_and_sources) ... ok\ntest_external_log_finalizer_does_not_recompute_wall_or_terminal (test_cpu_contracts.RunnerContracts.test_external_log_finalizer_does_not_recompute_wall_or_terminal) ... ok\ntest_free_variable_audit_reports_justified_repo_capture_and_detects_injected_capture (test_cpu_contracts.RunnerContracts.test_free_variable_audit_reports_justified_repo_capture_and_detects_injected_capture) ... ok\ntest_free_variable_capture_audit_detects_loop_and_comprehension_lambdas (test_cpu_contracts.RunnerContracts.test_free_variable_capture_audit_detects_loop_and_comprehension_lambdas) ... ok\ntest_free_variable_capture_audit_has_only_justified_repo_capture (test_cpu_contracts.RunnerContracts.test_free_variable_capture_audit_has_only_justified_repo_capture) ... ok\ntest_from_import_resolution_and_module_sweep_pass (test_cpu_contracts.RunnerContracts.test_from_import_resolution_and_module_sweep_pass) ... ok\ntest_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases (test_cpu_contracts.RunnerContracts.test_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases) ... ok\ntest_pre_cuda_dry_run_does_not_create_official_slot (test_cpu_contracts.RunnerContracts.test_pre_cuda_dry_run_does_not_create_official_slot) ... ok\ntest_result_slot_is_lazy_until_boundary_marker (test_cpu_contracts.RunnerContracts.test_result_slot_is_lazy_until_boundary_marker) ... ok\ntest_smoke03_source_snapshot_uses_new_immutable_name (test_cpu_contracts.RunnerContracts.test_smoke03_source_snapshot_uses_new_immutable_name) ... ok\ntest_smoke_artifact_manifest_includes_boundary_marker (test_cpu_contracts.RunnerContracts.test_smoke_artifact_manifest_includes_boundary_marker) ... ok\ntest_smoke_log_finalizer_preserves_gate_result_and_wall (test_cpu_contracts.RunnerContracts.test_smoke_log_finalizer_preserves_gate_result_and_wall) ... ok\ntest_smoke_report_uses_the_persisted_D3_A_B_C_field (test_cpu_contracts.RunnerContracts.test_smoke_report_uses_the_persisted_D3_A_B_C_field) ... ok\ntest_smoke_terminal_classification_covers_complete_capacity_science_and_harness (test_cpu_contracts.RunnerContracts.test_smoke_terminal_classification_covers_complete_capacity_science_and_harness) ... ok\ntest_source_audit_detects_injected_undefined_name (test_cpu_contracts.RunnerContracts.test_source_audit_detects_injected_undefined_name) ... ok\ntest_terminal_priority_is_scientific_fail_then_capacity_then_pass (test_cpu_contracts.RunnerContracts.test_terminal_priority_is_scientific_fail_then_capacity_then_pass) ... ok\ntest_total_wall_is_decided_in_process_after_artifact_persistence (test_cpu_contracts.RunnerContracts.test_total_wall_is_decided_in_process_after_artifact_persistence) ... ok\ntest_calibration_seed_is_rejected_for_official (test_cpu_contracts.SeedGuardTests.test_calibration_seed_is_rejected_for_official) ... ok\ntest_official_seeds_are_rejected_for_qa_and_smoke (test_cpu_contracts.SeedGuardTests.test_official_seeds_are_rejected_for_qa_and_smoke) ... ok\ntest_only_calibration_seed_is_accepted_for_qa (test_cpu_contracts.SeedGuardTests.test_only_calibration_seed_is_accepted_for_qa) ... ok\n\n----------------------------------------------------------------------\nRan 29 tests in 1.018s\n\nOK\n",
     "stdout": ""
   }
 }

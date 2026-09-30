@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +23,15 @@ from omega_v2_2b_d512_local_pilot.config import (
 )
 from omega_v2_2b_d512_local_pilot.core import d7_optimizer_loop
 from omega_v2_2b_d512_local_pilot.ledger import recompute_d512_ledger
-from omega_v2_2b_d512_local_pilot.metrics import d1_correctness_metrics, d3_d512_gates, d6_invariance_record, d6_invariance_snapshot
+from omega_v2_2b_d512_local_pilot.metrics import (
+    canonical_parameter_state_sha256,
+    d1_correctness_metrics,
+    d3_d512_gates,
+    d6_invariance_record,
+    d6_invariance_snapshot,
+    optimizer_state_canonical_payload,
+    optimizer_state_canonical_sha256,
+)
 from omega_v2_2b_d512_local_pilot import runner
 from omega_v2_2b_d512_local_pilot.runner import (
     PilotContext,
@@ -37,12 +46,15 @@ from omega_v2_2b_d512_local_pilot.runner import (
     _finalize_wall_in_process,
     _calibration_smoke_terminal,
     finalize_external_launch_logs,
+    free_variable_capture_audit,
     full_mocked_control_flow_dry_run,
     pre_cuda_official_dry_run,
     _render_smoke_report,
     from_import_resolution_audit,
     unresolved_name_audit,
     package_import_sweep,
+    write_calibration_source_snapshot_03,
+    verify_calibration_source_snapshot_03,
 )
 
 
@@ -176,6 +188,83 @@ class D6D7Tests(unittest.TestCase):
         self.assertFalse(calls[20])
         self.assertAlmostEqual(result["L0"], initial_loss, places=7)
         self.assertEqual(int(optimizer.state[next(iter(model.parameters()))]["step"].item()), 20)
+        d7_record = {
+            **result,
+            "final_parameter_sha256": canonical_parameter_state_sha256(model),
+            "final_optimizer_sha256": optimizer_state_canonical_sha256(optimizer, model),
+        }
+        json.dumps(d7_record)
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}", d7_record["final_parameter_sha256"]))
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}", d7_record["final_optimizer_sha256"]))
+
+
+class OptimizerCanonicalHashTests(unittest.TestCase):
+    @staticmethod
+    def _run_adamw(steps: int, *, lr: float = 1e-3, betas=(0.9, 0.999)):
+        model = torch.nn.Linear(2, 1, bias=False)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[0.2, -0.1]], dtype=torch.float32))
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=lr,
+            betas=betas,
+            eps=1e-8,
+            weight_decay=0.01,
+            amsgrad=True,
+            maximize=False,
+            capturable=False,
+            differentiable=False,
+            foreach=False,
+            fused=False,
+        )
+        x = torch.tensor([[1.0, 0.5], [-0.25, 2.0]], dtype=torch.float32)
+        target = torch.tensor([[0.1], [-0.3]], dtype=torch.float32)
+        for _ in range(steps):
+            optimizer.zero_grad(set_to_none=True)
+            loss = torch.mean((model(x) - target) ** 2)
+            loss.backward()
+            optimizer.step()
+        return model, optimizer
+
+    def test_real_adamw_hash_is_stable_sensitive_and_json_safe(self) -> None:
+        model1, optimizer1 = self._run_adamw(1)
+        model1b, optimizer1b = self._run_adamw(1)
+        hash1 = optimizer_state_canonical_sha256(optimizer1, model1)
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}", hash1))
+        self.assertEqual(hash1, optimizer_state_canonical_sha256(optimizer1b, model1b))
+
+        model2, optimizer2 = self._run_adamw(2)
+        self.assertNotEqual(hash1, optimizer_state_canonical_sha256(optimizer2, model2))
+        model_lr, optimizer_lr = self._run_adamw(1, lr=2e-3)
+        self.assertNotEqual(hash1, optimizer_state_canonical_sha256(optimizer_lr, model_lr))
+        model_beta, optimizer_beta = self._run_adamw(1, betas=(0.8, 0.99))
+        self.assertNotEqual(hash1, optimizer_state_canonical_sha256(optimizer_beta, model_beta))
+
+        payload = optimizer_state_canonical_payload(optimizer1, model1)
+        group = payload["param_groups"][0]
+        real_group = optimizer1.param_groups[0]
+        for key in ("lr", "betas", "eps", "weight_decay", "amsgrad", "maximize", "capturable", "differentiable"):
+            self.assertEqual(group[key], real_group[key])
+        for key in ("foreach", "fused"):
+            if key in real_group:
+                self.assertEqual(group[key], real_group[key])
+
+        def contains_tensor(value):
+            if isinstance(value, torch.Tensor):
+                return True
+            if isinstance(value, dict):
+                return any(contains_tensor(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return any(contains_tensor(item) for item in value)
+            return False
+
+        self.assertFalse(contains_tensor(payload))
+        json.dumps(payload)
+
+        changed_model, changed_optimizer = self._run_adamw(1)
+        parameter = next(iter(changed_model.parameters()))
+        changed_optimizer.state[parameter]["exp_avg"][0, 0] += 1
+        self.assertNotEqual(hash1, optimizer_state_canonical_sha256(changed_optimizer, changed_model))
 
 
 class RunnerContracts(unittest.TestCase):
@@ -288,6 +377,16 @@ class RunnerContracts(unittest.TestCase):
             logs.mkdir()
             for name in ("command.txt", "stdout.log", "stderr.log"):
                 (logs / name).write_text(name, encoding="utf-8")
+            (logs / "process_timing.json").write_text(
+                json.dumps({
+                    "start_utc": "2026-09-30T12:00:00+00:00",
+                    "end_utc": "2026-09-30T12:00:00.500000+00:00",
+                    "start_time_ns": 1_000_000_000,
+                    "end_time_ns": 1_500_000_000,
+                    "process_total_wall_seconds": 0.5,
+                }),
+                encoding="utf-8",
+            )
             result_path = root / "CALIBRATION_SMOKE_RESULT.json"
             result_path.write_text(
                 '{"terminal_status":"V2_2B_CALIBRATION_QA_HARNESS_HOLD","classification":"CALIBRATION_QA_ONLY","V2_2B_verdict":null,"wall_gate_start":1.0,"wall_gate_end":2.2,"wall_gate_seconds":1.2}',
@@ -304,6 +403,7 @@ class RunnerContracts(unittest.TestCase):
         self.assertTrue(finalized["gate_wall_seconds_unchanged"])
         self.assertEqual(initial_hash, final_hash)
         self.assertEqual(external_manifest["gate_wall_seconds_frozen"], 1.2)
+        self.assertEqual(external_manifest["process_total_wall_seconds"], 0.5)
         self.assertTrue(external_manifest["verified"])
 
     def test_smoke_report_uses_the_persisted_D3_A_B_C_field(self) -> None:
@@ -352,6 +452,54 @@ class RunnerContracts(unittest.TestCase):
         ))
         self.assertTrue(sweep["pass"], sweep["errors"])
 
+    def test_free_variable_capture_audit_has_only_justified_repo_capture(self) -> None:
+        audit = free_variable_capture_audit()
+        self.assertTrue(audit["pass"])
+        self.assertEqual(audit["unresolved_findings"], [])
+        self.assertTrue(all(row["classification"] == "JUSTIFIED_SYNCHRONOUS_CAPTURE" for row in audit["resolved_findings"]))
+
+    def test_free_variable_capture_audit_detects_loop_and_comprehension_lambdas(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_freevar_audit_") as temporary:
+            source = Path(temporary) / "capture.py"
+            source.write_text(
+                "def make_loop_callbacks():\n"
+                "    callbacks = []\n"
+                "    for value in range(3):\n"
+                "        callbacks.append(lambda: value)\n"
+                "    return callbacks\n"
+                "def make_comp_callbacks():\n"
+                "    return [lambda: item for item in range(2)]\n"
+                "def make_bound_callbacks():\n"
+                "    callbacks = []\n"
+                "    for value in range(3):\n"
+                "        callbacks.append(lambda value=value: value)\n"
+                "    return callbacks\n",
+                encoding="utf-8",
+            )
+            audit = free_variable_capture_audit(Path(temporary))
+        self.assertFalse(audit["pass"])
+        self.assertEqual(sorted(row["name"] for row in audit["unresolved_findings"]), ["item", "value"])
+
+    def test_free_variable_audit_reports_justified_repo_capture_and_detects_injected_capture(self) -> None:
+        package_audit = free_variable_capture_audit()
+        self.assertTrue(package_audit["pass"])
+        self.assertEqual(package_audit["unresolved_findings"], [])
+        self.assertTrue(all(item["classification"] == "JUSTIFIED_SYNCHRONOUS_CAPTURE" for item in package_audit["resolved_findings"]))
+
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_freevar_test_") as temporary:
+            root = Path(temporary)
+            (root / "capture.py").write_text(
+                "def make_callbacks():\n"
+                "    callbacks = []\n"
+                "    for item in range(3):\n"
+                "        callbacks.append(lambda: item)\n"
+                "    return callbacks\n",
+                encoding="utf-8",
+            )
+            audit = free_variable_capture_audit(root)
+        self.assertFalse(audit["pass"])
+        self.assertEqual(audit["unresolved_findings"][0]["name"], "item")
+
     def test_calibration_source_snapshot_is_bound_to_current_spec_and_sources(self) -> None:
         with tempfile.TemporaryDirectory(prefix="omega_v2b_snapshot_test_") as temporary:
             snapshot_path = Path(temporary) / "CALIBRATION_SOURCE_SNAPSHOT.json"
@@ -365,6 +513,20 @@ class RunnerContracts(unittest.TestCase):
                 verified = runner.verify_calibration_source_snapshot()
         self.assertTrue(verified["verified"])
         self.assertEqual(created["snapshot_sha256"], verified["snapshot_sha256"])
+
+    def test_smoke03_source_snapshot_uses_new_immutable_name(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="omega_v2b_snapshot03_test_") as temporary:
+            snapshot_path = Path(temporary) / "CALIBRATION_SOURCE_SNAPSHOT_03.json"
+            qa_path = Path(temporary) / "QA_REPORT.json"
+            runner.write_json(qa_path, {"status": "PASS", "source_sha256": runner.source_hashes()})
+            with (
+                patch("omega_v2_2b_d512_local_pilot.runner.CALIBRATION_SOURCE_SNAPSHOT_03_PATH", snapshot_path),
+                patch("omega_v2_2b_d512_local_pilot.runner.QA_REPORT_PATH", qa_path),
+            ):
+                created = write_calibration_source_snapshot_03()
+                verified = verify_calibration_source_snapshot_03()
+            self.assertEqual(created["calibration_attempt"], "smoke_03")
+            self.assertEqual(created["snapshot_sha256"], verified["snapshot_sha256"])
 
     def test_source_audit_detects_injected_undefined_name(self) -> None:
         with tempfile.TemporaryDirectory(prefix="omega_v2b_audit_test_") as temporary:

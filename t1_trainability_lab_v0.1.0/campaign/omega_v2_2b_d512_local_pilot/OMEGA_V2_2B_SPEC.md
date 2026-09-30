@@ -1327,13 +1327,27 @@ El calibration smoke usa el mismo checkpoint en su propio runner: `wall_gate_sta
 | D8 | PASS / CAPACITY_ISSUE; `capacity_issue=true/false`; `capacity_reason ∈ {VRAM_BUDGET, OOM, WALL_TIME}` |
 | D9 | CONTINUED / HARD_STOP |
 | Calibration smoke_01 | V2_2B_CALIBRATION_QA_HOLD_HARNESS_DEFECT; preserved; not official; official_attempt_consumed=false |
-| Calibration smoke_02 | V2_2B_CALIBRATION_SMOKE_COMPLETE / V2_2B_CALIBRATION_QA_CAPACITY_HOLD / V2_2B_CALIBRATION_QA_SCIENTIFIC_HOLD / V2_2B_CALIBRATION_QA_HARNESS_HOLD |
+| Calibration smoke_02 | V2_2B_CALIBRATION_QA_HOLD_HARNESS_DEFECT; preserved; not official; official_attempt_consumed=false |
+| Calibration smoke_03 | Último smoke autorizado, después de §7 QA + `CALIBRATION_SOURCE_SNAPSHOT_03.json`; `V2_2B_CALIBRATION_SMOKE_COMPLETE` / `V2_2B_CALIBRATION_QA_CAPACITY_HOLD` / `V2_2B_CALIBRATION_QA_SCIENTIFIC_HOLD` / `V2_2B_CALIBRATION_QA_HARNESS_HOLD`; no smoke_04 automático |
 | Official status | HOLD pending QA/source-seal review; official attempt NOT CONSUMED |
 | Official terminal classification | OMEGA_V2_2B_LOCAL_PILOT_PASS / OMEGA_V2_2B_LOCAL_PILOT_FAIL / OMEGA_V2_2B_LOCAL_CAPACITY_HOLD |
 | `hard_stop` | null or the persisted technical-stop kind/cell/error; calibration harness defect is not a scientific verdict |
 | V2-2B SPEC FREEZE | AUTHORIZED after incorporating MD/325 |
 | V2-2B QA/CALIBRATION | AUTHORIZED |
 | RunPod / T3 / CONFORMANCE_HOLD | HOLD / HOLD / unchanged |
+
+### Calibration and QA artifact paths (smoke_03)
+
+```text
+smoke_01 (immutable, preserved): results/qa/calibration_seed_20260930_smoke_01/
+smoke_02 (immutable, preserved): results/qa/calibration_seed_20260930_smoke_02/
+smoke_03 slot: results/qa/calibration_seed_20260930_smoke_03/
+smoke_03 external logs: results/qa/calibration_seed_20260930_smoke_03_launch_logs/
+smoke_03 process timing: external logs/process_timing.json
+pre-smoke source snapshot: CALIBRATION_SOURCE_SNAPSHOT_03.json
+QA report: results/qa/QA_REPORT.json
+real-function QA sweep: results/qa/REAL_FUNCTION_PATH_SWEEP.json
+```
 
 ### Track CPU diagnostic
 

@@ -178,7 +178,8 @@ def d6_invariance_record(before: dict[str, Any], after: dict[str, Any]) -> dict[
     return record
 
 
-def optimizer_state_canonical_sha256(optimizer: torch.optim.Optimizer, module: torch.nn.Module) -> str:
+def optimizer_state_canonical_payload(optimizer: torch.optim.Optimizer, module: torch.nn.Module) -> dict[str, Any]:
+    """Return the JSON-safe canonical optimizer payload before SHA-256 encoding."""
     names = {id(parameter): name for name, parameter in module.named_parameters()}
     entries = []
     for parameter, state in optimizer.state.items():
@@ -197,10 +198,15 @@ def optimizer_state_canonical_sha256(optimizer: torch.optim.Optimizer, module: t
     groups = []
     for group in optimizer.param_groups:
         groups.append({
-            key: [names.get(id(value), "unknown") for value in values] if key == "params" else value
+            key: [names.get(id(value), "unknown") for value in values] if key == "params" else values
             for key, values in group.items()
         })
-    payload = (json.dumps({"param_groups": groups, "state": sorted(entries, key=lambda item: item["parameter_name"])}, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    return {"param_groups": groups, "state": sorted(entries, key=lambda item: item["parameter_name"])}
+
+
+def optimizer_state_canonical_sha256(optimizer: torch.optim.Optimizer, module: torch.nn.Module) -> str:
+    payload_value = optimizer_state_canonical_payload(optimizer, module)
+    payload = (json.dumps(payload_value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
