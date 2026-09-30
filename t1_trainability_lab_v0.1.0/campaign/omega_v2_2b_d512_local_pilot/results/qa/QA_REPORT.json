@@ -1,0 +1,491 @@
+{
+  "V2_2B_verdict": null,
+  "classification": "CALIBRATION_QA_ONLY",
+  "cpu_calibration_qa": {
+    "D1_CPU_wiring_check_NON_SCIENTIFIC": true,
+    "D2_structural": {
+      "clone_report": {
+        "initial_values_bitwise_equal": true,
+        "r4_reuses_one_block_object": true,
+        "u4_block_storages_pairwise_disjoint": true,
+        "u4_has_four_block_objects": true,
+        "u4_storage_disjoint_from_r4": true
+      },
+      "final_equal": true,
+      "trace_equal": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "D4_storage": {
+      "R4_one_storage_per_family": true,
+      "R4_parameter_count_pass": true,
+      "R4_unique_parameters": 4194304,
+      "U4_disjoint_from_R4": true,
+      "U4_four_pairwise_disjoint_storages_per_family": true,
+      "U4_parameter_count_pass": true,
+      "U4_unique_parameters": 16777216,
+      "families": [
+        {
+          "family": "W_Q",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_K",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_V",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_O",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_gate",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_up",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        },
+        {
+          "family": "W_down",
+          "initial_bitwise_equal": true,
+          "u4_disjoint_from_r4": true,
+          "u4_four_disjoint_storages": true
+        }
+      ],
+      "initial_bitwise_equal": true,
+      "pass": true
+    },
+    "D5_ledger": {
+      "R4_U4_K4_B8_flops": {
+        "R4": 2151677952,
+        "U4": 2151677952
+      },
+      "R4_non_gemm_counts_K4_B8": {
+        "residual_vector_additions": 262144,
+        "rmsnorm_applications": 8,
+        "rmsnorm_elements": 262144,
+        "silu_activations": 524288,
+        "softmax_elements": 2048,
+        "softmax_rows": 256,
+        "swiglu_hadamard_multiplies": 524288
+      },
+      "R4_unique_parameters": 4194304,
+      "U4_non_gemm_counts_K4_B8": {
+        "residual_vector_additions": 262144,
+        "rmsnorm_applications": 8,
+        "rmsnorm_elements": 262144,
+        "silu_activations": 524288,
+        "softmax_elements": 2048,
+        "softmax_rows": 256,
+        "swiglu_hadamard_multiplies": 524288
+      },
+      "U4_unique_parameters": 16777216,
+      "actual_flops": {
+        "K4_B1": 268959744,
+        "K4_B128": 34426847232,
+        "K4_B8": 2151677952,
+        "per_round_B1": 67239936
+      },
+      "comparisons": {
+        "K4_B1": true,
+        "K4_B128": true,
+        "K4_B8": true,
+        "R4_U4_K4_B8_flops_equal": true,
+        "R4_U4_non_gemm_counts_equal": true,
+        "R4_unique_parameter_count_equal": true,
+        "U4_unique_parameter_count_equal": true,
+        "per_round_B1": true,
+        "seven_families": true
+      },
+      "dimension": 512,
+      "exact_match": true,
+      "expected_flops": {
+        "K4_B1": 268959744,
+        "K4_B128": 34426847232,
+        "K4_B8": 2151677952,
+        "per_round_B1": 67239936
+      },
+      "family_parameters": {
+        "W_K": 262144,
+        "W_O": 262144,
+        "W_Q": 262144,
+        "W_V": 262144,
+        "W_down": 1048576,
+        "W_gate": 1048576,
+        "W_up": 1048576
+      },
+      "m": 8,
+      "schema": "omega-v2-2b-d512-ledger-crosscheck-v1",
+      "terminal_on_mismatch": "FLOP_LEDGER_PRESEAL_HOLD"
+    },
+    "V2_2B_verdict": null,
+    "classification": "CALIBRATION_QA_ONLY",
+    "cpu_reference_operations": "D512 CPU forward/plumbing only; no CPU performance claim",
+    "cuda_kernels_launched": 0,
+    "heldout_seed_values_materialized": false,
+    "pass": true,
+    "schema": "omega-v2-2b-calibration-cpu-qa-v1",
+    "seed_plan": {
+      "input_seed": 20261938,
+      "loss_w_seed": 20262938,
+      "master_seed": 20260930,
+      "mode": "qa",
+      "target_seed": 20263938,
+      "weight_seed": 20260930
+    }
+  },
+  "cpu_qa_status": "PASS",
+  "cuda_device_query_performed": false,
+  "cuda_kernels_launched": 0,
+  "environment_build_validation": {
+    "matches_V2_2A_reference": true,
+    "record": {
+      "allow_tf32_cudnn": true,
+      "allow_tf32_matmul": false,
+      "cublas_workspace_config": ":4096:8",
+      "cuda_autocast_enabled": false,
+      "cuda_device_query_performed": false,
+      "deterministic_algorithms": true,
+      "platform": "Windows-11-10.0.26100-SP0",
+      "python_version": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+      "torch_cuda_runtime": "12.8",
+      "torch_version": "2.11.0+cu128"
+    }
+  },
+  "flop_ledger_crosscheck": {
+    "R4_U4_K4_B8_flops": {
+      "R4": 2151677952,
+      "U4": 2151677952
+    },
+    "R4_non_gemm_counts_K4_B8": {
+      "residual_vector_additions": 262144,
+      "rmsnorm_applications": 8,
+      "rmsnorm_elements": 262144,
+      "silu_activations": 524288,
+      "softmax_elements": 2048,
+      "softmax_rows": 256,
+      "swiglu_hadamard_multiplies": 524288
+    },
+    "R4_unique_parameters": 4194304,
+    "U4_non_gemm_counts_K4_B8": {
+      "residual_vector_additions": 262144,
+      "rmsnorm_applications": 8,
+      "rmsnorm_elements": 262144,
+      "silu_activations": 524288,
+      "softmax_elements": 2048,
+      "softmax_rows": 256,
+      "swiglu_hadamard_multiplies": 524288
+    },
+    "U4_unique_parameters": 16777216,
+    "actual_flops": {
+      "K4_B1": 268959744,
+      "K4_B128": 34426847232,
+      "K4_B8": 2151677952,
+      "per_round_B1": 67239936
+    },
+    "comparisons": {
+      "K4_B1": true,
+      "K4_B128": true,
+      "K4_B8": true,
+      "R4_U4_K4_B8_flops_equal": true,
+      "R4_U4_non_gemm_counts_equal": true,
+      "R4_unique_parameter_count_equal": true,
+      "U4_unique_parameter_count_equal": true,
+      "per_round_B1": true,
+      "seven_families": true
+    },
+    "dimension": 512,
+    "exact_match": true,
+    "expected_flops": {
+      "K4_B1": 268959744,
+      "K4_B128": 34426847232,
+      "K4_B8": 2151677952,
+      "per_round_B1": 67239936
+    },
+    "family_parameters": {
+      "W_K": 262144,
+      "W_O": 262144,
+      "W_Q": 262144,
+      "W_V": 262144,
+      "W_down": 1048576,
+      "W_gate": 1048576,
+      "W_up": 1048576
+    },
+    "m": 8,
+    "schema": "omega-v2-2b-d512-ledger-crosscheck-v1",
+    "terminal_on_mismatch": "FLOP_LEDGER_PRESEAL_HOLD"
+  },
+  "full_mocked_control_flow_dry_run": {
+    "all_scenarios_pass": true,
+    "artifact_hashes_verified": true,
+    "cases": {
+      "HARD_STOP": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_FAIL",
+        "hard_stop": {
+          "error": "symbolic runtime crash",
+          "kind": "PilotHardStop",
+          "master_seed": "symbolic_slot_01"
+        },
+        "not_run_seed_count": 2,
+        "partial_seed_persisted": true,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_FAIL"
+      },
+      "OOM": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [
+          {
+            "cell_id": "D7_symbolic_slot_01_R4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "OOM"
+          },
+          {
+            "cell_id": "D7_symbolic_slot_02_R4",
+            "master_seed": "symbolic_slot_02",
+            "reason": "OOM"
+          },
+          {
+            "cell_id": "D7_symbolic_slot_03_R4",
+            "master_seed": "symbolic_slot_03",
+            "reason": "OOM"
+          }
+        ],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD",
+        "hard_stop": null,
+        "not_run_seed_count": 0,
+        "partial_seed_persisted": false,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD"
+      },
+      "PASS": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_PASS",
+        "hard_stop": null,
+        "not_run_seed_count": 0,
+        "partial_seed_persisted": false,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_PASS"
+      },
+      "SCIENTIFIC_FAIL": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_FAIL",
+        "hard_stop": null,
+        "not_run_seed_count": 0,
+        "partial_seed_persisted": false,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_PILOT_FAIL"
+      },
+      "UNRECOVERABLE_OOM": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [
+          {
+            "cell_id": "D7_symbolic_slot_01_R4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "OOM"
+          }
+        ],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD",
+        "hard_stop": {
+          "error": "symbolic unrecoverable OOM",
+          "kind": "PilotHardStop",
+          "master_seed": "symbolic_slot_01"
+        },
+        "not_run_seed_count": 2,
+        "partial_seed_persisted": true,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD"
+      },
+      "VRAM_BUDGET": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [
+          {
+            "cell_id": "D3_symbolic_slot_01",
+            "master_seed": "symbolic_slot_01",
+            "peak_allocated": 3221225473,
+            "reason": "VRAM_BUDGET"
+          },
+          {
+            "cell_id": "D3_symbolic_slot_02",
+            "master_seed": "symbolic_slot_02",
+            "peak_allocated": 3221225473,
+            "reason": "VRAM_BUDGET"
+          },
+          {
+            "cell_id": "D3_symbolic_slot_03",
+            "master_seed": "symbolic_slot_03",
+            "peak_allocated": 3221225473,
+            "reason": "VRAM_BUDGET"
+          }
+        ],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD",
+        "hard_stop": null,
+        "not_run_seed_count": 0,
+        "partial_seed_persisted": false,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD"
+      },
+      "WALL_TIME": {
+        "artifact_hashes_verified": true,
+        "capacity_events": [
+          {
+            "cell_id": "D2_symbolic_slot_01",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D3_symbolic_slot_01",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_forward_K1",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_forward_K2",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_forward_K4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_forward_K8",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_forward_K16",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_backward_K1",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_backward_K4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_backward_K8",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D6_symbolic_slot_01_backward_K16",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D7_symbolic_slot_01_R4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          },
+          {
+            "cell_id": "D7_symbolic_slot_01_U4",
+            "master_seed": "symbolic_slot_01",
+            "reason": "WALL_TIME"
+          }
+        ],
+        "cuda_kernels_launched": 0,
+        "expected_terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD",
+        "hard_stop": null,
+        "not_run_seed_count": 2,
+        "partial_seed_persisted": false,
+        "pass": true,
+        "seed_count": 3,
+        "seed_values_materialized": false,
+        "terminal_status": "OMEGA_V2_2B_LOCAL_CAPACITY_HOLD"
+      }
+    },
+    "classification": "MOCKED_CONTROL_FLOW_ONLY",
+    "cuda_kernels_launched": 0,
+    "official_id": "OMEGA-V2-2B-LOCAL-PILOT-01",
+    "schema": "omega-v2-2b-real-mocked-control-flow-v1",
+    "seed_values_materialized": false
+  },
+  "heldout_seed_data_touched": false,
+  "official_id": "OMEGA-V2-2B-LOCAL-PILOT-01",
+  "official_seed_plans_materialized": false,
+  "pre_cuda_official_dry_run": {
+    "cuda_device_query_performed": false,
+    "cuda_kernels_launched": 0,
+    "launch_log_dir": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_2b_d512_local_pilot\\results\\omega_v2_2b_d512_local_pilot_launch_logs_01",
+    "official_id": "OMEGA-V2-2B-LOCAL-PILOT-01",
+    "official_seed_plans_materialized": false,
+    "phase": "PRE_CUDA_OFFICIAL_DRY_RUN",
+    "result_slot": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_2b_d512_local_pilot\\results\\omega_v2_2b_d512_local_pilot_official_attempt01",
+    "slot_created": false
+  },
+  "schema": "omega-v2-2b-qa-report-v1",
+  "source_sha256": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "OMEGA_V2_2B_SPEC.md": "9c40e56369f8246a7af2c1265b61f06b26618b1fbe343a4ed3dd4db3eefcf7cf",
+    "__init__.py": "a902bb0c2466cc751c5cf983f2b3b682ed4d1e112826532ede8a9e095de90501",
+    "__main__.py": "c24849a705d6a20e3fc9611fa7084029316a177dfc5ed2df08e8ae523dd430ac",
+    "config.py": "a89c34dfad9dc8924e540ce16b461e2439375ec26fd3b02eb72e9663c230e3e0",
+    "core.py": "f93e465aeecb038088d5d3b95386421db12c867b6238f231e64d0b69639cb1f8",
+    "ledger.py": "72a0f70997a95f7b8b6f822a4a57c82c0e43733bbe04fb5e00b0378b72c58c1f",
+    "metrics.py": "bf730a034b916f19d6cf307ea6df7a0235305fc3bf134cb93417dc350d045a68",
+    "results/.gitattributes": "10fc60a1acf07a6c1be3c4db6a125cf4b0ee181921269fc6e9e39d0d6d151619",
+    "runner.py": "a2d6c6cb7bb2f60d0d712e705d92538e066ec41eb0d7e4f391f054d3ea6dbed3",
+    "tests/test_cpu_contracts.py": "3c0436196ba772c2530883ec85d831c8e54001cd14c7ce360bf92a87cc6edfba"
+  },
+  "spec_sha256": "9c40e56369f8246a7af2c1265b61f06b26618b1fbe343a4ed3dd4db3eefcf7cf",
+  "static_issues": [],
+  "static_unresolved_names": 0,
+  "status": "PASS",
+  "unit_tests": {
+    "passed": true,
+    "returncode": 0,
+    "stderr": "test_d6_schema_value_and_unique_parameter_count_before_after (test_cpu_contracts.D6D7Tests.test_d6_schema_value_and_unique_parameter_count_before_after) ... ok\ntest_d7_loop_has_21_forwards_and_20_adamw_updates (test_cpu_contracts.D6D7Tests.test_d7_loop_has_21_forwards_and_20_adamw_updates) ... ok\ntest_frozen_d512_flop_integers (test_cpu_contracts.LedgerTests.test_frozen_d512_flop_integers) ... ok\ntest_d1_runs_elementwise_and_normwise_gates_independently (test_cpu_contracts.MetricTests.test_d1_runs_elementwise_and_normwise_gates_independently) ... ok\ntest_d3_primary_A_B_C_gates_on_synthetic_gradients (test_cpu_contracts.MetricTests.test_d3_primary_A_B_C_gates_on_synthetic_gradients) ... ok\ntest_external_log_finalizer_does_not_recompute_wall_or_terminal (test_cpu_contracts.RunnerContracts.test_external_log_finalizer_does_not_recompute_wall_or_terminal) ... ok\ntest_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases (test_cpu_contracts.RunnerContracts.test_mocked_full_control_flow_uses_real_orchestrator_and_persists_cases) ... ok\ntest_pre_cuda_dry_run_does_not_create_official_slot (test_cpu_contracts.RunnerContracts.test_pre_cuda_dry_run_does_not_create_official_slot) ... ok\ntest_result_slot_is_lazy_until_boundary_marker (test_cpu_contracts.RunnerContracts.test_result_slot_is_lazy_until_boundary_marker) ... ok\ntest_smoke_artifact_manifest_includes_boundary_marker (test_cpu_contracts.RunnerContracts.test_smoke_artifact_manifest_includes_boundary_marker) ... ok\ntest_smoke_report_uses_the_persisted_D3_A_B_C_field (test_cpu_contracts.RunnerContracts.test_smoke_report_uses_the_persisted_D3_A_B_C_field) ... ok\ntest_source_audit_detects_injected_undefined_name (test_cpu_contracts.RunnerContracts.test_source_audit_detects_injected_undefined_name) ... ok\ntest_terminal_priority_is_scientific_fail_then_capacity_then_pass (test_cpu_contracts.RunnerContracts.test_terminal_priority_is_scientific_fail_then_capacity_then_pass) ... ok\ntest_total_wall_is_decided_in_process_after_artifact_persistence (test_cpu_contracts.RunnerContracts.test_total_wall_is_decided_in_process_after_artifact_persistence) ... ok\ntest_calibration_seed_is_rejected_for_official (test_cpu_contracts.SeedGuardTests.test_calibration_seed_is_rejected_for_official) ... ok\ntest_official_seeds_are_rejected_for_qa_and_smoke (test_cpu_contracts.SeedGuardTests.test_official_seeds_are_rejected_for_qa_and_smoke) ... ok\ntest_only_calibration_seed_is_accepted_for_qa (test_cpu_contracts.SeedGuardTests.test_only_calibration_seed_is_accepted_for_qa) ... ok\n\n----------------------------------------------------------------------\nRan 17 tests in 0.697s\n\nOK\n",
+    "stdout": ""
+  }
+}
