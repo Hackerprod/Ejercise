@@ -19,7 +19,7 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 import torch
 
 from omega_v2.core import ContractualCoreBlock, configure_reference_execution
-from omega_v2.ledger import count_one_round_macs
+from omega_v2.ledger import count_one_round_macs, state_dict_sha256
 
 from .checks import (
     cuda_correctness_gate,
@@ -29,6 +29,7 @@ from .checks import (
     k_flex_backward_cell,
     k_flex_forward_cell,
     optimizer_smoke,
+    parameter_count,
     parameter_storage_gate,
     schema_sha256,
     state_dict_values_equal,
@@ -46,6 +47,7 @@ from .variants import (
     WEIGHT_SEED,
     build_initial_variants,
     copy_fixed_tensor_to_cuda,
+    make_fixed_inputs,
     make_cpu_normal,
     weight_copy_report,
 )
@@ -56,7 +58,7 @@ CAMPAIGN_ROOT = PACKAGE_ROOT.parent
 V20_ROOT = CAMPAIGN_ROOT / "omega_v2_0_conformance"
 V20_LEDGER = V20_ROOT / "results" / "omega_v2_0_conformance" / "omega_v2_flop_ledger.json"
 V20_SEAL = V20_ROOT / "V2_0_RESULT_SEAL.json"
-SOURCE_SEAL_PATH = PACKAGE_ROOT / "SOURCE_SEAL.json"
+SOURCE_SEAL_PATH = PACKAGE_ROOT / "SOURCE_SEAL_R1.json"
 RESULTS_ROOT = PACKAGE_ROOT / "results" / "omega_v2_2a_local_preflight"
 EXPECTED_TORCH = "2.11.0+cu128"
 EXPECTED_CUDA = "12.8"
@@ -195,9 +197,18 @@ def create_source_seal() -> dict[str, Any]:
     env = environment_record()
     source_map = source_hashes()
     frozen_v20 = v20_hashes()
+    attempt00_root = PACKAGE_ROOT / "results" / "attempt_00"
+    attempt00_incident = attempt00_root / "INCIDENT.json"
+    attempt00_artifacts = attempt00_root / "INCIDENT_ARTIFACT_HASHES.json"
+    if not attempt00_incident.is_file() or not attempt00_artifacts.is_file():
+        raise FileNotFoundError("ATTEMPT_00 incident record and hash manifest are required for SOURCE_SEAL_R1")
+    attempt00_record = json.loads(attempt00_incident.read_text(encoding="utf-8"))
     seal = {
         "schema": "omega-v2-2a-source-environment-seal-v1",
         "supersedes_preimplementation_source_seal_sha256": previous_seal_sha256,
+        "attempt_00_classification": attempt00_record["classification"],
+        "attempt_00_incident_sha256": sha256_file(attempt00_incident),
+        "attempt_00_artifact_manifest_sha256": sha256_file(attempt00_artifacts),
         "spec_sha256": sha256_file(PACKAGE_ROOT / "OMEGA_V2_2A_SPEC.md"),
         "python_source_sha256": source_map,
         "v2_0_source_and_ledger_sha256": frozen_v20,
