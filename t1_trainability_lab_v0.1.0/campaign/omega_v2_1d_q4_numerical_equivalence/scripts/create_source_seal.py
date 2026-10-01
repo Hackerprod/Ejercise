@@ -19,6 +19,9 @@ FROZEN_SPEC = UNIT_ROOT / "OMEGA_V2_1D_STAGE_A_SPEC_FROZEN.md"
 KQ_ROOT = UNIT_ROOT.parent / "omega_v2_1b_candidate_02"
 KQ_RESULTS = UNIT_ROOT.parent / "omega_v2_1b_kernel_qualification" / "results" / "omega_v2_1b_kernel_qualification" / "candidate_02" / "run_01"
 SEAL_PATH = UNIT_ROOT / "SOURCE_SEAL.json"
+PRE_SCIENTIFIC_ABORT = UNIT_ROOT / "PRE_SCIENTIFIC_ABORT_00.json"
+PRIOR_SEAL_COMMIT = "ee0a6beb64854ba7f5e2b40bcd300c9e93b20b2a"
+PRIOR_SEAL_SHA256 = "184077ED8ECAFD4802B71E441C28D60C732692550158017AF94170ECDE8A4EC3"
 
 
 def git(*args: str) -> str:
@@ -49,6 +52,7 @@ def collect_artifacts() -> list[Path]:
         UNIT_ROOT/"CMakeLists.txt",
         FROZEN_SPEC,
         UNIT_ROOT/"OMEGA_V2_1D_STAGE_A_SPEC_DRAFT_v2.md",
+        PRE_SCIENTIFIC_ABORT,
         BUILD_MANIFEST,
         Path(build["companion_executable"]),
         Path(kq_build["executable_absolute_path"]),
@@ -89,6 +93,10 @@ def create_seal() -> dict[str,Any]:
         "schema":"omega-v2-1d-stage-a-source-seal-v1",
         "classification":"SOURCE_BUILD_AND_PREFLIGHT_SEAL_NO_SCIENTIFIC_CELLS",
         "git_head_commit":head,
+        "supersedes_source_seal_commit":PRIOR_SEAL_COMMIT,
+        "supersedes_source_seal_sha256":PRIOR_SEAL_SHA256,
+        "supersession_reason":"launcher_sha256_case_normalization_pre_science",
+        "pre_scientific_abort_record":"PRE_SCIENTIFIC_ABORT_00.json",
         "created_at_utc":datetime.now(timezone.utc).isoformat(),
         "hash_algorithm":"SHA-256 via Get-FileHash",
         "artifact_count":len(artifacts),

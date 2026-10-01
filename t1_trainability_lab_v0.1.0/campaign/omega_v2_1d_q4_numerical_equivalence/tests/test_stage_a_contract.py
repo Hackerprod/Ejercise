@@ -12,6 +12,7 @@ CAMPAIGN_ROOT = UNIT_ROOT.parent
 sys.path.insert(0, str(UNIT_ROOT / "scripts"))
 
 import generate_calibration_states as states
+import run_v2_1d_stage_a as stage_a_launcher
 
 
 class StageAContractTests(unittest.TestCase):
@@ -41,6 +42,19 @@ class StageAContractTests(unittest.TestCase):
             self.assertIn(required,launcher)
         self.assertNotIn("run_v2_1d_stage_a.py",qa.split("def main()",1)[-1])
         self.assertNotIn("perf_"+"counter",launcher)
+        self.assertEqual(launcher.count("import create_source_seal"),1)
+        self.assertEqual(launcher.count("same_sha256_hex(")-1,4)
+        postseal=(UNIT_ROOT/"tests"/"verify_preconditions_real_postseal.py").read_text(encoding="utf-8")
+        self.assertIn("verify_preconditions",postseal)
+        self.assertIn("--run-calibration",postseal)
+        seal_script=(UNIT_ROOT/"scripts"/"create_source_seal.py").read_text(encoding="utf-8")
+        for required in ("supersedes_source_seal_commit","supersedes_source_seal_sha256","launcher_sha256_case_normalization_pre_science","PRE_SCIENTIFIC_ABORT_00.json"):
+            self.assertIn(required,seal_script)
+
+    def test_sha256_hex_case_comparison(self) -> None:
+        same="A1B2C3D4"*8
+        self.assertTrue(stage_a_launcher.same_sha256_hex(same,same.lower()))
+        self.assertFalse(stage_a_launcher.same_sha256_hex(same,("a1b2c3d4"*7)+"00000000"))
 
     def test_historical_formula_state_bytes(self) -> None:
         d, m = 512, 1

@@ -9,8 +9,11 @@ import subprocess
 import sys
 from typing import Any
 
+import create_source_seal
+
 
 UNIT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = UNIT_ROOT.parents[2]
 CAMPAIGN_ROOT = UNIT_ROOT.parent
 KQ_ROOT = CAMPAIGN_ROOT / "omega_v2_1b_candidate_02"
 PHYSICAL_ROOT = CAMPAIGN_ROOT / "omega_v2_1_physical"
@@ -21,10 +24,16 @@ BUILD_ROOT = UNIT_ROOT / "build_qa"
 PREFLIGHT_ROOT = BUILD_ROOT / "preflight"
 COMPANION_EXE = BUILD_ROOT / "Release" / "omega_v2_1d_stage_a.exe"
 TRACKABLE_BUILD_MANIFEST = UNIT_ROOT / "OMEGA_V2_1D_COMPANION_BUILD_MANIFEST.json"
+PRIOR_SOURCE_SEAL = UNIT_ROOT / "SOURCE_SEAL.json"
 FROZEN_SPEC = UNIT_ROOT / "OMEGA_V2_1D_STAGE_A_SPEC_FROZEN.md"
 
 EXPECTED_KQ_EXE_SHA256 = "be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0ac2a19d084f"
 EXPECTED_FP32_STREAM_SHA256 = "65b9179e13d09513765eba3f56f0368480c03237eb1bbbac48c0f383b56ecbb8"
+EXPECTED_COMPANION_EXE_SHA256 = "e61fc49f20c613c8304120f7f51db253e3fac4a6f48beae72f17be7d64c86354"
+EXPECTED_FROZEN_SPEC_SHA256 = "186e58b5b762c36791c27b5e8957ecd4e64af58d631a3477882218f10c19ef2d"
+EXPECTED_UNIT_TEST_COUNT = 13
+EXPECTED_PRIOR_SEAL_COMMIT = "ee0a6beb64854ba7f5e2b40bcd300c9e93b20b2a"
+EXPECTED_PRIOR_SEAL_SHA256 = "184077ed8ecafd4802b71e441c28d60c732692550158017af94170ecde8a4ec3"
 EXPECTED_CANDIDATE_SOURCE_HASHES = {
     "src/full_block_candidate2.cpp": "68cfdbca0856ecfcc015f76fdc2613a2581636a6e76234c3897425f47772fc0b",
     "src/q4_kernel_candidate2.cpp": "c15e1618a25888a9b77dacee85ecc373215cdc03c764ca9445de2ade5a90594a",
@@ -112,9 +121,9 @@ def run_unit_tests() -> None:
     summary_ok=re.search(r"^OK\s*$",transcript,re.MULTILINE) is not None
     report={
         "schema":"omega-v2-1d-unit-static-test-report-v1",
-        "status":"PASS" if process.returncode==0 and ran==["12"] and summary_ok else "FAIL",
+        "status":"PASS" if process.returncode==0 and ran==[str(EXPECTED_UNIT_TEST_COUNT)] and summary_ok else "FAIL",
         "test_count":int(ran[0]) if ran else 0,
-        "expected_test_count":12,
+        "expected_test_count":EXPECTED_UNIT_TEST_COUNT,
         "unittest_ok_summary":summary_ok,
         "return_code":process.returncode,
         "stdout_log":"unit_tests_stdout.log",
@@ -149,7 +158,7 @@ def configure_and_build() -> None:
         UNIT_ROOT / "CMakeLists.txt",
         UNIT_ROOT / ".gitignore",
         *(UNIT_ROOT / p for p in ("src/stage_a_trace.hpp","src/stage_a_trace.cpp","src/stage_a_metrics.hpp","src/stage_a_metrics.cpp","src/stage_a_execution.hpp","src/stage_a_execution.cpp","src/stage_a_main.cpp")),
-        *(UNIT_ROOT / p for p in ("scripts/run_v2_1d_stage_a_qa.py","scripts/run_v2_1d_stage_a.py","scripts/generate_calibration_states.py","scripts/create_source_seal.py","tests/test_stage_a_contract.py")),
+        *(UNIT_ROOT / p for p in ("scripts/run_v2_1d_stage_a_qa.py","scripts/run_v2_1d_stage_a.py","scripts/generate_calibration_states.py","scripts/create_source_seal.py","tests/test_stage_a_contract.py","tests/verify_preconditions_real_postseal.py")),
         FROZEN_SPEC,
         *(KQ_ROOT / p for p in EXPECTED_CANDIDATE_SOURCE_HASHES),
         *(PHYSICAL_ROOT / "src" / p for p in ("q4_layout.cpp","v2_1.hpp","worker_pool.cpp","allocation_guard.cpp")),
@@ -188,6 +197,153 @@ def configure_and_build() -> None:
     TRACKABLE_BUILD_MANIFEST.write_text(manifest_text,encoding="utf-8",newline="\n")
     (BUILD_ROOT/"companion_build_manifest.json").write_text(manifest_text,encoding="utf-8",newline="\n")
     print(json.dumps({"build":"PASS","compiler_version":compiler_version,"companion_sha256":manifest["companion_executable_sha256"],"manifest":str(TRACKABLE_BUILD_MANIFEST)},indent=2))
+
+
+def refresh_manifest_metadata_only() -> None:
+    if not TRACKABLE_BUILD_MANIFEST.is_file():
+        raise FileNotFoundError(TRACKABLE_BUILD_MANIFEST)
+    prior=json.loads(TRACKABLE_BUILD_MANIFEST.read_text(encoding="utf-8"))
+    prior_manifest_sha=powershell_hash(TRACKABLE_BUILD_MANIFEST)
+    companion_hash=powershell_hash(COMPANION_EXE)
+    if companion_hash.lower()!=EXPECTED_COMPANION_EXE_SHA256:
+        raise RuntimeError("STOP: companion executable differs from frozen E61FC49F identity")
+    if str(prior.get("companion_executable_sha256","")).lower()!=companion_hash.lower():
+        raise RuntimeError("STOP: prior manifest does not bind the current companion executable")
+    candidate_identity=verify_frozen_inputs()
+
+    if powershell_hash(PRIOR_SOURCE_SEAL).lower()!=EXPECTED_PRIOR_SEAL_SHA256:
+        raise RuntimeError("STOP: prior source seal SHA-256 mismatch")
+    prior_seal=json.loads(PRIOR_SOURCE_SEAL.read_text(encoding="utf-8"))
+
+    source_paths=[
+        UNIT_ROOT/"CMakeLists.txt",UNIT_ROOT/".gitignore",FROZEN_SPEC,
+        *(UNIT_ROOT/p for p in ("src/stage_a_trace.hpp","src/stage_a_trace.cpp","src/stage_a_metrics.hpp","src/stage_a_metrics.cpp","src/stage_a_execution.hpp","src/stage_a_execution.cpp","src/stage_a_main.cpp")),
+        *(UNIT_ROOT/p for p in ("scripts/run_v2_1d_stage_a_qa.py","scripts/run_v2_1d_stage_a.py","scripts/generate_calibration_states.py","scripts/create_source_seal.py","tests/test_stage_a_contract.py","tests/verify_preconditions_real_postseal.py")),
+        *(KQ_ROOT/p for p in EXPECTED_CANDIDATE_SOURCE_HASHES),
+        *(PHYSICAL_ROOT/"src"/p for p in ("q4_layout.cpp","v2_1.hpp","worker_pool.cpp","allocation_guard.cpp")),
+    ]
+    current={str(path.resolve()):powershell_hash(path) for path in source_paths if path.is_file()}
+    old=prior.get("source_sha256",{})
+    allowed={
+        str((UNIT_ROOT/"scripts/run_v2_1d_stage_a.py").resolve()),
+        str((UNIT_ROOT/"scripts/run_v2_1d_stage_a_qa.py").resolve()),
+        str((UNIT_ROOT/"scripts/create_source_seal.py").resolve()),
+        str((UNIT_ROOT/"tests/test_stage_a_contract.py").resolve()),
+        str((UNIT_ROOT/"tests/verify_preconditions_real_postseal.py").resolve()),
+    }
+    changed={path:{"prior_sha256":old.get(path),"current_sha256":value} for path,value in current.items() if str(old.get(path,"")).lower()!=value.lower()}
+    if sorted(set(changed)-allowed):
+        raise RuntimeError(f"STOP: unauthorized source changes relative to prior manifest: {sorted(set(changed)-allowed)}")
+    spec_path=str(FROZEN_SPEC.resolve())
+    spec_hash=current.get(spec_path,"")
+    if spec_hash.lower()!=EXPECTED_FROZEN_SPEC_SHA256 or str(old.get(spec_path,"")).lower()!=spec_hash.lower():
+        raise RuntimeError("STOP: frozen spec SHA-256 changed")
+    cmake_path=str((UNIT_ROOT/"CMakeLists.txt").resolve())
+    if current.get(cmake_path,"").lower()!=str(old.get(cmake_path,"")).lower():
+        raise RuntimeError("STOP: CMake project changed; metadata-only refresh cannot attest build commands")
+    for relative,expected in EXPECTED_CANDIDATE_SOURCE_HASHES.items():
+        path=str((KQ_ROOT/relative).resolve())
+        if current.get(path,"").lower()!=expected or str(old.get(path,"")).lower()!=expected:
+            raise RuntimeError(f"STOP: candidate translation unit changed: {relative}")
+    abort_path=UNIT_ROOT/"PRE_SCIENTIFIC_ABORT_00.json"
+    if not abort_path.is_file():
+        raise FileNotFoundError(abort_path)
+    abort=json.loads(abort_path.read_text(encoding="utf-8"))
+    if abort.get("classification")!="V2_1D_STAGE_A_PRECONDITION_ABORT_00" or abort.get("cause")!="SHA256_CASE_NORMALIZATION_FALSE_NEGATIVE":
+        raise RuntimeError("STOP: abort record classification/cause mismatch")
+    if abort.get("failing_message")!="precondition FAIL: companion executable differs from build manifest" or abort.get("launcher_exit_code")!=1:
+        raise RuntimeError("STOP: abort record failing message/exit code mismatch")
+    if abort.get("scientific_cells_executed")!=0 or abort.get("native_run_calibration_invoked") is not False or abort.get("one_shot_marker_reserved") is not False or abort.get("scientific_result_exposed") is not False or abort.get("run_consumed") is not False:
+        raise RuntimeError("STOP: abort record is inconsistent with pre-scientific boundary")
+    if abort.get("prior_source_seal_commit")!=EXPECTED_PRIOR_SEAL_COMMIT or str(abort.get("prior_source_seal_sha256","")).lower()!=EXPECTED_PRIOR_SEAL_SHA256:
+        raise RuntimeError("STOP: abort record prior source-seal identity mismatch")
+    preflight_hashes={str(path.resolve()):powershell_hash(path) for path in sorted(PREFLIGHT_ROOT.glob("*.json"))}
+
+    prior_seal_artifacts={item["path"]:item for item in prior_seal.get("artifacts",[])}
+    current_seal_artifacts={
+        path.resolve().relative_to(REPO_ROOT.resolve()).as_posix():{"sha256":powershell_hash(path),"size_bytes":path.stat().st_size}
+        for path in create_source_seal.collect_artifacts()
+    }
+    artifact_changes={}
+    for relative in sorted(set(prior_seal_artifacts)|set(current_seal_artifacts)):
+        before=prior_seal_artifacts.get(relative)
+        after=current_seal_artifacts.get(relative)
+        if before is None or after is None or str(before.get("sha256","")).lower()!=str(after.get("sha256","")).lower() or int(before.get("size_bytes",-1))!=int(after.get("size_bytes",-1)):
+            artifact_changes[relative]={"prior_sha256":None if before is None else before.get("sha256"),"current_sha256":None if after is None else after.get("sha256")}
+    allowed_artifact_change_paths={
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/scripts/run_v2_1d_stage_a.py",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/scripts/run_v2_1d_stage_a_qa.py",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/scripts/create_source_seal.py",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/tests/test_stage_a_contract.py",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/tests/verify_preconditions_real_postseal.py",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/PRE_SCIENTIFIC_ABORT_00.json",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/OMEGA_V2_1D_COMPANION_BUILD_MANIFEST.json",
+        "t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/build_qa/preflight/unit_tests_report.json",
+    }
+    if sorted(set(artifact_changes)-allowed_artifact_change_paths):
+        raise RuntimeError(f"STOP: artifacts outside the authorized launcher repair changed: {sorted(set(artifact_changes)-allowed_artifact_change_paths)}")
+    if not any(path.endswith("/scripts/run_v2_1d_stage_a.py") for path in artifact_changes):
+        raise RuntimeError("launcher source change is absent from the prior-seal diff audit")
+    if not any(path.endswith("/PRE_SCIENTIFIC_ABORT_00.json") for path in artifact_changes):
+        raise RuntimeError("pre-scientific abort record is absent from the prior-seal diff audit")
+    source_change_suffixes=(
+        "/scripts/run_v2_1d_stage_a.py",
+        "/scripts/run_v2_1d_stage_a_qa.py",
+        "/scripts/create_source_seal.py",
+        "/tests/test_stage_a_contract.py",
+        "/tests/verify_preconditions_real_postseal.py",
+    )
+    authorized_source_changes={path:detail for path,detail in artifact_changes.items() if path.endswith(source_change_suffixes)}
+    authorized_non_source_changes={path:detail for path,detail in artifact_changes.items() if path not in authorized_source_changes}
+
+    refreshed=dict(prior)
+    refreshed["source_sha256"]=current
+    refreshed["candidate_source_identity"]=candidate_identity
+    refreshed["companion_executable_sha256"]=companion_hash
+    refreshed["sealed_kq_executable_sha256"]=candidate_identity["sealed_kq_executable_sha256"]
+    refreshed["operational_artifacts"]={str(abort_path.resolve()):{"sha256":powershell_hash(abort_path),"size_bytes":abort_path.stat().st_size}}
+    refreshed["pre_scientific_abort_record"]={
+        "path":str(abort_path.resolve()),
+        "sha256":powershell_hash(abort_path),
+        "classification":abort["classification"],
+        "cause":abort["cause"],
+    }
+    refreshed["preflight_qa_artifacts_sha256"]=preflight_hashes
+    refreshed["metadata_regeneration"]={
+        "metadata_only_regeneration":True,
+        "companion_rebuilt":False,
+        "companion_executable_sha256_before":prior["companion_executable_sha256"],
+        "companion_executable_sha256_after":companion_hash,
+        "companion_executable_unchanged":str(prior["companion_executable_sha256"]).lower()==companion_hash.lower(),
+        "candidate_translation_unit_hashes_unchanged":True,
+        "candidate_translation_units_byte_identical":True,
+        "compiler_version_unchanged":prior.get("compiler_version"),
+        "compile_and_link_commands_unchanged":True,
+        "compile_flags_unchanged":prior.get("compile_flags"),
+        "link_flags_unchanged":prior.get("link_flags"),
+        "cmake_project_unchanged":True,
+        "frozen_spec_sha256_before":old.get(spec_path),
+        "frozen_spec_sha256_after":spec_hash,
+        "frozen_spec_unchanged":True,
+        "source_changes_since_previous_metadata_manifest":changed,
+        "authorized_source_changes":authorized_source_changes,
+        "authorized_non_source_changes":authorized_non_source_changes,
+        "only_authorized_source_changes":True,
+        "prior_source_seal_commit":EXPECTED_PRIOR_SEAL_COMMIT,
+        "prior_source_seal_sha256":EXPECTED_PRIOR_SEAL_SHA256.upper(),
+        "prior_seal_artifact_changes":artifact_changes,
+        "preflight_json_files_regenerated":["unit_tests_report.json"],
+        "preflight_native_runs_repeated":False,
+        "abort_record_path":str(abort_path.resolve()),
+        "supersedes_source_seal_commit":EXPECTED_PRIOR_SEAL_COMMIT,
+        "supersedes_source_seal_sha256":EXPECTED_PRIOR_SEAL_SHA256.upper(),
+        "supersession_reason":"launcher_sha256_case_normalization_pre_science",
+        "prior_manifest_sha256":prior_manifest_sha,
+    }
+    text=json.dumps(refreshed,indent=2,sort_keys=True)+"\n"
+    TRACKABLE_BUILD_MANIFEST.write_text(text,encoding="utf-8",newline="\n")
+    (BUILD_ROOT/"companion_build_manifest.json").write_text(text,encoding="utf-8",newline="\n")
+    print(json.dumps({"status":"METADATA_ONLY_MANIFEST_REGENERATED","companion_rebuilt":False,"companion_executable_sha256":companion_hash,"prior_manifest_sha256":prior_manifest_sha,"authorized_source_change_count":len(changed),"manifest":str(TRACKABLE_BUILD_MANIFEST)},indent=2))
 
 
 def invoke_qa(mode: str) -> dict[str, Any]:
@@ -254,6 +410,7 @@ def main() -> int:
     modes.add_argument("--dry-run",action="store_true")
     modes.add_argument("--unit-static",action="store_true")
     modes.add_argument("--prepare-only",action="store_true")
+    modes.add_argument("--refresh-manifest-metadata-only",action="store_true")
     modes.add_argument("--metrics-self-test",action="store_true")
     modes.add_argument("--smoke-only",action="store_true")
     modes.add_argument("--companion-binding-only",action="store_true")
@@ -263,6 +420,7 @@ def main() -> int:
     if args.dry_run: dry_run()
     elif args.unit_static: run_unit_tests()
     elif args.prepare_only: configure_and_build()
+    elif args.refresh_manifest_metadata_only: refresh_manifest_metadata_only()
     elif args.metrics_self_test: invoke_qa("metrics")
     elif args.smoke_only: invoke_qa("smoke")
     elif args.companion_binding_only: invoke_qa("binding")

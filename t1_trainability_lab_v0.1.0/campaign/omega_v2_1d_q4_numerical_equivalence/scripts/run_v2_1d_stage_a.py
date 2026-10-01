@@ -12,8 +12,6 @@ from typing import Any
 
 import create_source_seal
 
-import create_source_seal
-
 
 UNIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = UNIT_ROOT.parents[2]
@@ -34,7 +32,7 @@ EXPECTED_KQ_EXE_SHA256 = "be5c195e701ccbbf4b606d39382d951ba887b41c1faf96370d2d0a
 EXPECTED_D512_STREAM_SHA256 = "65b9179e13d09513765eba3f56f0368480c03237eb1bbbac48c0f383b56ecbb8"
 EXPECTED_D640_Q4_CHECKSUM = 15453147065333665836
 GO_TOKEN = "STAGE_A_ONE_CALIBRATION_GO"
-EXPECTED_UNIT_TEST_COUNT = 12
+EXPECTED_UNIT_TEST_COUNT = 13
 
 
 def powershell_hash(path: Path) -> str:
@@ -45,6 +43,10 @@ def powershell_hash(path: Path) -> str:
     if len(digest)!=64:
         raise RuntimeError(f"Get-FileHash returned invalid SHA-256 for {path}")
     return digest
+
+
+def same_sha256_hex(left: Any, right: Any) -> bool:
+    return str(left).lower() == str(right).lower()
 
 
 def git(*args: str) -> str:
@@ -111,7 +113,7 @@ def verify_preconditions(args: argparse.Namespace) -> dict[str,Any]:
 
     build=json.loads(BUILD_MANIFEST.read_text(encoding="utf-8"))
     companion_hash=powershell_hash(COMPANION_EXE)
-    if companion_hash!=build["companion_executable_sha256"]:
+    if not same_sha256_hex(companion_hash,build["companion_executable_sha256"]):
         raise RuntimeError("precondition FAIL: companion executable differs from build manifest")
     for source_path,expected_hash in build["source_sha256"].items():
         if powershell_hash(Path(source_path))!=str(expected_hash).lower():
@@ -129,17 +131,17 @@ def verify_preconditions(args: argparse.Namespace) -> dict[str,Any]:
         raise RuntimeError("precondition FAIL: d512 FP32 source weight stream hash mismatch")
 
     binding=json.loads(COMPANION_BINDING.read_text(encoding="utf-8"))
-    if binding.get("status")!="COMPANION_BINDING_PASS" or binding.get("pass") is not True or len(binding.get("cells",[]))!=3 or binding.get("companion_executable_sha256")!=companion_hash:
+    if binding.get("status")!="COMPANION_BINDING_PASS" or binding.get("pass") is not True or len(binding.get("cells",[]))!=3 or not same_sha256_hex(binding.get("companion_executable_sha256",""),companion_hash):
         raise RuntimeError("precondition FAIL: companion binding is not PASS")
     smoke=json.loads(SMOKE_REPORT.read_text(encoding="utf-8"))
-    if smoke.get("pass") is not True or smoke.get("classification")!="INSTRUMENTATION_SMOKE_NOT_SCIENTIFIC" or smoke.get("companion_executable_sha256")!=companion_hash:
+    if smoke.get("pass") is not True or smoke.get("classification")!="INSTRUMENTATION_SMOKE_NOT_SCIENTIFIC" or not same_sha256_hex(smoke.get("companion_executable_sha256",""),companion_hash):
         raise RuntimeError("precondition FAIL: d32 instrumentation smoke is not PASS")
     unit_report=json.loads(UNIT_TEST_REPORT.read_text(encoding="utf-8"))
     if unit_report.get("status")!="PASS" or unit_report.get("test_count")!=EXPECTED_UNIT_TEST_COUNT or unit_report.get("unittest_ok_summary") is not True or unit_report.get("return_code")!=0:
         raise RuntimeError("precondition FAIL: unit/static tests are not PASS")
     d640=json.loads(D640_BINDING.read_text(encoding="utf-8"))
     canonical=Path(d640["canonical_stream_path"])
-    if d640.get("status")!="D640_Q4_BINDING_PASS" or int(d640.get("regenerated_q4_checksum",0))!=EXPECTED_D640_Q4_CHECKSUM or d640.get("companion_executable_sha256")!=companion_hash:
+    if d640.get("status")!="D640_Q4_BINDING_PASS" or int(d640.get("regenerated_q4_checksum",0))!=EXPECTED_D640_Q4_CHECKSUM or not same_sha256_hex(d640.get("companion_executable_sha256",""),companion_hash):
         raise RuntimeError("precondition FAIL: historical d640 Q4 checksum binding not PASS")
     if d640.get("serialization_version")!="OMEGA-V2-1D-D640-Q4-CANONICAL-V1" or powershell_hash(canonical)!=str(d640.get("canonical_sha256","")).lower():
         raise RuntimeError("precondition FAIL: canonical d640 Q4 SHA-256 binding mismatch")
