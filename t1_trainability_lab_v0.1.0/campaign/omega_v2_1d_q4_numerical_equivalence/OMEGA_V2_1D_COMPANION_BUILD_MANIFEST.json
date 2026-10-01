@@ -1,0 +1,92 @@
+{
+  "build_classification": "QA_COMPANION_BUILD_ONLY_NO_STAGE_A_CELLS",
+  "build_command": [
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+    "--build",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa",
+    "--config",
+    "Release",
+    "--target",
+    "omega_v2_1d_stage_a",
+    "--clean-first",
+    "--verbose"
+  ],
+  "build_log_stderr": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa\\preflight\\cmake_build_stderr.log",
+  "build_log_stdout": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa\\preflight\\cmake_build_stdout.log",
+  "candidate_source_identity": {
+    "candidate_source_sha256": {
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\q4_layout.cpp": "B3E829E3B2A392C4567A65020EE9037B17787E7F43EE877832C80C4ABD2226B7",
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\v2_1.hpp": "96C77CFAF3E6B8E1A1661401411D8641E0E96A258E637C02615B232723BBB594",
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\worker_pool.cpp": "3549C67D69765BEAFBAABD821E49B94DBAB47681D33485E2F3F10ECF2F2E6270",
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\full_block_candidate2.cpp": "68CFDBCA0856ECFCC015F76FDC2613A2581636A6E76234C3897425F47772FC0B",
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\kq_candidate2.hpp": "77C6E0305A5EB87408B1838392376955FCBD563D6E8390EE1D6006D808F48BFD",
+      "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\q4_kernel_candidate2.cpp": "C15E1618A25888A9B77DACEE85ECC373215CDC03C764CA9445DE2ADE5A90594A"
+    },
+    "d512_fp32_weight_stream": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1c_residency_only\\build\\preflight\\v2_0_fp32_source_weights_correctness.tmp",
+    "d512_fp32_weight_stream_sha256": "65B9179E13D09513765EBA3F56F0368480C03237EB1BBBAC48C0F383B56ECBB8",
+    "sealed_kq_executable": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\build\\Release\\omega_v2_1b_candidate_02.exe",
+    "sealed_kq_executable_sha256": "BE5C195E701CCBBF4B606D39382D951BA887B41C1FAF96370D2D0AC2A19D084F"
+  },
+  "candidate_translation_units_byte_identical": true,
+  "cmake_executable": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "companion_executable": "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa\\Release\\omega_v2_1d_stage_a.exe",
+  "companion_executable_sha256": "E61FC49F20C613C8304120F7F51DB253E3FAC4A6F48BEAE72F17BE7D64C86354",
+  "compile_and_link_command_lines": [
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /ID:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src /ID:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src /ID:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src /nologo /W4 /WX- /diagnostics:column /O2 /Ob2 /GL /D _MBCS /D WIN32 /D _WINDOWS /D NDEBUG /D WIN32_LEAN_AND_MEAN /D NOMINMAX /D _WIN32_WINNT=0x0A00 /D OMEGA_V2_1_AVX2=1 /D OMEGA_V2_1B_CANDIDATE_ID=2 /D OMEGA_V2_1D_STAGE_A=1 /D \"CMAKE_INTDIR=\\\"Release\\\"\" /EHsc /MD /GS /arch:AVX2 /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /std:c++17 /Fo\"omega_v2_1d_stage_a.dir\\Release\\\\\" /Fd\"omega_v2_1d_stage_a.dir\\Release\\vc143.pdb\" /external:W4 /Gd /TP /errorReport:queue D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\q4_layout.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\worker_pool.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\allocation_guard.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\q4_kernel_candidate2.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\full_block_candidate2.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_trace.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_metrics.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_execution.cpp D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_main.cpp",
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:\"D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa\\Release\\omega_v2_1d_stage_a.exe\" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\" /manifest:embed /PDB:\"D:/Install/Dev/Projects/IA/Ejercise/t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/build_qa/Release/omega_v2_1d_stage_a.pdb\" /SUBSYSTEM:CONSOLE /LTCG /LTCGOUT:\"omega_v2_1d_stage_a.dir\\Release\\omega_v2_1d_stage_a.iobj\" /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:\"D:/Install/Dev/Projects/IA/Ejercise/t1_trainability_lab_v0.1.0/campaign/omega_v2_1d_q4_numerical_equivalence/build_qa/Release/omega_v2_1d_stage_a.lib\" /MACHINE:X64  /machine:x64 omega_v2_1d_stage_a.dir\\Release\\q4_layout.obj"
+  ],
+  "compile_flags": [
+    "/O2",
+    "/GL",
+    "/arch:AVX2",
+    "/fp:precise",
+    "/W4",
+    "/EHsc"
+  ],
+  "compiler_version": "19.44.35229.0",
+  "configuration": "Release",
+  "configure_command": [
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+    "-S",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence",
+    "-B",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\build_qa",
+    "-G",
+    "Visual Studio 17 2022",
+    "-A",
+    "x64",
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+  ],
+  "generator": "Visual Studio 17 2022 x64",
+  "link_flags": [
+    "/LTCG"
+  ],
+  "msbuild_version": "17.14.60+43b635718",
+  "schema": "omega-v2-1d-companion-build-manifest-v1",
+  "scientific_execution_performed": false,
+  "sealed_kq_executable_sha256": "BE5C195E701CCBBF4B606D39382D951BA887B41C1FAF96370D2D0AC2A19D084F",
+  "source_sha256": {
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\allocation_guard.cpp": "FB0D47882CF84C490E7669B2C7AFE771F398334156657BCA8CFA321E7CB22439",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\q4_layout.cpp": "B3E829E3B2A392C4567A65020EE9037B17787E7F43EE877832C80C4ABD2226B7",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\v2_1.hpp": "96C77CFAF3E6B8E1A1661401411D8641E0E96A258E637C02615B232723BBB594",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1_physical\\src\\worker_pool.cpp": "3549C67D69765BEAFBAABD821E49B94DBAB47681D33485E2F3F10ECF2F2E6270",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\full_block_candidate2.cpp": "68CFDBCA0856ECFCC015F76FDC2613A2581636A6E76234C3897425F47772FC0B",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\kq_candidate2.hpp": "77C6E0305A5EB87408B1838392376955FCBD563D6E8390EE1D6006D808F48BFD",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1b_candidate_02\\src\\q4_kernel_candidate2.cpp": "C15E1618A25888A9B77DACEE85ECC373215CDC03C764CA9445DE2ADE5A90594A",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\.gitignore": "B60A4EFAEECC664862AD0F0E823E0DA5BA483B412C5571EF08203F506A952A9C",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\CMakeLists.txt": "3904810C4FD170E201B4DA4AC5A4D9E87B1D0AFA2309DE5971D2D81F84119EEE",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\OMEGA_V2_1D_STAGE_A_SPEC_FROZEN.md": "186E58B5B762C36791C27B5E8957ECD4E64AF58D631A3477882218F10C19EF2D",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\scripts\\create_source_seal.py": "C4ACB597F65335591AFC2139A3A1C2FFE707983620481288B9353CAFA92064CE",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\scripts\\generate_calibration_states.py": "2ECD28B7C22F372B36304D53D01B433A61074E11B5E03A40F26641DD121746BA",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\scripts\\run_v2_1d_stage_a.py": "6E30FE8E4B8D0F3D344FBAAC3445DFDB572413D91913EB61B4013B1DE1DCF9BA",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\scripts\\run_v2_1d_stage_a_qa.py": "8CFF2653B18FEF176BF663458916A028BB30BEBFC0F44FDA026DBD9B3D3C5B36",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_execution.cpp": "74AE3692AE6BB2CE0A40449E40945E579CA308D645CD2F23612DDDEBC4F81F7E",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_execution.hpp": "A854679BDA821C3E3C910830B12FCF2F7F931136D3F8B7AAB90C81C6E054B43E",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_main.cpp": "3EACB07E2B6675254BFA81D7A8928F895CD91B289F27ACB1D4B524800FAF4FED",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_metrics.cpp": "609CD75D90684DE18CB5BFF9CCCC6F37EE80A922309000E384E8799D405A76E9",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_metrics.hpp": "03D3EA68EADAEEA2FA53D2DB67397204D3E91960EF245AE086AC271AB73564A9",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_trace.cpp": "A849F41F6DA2C3CDE4D54D4411C46E4AFCF9E06A92CD0192874705980B0BA7A8",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\src\\stage_a_trace.hpp": "771D8D8AF3D3E43A079053DE6F12790485E9060CFCBE7F1D8A0B6D0D5DB94B0C",
+    "D:\\Install\\Dev\\Projects\\IA\\Ejercise\\t1_trainability_lab_v0.1.0\\campaign\\omega_v2_1d_q4_numerical_equivalence\\tests\\test_stage_a_contract.py": "54000F5007A9408B4D9DBF73FBEE05106730041EF013EA4FE1030B17E991422C"
+  }
+}
